@@ -2,6 +2,8 @@
 
 A production-ready FastAPI application that provides a unified, multi-provider LLM inference proxy with automatic API key fallback, rate limiting, structured logging, and health monitoring. Supports OpenAI and Anthropic APIs with seamless format conversion and cross-provider routing.
 
+**Warning:** This repo is under heavy development and is not yet ready for production use; be wary of inbound changed, frequent refactors, and more.
+
 ## Features
 
 - **Multi-Provider Support**: Route requests to OpenAI or Anthropic based on model configuration
