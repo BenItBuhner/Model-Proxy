@@ -1,0 +1,27 @@
+{
+  "logical_name": "gemini-3-flash",
+  "timeout_seconds": 60,
+  "model_routings": [
+    {
+      "id": "primary",
+      "wire_protocol": "openai",
+      "provider": "gemini",
+      "model": "gemini-3-flash-preview",
+      "api_key_env": [
+        "GEMINI_API_KEY_1",
+        "GEMINI_API_KEY_2",
+        "GEMINI_API_KEY_3",
+        "GEMINI_API_KEY_4",
+        "GEMINI_API_KEY_5",
+        "GEMINI_API_KEY_6",
+        "GEMINI_API_KEY_7",
+        "GEMINI_API_KEY_8",
+        "GEMINI_API_KEY_9",
+        "GEMINI_API_KEY_10",
+        "GEMINI_API_KEY_11",
+        "GEMINI_API_KEY_12"
+      ]
+    }
+  ],
+  "fallback_model_routings": ["qwen3-coder"]
+}
