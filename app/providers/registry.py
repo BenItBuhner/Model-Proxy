@@ -42,6 +42,7 @@ class ProviderRegistry:
             cls._provider_classes = {
                 # OpenAI-compatible providers
                 "openai": OpenAIProvider,
+                "openrouter": OpenAIProvider,
                 "nahcrof": OpenAIProvider,
                 "groq": OpenAIProvider,
                 "cerebras": OpenAIProvider,

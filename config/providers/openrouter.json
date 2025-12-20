@@ -1,0 +1,47 @@
+{
+  "name": "openrouter",
+  "display_name": "OpenRouter",
+  "enabled": true,
+
+  "api_keys": {
+    "env_var_pattern": "{PROVIDER}_API_KEY",
+    "env_var_patterns": ["{PROVIDER}_API_KEY", "{PROVIDER}_API_KEY_{INDEX}"],
+    "description": "Environment variable patterns for API keys. {PROVIDER} = 'OPENROUTER', {INDEX} = 1,2,3..."
+  },
+
+  "endpoints": {
+    "base_url": "https://openrouter.ai/api/v1",
+    "completions": "/chat/completions",
+    "streaming": "/chat/completions",
+    "compatible_format": "openai"
+  },
+
+  "authentication": {
+    "type": "bearer",
+    "header_name": "Authorization",
+    "header_format": "Bearer {api_key}"
+  },
+
+  "request_config": {
+    "timeout_seconds": 60,
+    "max_retries": 3,
+    "retry_on_status": [429, 500, 502, 503, 504],
+    "default_parameters": {
+      "temperature": 1.0,
+      "top_p": 1.0,
+      "n": 1
+    }
+  },
+
+  "rate_limiting": {
+    "enabled": false,
+    "requests_per_minute": null,
+    "tokens_per_minute": null
+  },
+
+  "proxy_support": {
+    "enabled": false,
+    "base_url_override": null,
+    "description": "If enabled, use base_url_override instead of base_url (for proxies like OpenRouter, Together AI, etc.)"
+  }
+}
