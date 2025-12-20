@@ -181,3 +181,6 @@ logs/
 # Application specific
 *.pid
 *.sock
+
+# Model configurations
+config/models/

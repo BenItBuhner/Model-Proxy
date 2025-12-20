@@ -71,7 +71,7 @@ Each provider config includes:
 
 ### Model Configuration
 
-Models are defined as individual routing configuration files under `config/models/`. Each logical model has its own JSON file named `<logical_model>.json` that describes routing (primary provider, fallbacks, api key env vars, timeouts, and wire-protocol).
+To add a new model, create a JSON file in `config/models/` named `<logical_model>.json` with the routing configuration. Models are defined as individual routing configuration files under `config/models/`. Each logical model has its own JSON file named `<logical_model>.json` that describes routing (primary provider, fallbacks, api key env vars, timeouts, and wire-protocol).
 
 Example `config/models/gpt-5-2.json` (simplified):
 
@@ -86,9 +86,16 @@ Example `config/models/gpt-5-2.json` (simplified):
       "provider": "openai",
       "model": "gpt-5.2",
       "api_key_env": ["OPENAI_API_KEY", "OPENAI_API_KEY_1"]
+    },
+    {
+      "id": "secondary",
+      "wire_protocol": "openai",
+      "provider": "azure",
+      "model": "gpt-5.2",
+      "api_key_env": ["AZURE_API_KEY"]
     }
   ],
-  "fallback_model_routings": []
+  "fallback_model_routings": ["gpt-5.1"]
 }
 ```
 
