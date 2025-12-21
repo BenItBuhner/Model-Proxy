@@ -158,7 +158,7 @@ OpenAI-compatible chat completions endpoint (non-streaming).
 **Request:**
 ```json
 {
-  "model": "gpt-4",
+  "model": "gpt-5.2",
   "messages": [
     {"role": "user", "content": "Hello!"}
   ],
@@ -184,7 +184,7 @@ Anthropic-compatible messages endpoint (non-streaming).
 **Request:**
 ```json
 {
-  "model": "claude-3-opus",
+  "model": "claude-4.5-opus",
   "messages": [
     {"role": "user", "content": "Hello!"}
   ],
@@ -202,40 +202,6 @@ Anthropic-compatible streaming messages endpoint.
 
 **Response:** SSE stream with Anthropic-formatted chunks.
 
-### Health Check Endpoints
-
-#### GET `/health`
-Basic health check. Returns 200 if database is accessible.
-
-**Response:**
-```json
-{
-  "status": "healthy",
-  "timestamp": "2024-01-01T00:00:00Z"
-}
-```
-
-#### GET `/health/detailed`
-Detailed health check with component status.
-
-**Response:**
-```json
-{
-  "status": "healthy",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "uptime_seconds": 3600,
-  "components": {
-    "database": {"status": "healthy", "response_time_ms": 5},
-    "providers": {
-      "openai": {"status": "healthy", "keys_available": 2},
-      "anthropic": {"status": "healthy", "keys_available": 1}
-    },
-    "model_config": {"status": "healthy", "models_count": 10},
-    "provider_configs": {"status": "healthy", "providers_loaded": 2}
-  }
-}
-```
-
 ## Authentication
 
 All endpoints require authentication via the `Authorization` header:
@@ -250,36 +216,3 @@ Authorization: <CLIENT_API_KEY>
 ```
 
 The `Bearer` prefix is optional and case-insensitive.
-
-## Error Handling
-
-Errors are returned in provider-standardized formats:
-
-### OpenAI Format
-```json
-{
-  "error": {
-    "message": "Error description",
-    "type": "error_type",
-    "code": "error_code"
-  }
-}
-```
-
-### Anthropic Format
-```json
-{
-  "error": {
-    "message": "Error description",
-    "type": "error_type"
-  }
-}
-```
-
-## Development
-
-### Running Tests
-
-```bash
-uv run pytest tests/ -v
-```

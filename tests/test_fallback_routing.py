@@ -160,7 +160,7 @@ class TestRouteExecutor:
             source_logical_model="test-model",
             wire_protocol="anthropic",
             provider="anthropic",
-            model="claude-3",
+            model="claude-4.5-opus",
             api_key="test-key",
             timeout_seconds=60,
         )

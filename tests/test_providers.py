@@ -1,11 +1,14 @@
 """
 Tests for provider implementations.
 """
-import pytest
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import httpx
-from unittest.mock import AsyncMock, patch, MagicMock
-from app.providers.openai_provider import OpenAIProvider
+import pytest
+
 from app.providers.anthropic_provider import AnthropicProvider
+from app.providers.openai_provider import OpenAIProvider
 
 
 @pytest.fixture
@@ -19,18 +22,11 @@ def mock_openai_response():
         "choices": [
             {
                 "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": "Hello, world!"
-                },
-                "finish_reason": "stop"
+                "message": {"role": "assistant", "content": "Hello, world!"},
+                "finish_reason": "stop",
             }
         ],
-        "usage": {
-            "prompt_tokens": 10,
-            "completion_tokens": 20,
-            "total_tokens": 30
-        }
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
     }
 
 
@@ -41,15 +37,10 @@ def mock_anthropic_response():
         "id": "msg_123",
         "type": "message",
         "role": "assistant",
-        "model": "claude-3-opus-20240229",
-        "content": [
-            {"type": "text", "text": "Hello, world!"}
-        ],
+        "model": "claude-4.5-opus",
+        "content": [{"type": "text", "text": "Hello, world!"}],
         "stop_reason": "end_turn",
-        "usage": {
-            "input_tokens": 10,
-            "output_tokens": 20
-        }
+        "usage": {"input_tokens": 10, "output_tokens": 20},
     }
 
 
@@ -57,26 +48,26 @@ def mock_anthropic_response():
 async def test_openai_provider_call_success(monkeypatch, mock_openai_response):
     """Test successful OpenAI provider call."""
     monkeypatch.setenv("OPENAI_API_KEY_1", "test_key")
-    
+
     provider = OpenAIProvider()
-    
+
     with patch("httpx.AsyncClient") as mock_client:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = mock_openai_response
-        
+
         mock_client_instance = AsyncMock()
         mock_client_instance.__aenter__.return_value = mock_client_instance
         mock_client_instance.__aexit__.return_value = None
         mock_client_instance.post = AsyncMock(return_value=mock_response)
         mock_client.return_value = mock_client_instance
-        
+
         result = await provider.call(
             model="gpt-4",
             messages=[{"role": "user", "content": "Hello"}],
-            max_tokens=100
+            max_tokens=100,
         )
-        
+
         assert result == mock_openai_response
         mock_client_instance.post.assert_called_once()
 
@@ -86,31 +77,32 @@ async def test_openai_provider_call_error_retry(monkeypatch, mock_openai_respons
     """Test OpenAI provider retries with different key on error."""
     monkeypatch.setenv("OPENAI_API_KEY_1", "key1")
     monkeypatch.setenv("OPENAI_API_KEY_2", "key2")
-    
+
     provider = OpenAIProvider()
-    
+
     with patch("httpx.AsyncClient") as mock_client:
         # First call fails
         mock_response_fail = MagicMock()
         mock_response_fail.status_code = 429
         mock_response_fail.text = "Rate limit exceeded"
-        
+
         # Second call succeeds
         mock_response_success = MagicMock()
         mock_response_success.status_code = 200
         mock_response_success.json.return_value = mock_openai_response
-        
+
         mock_client_instance = AsyncMock()
         mock_client_instance.__aenter__.return_value = mock_client_instance
         mock_client_instance.__aexit__.return_value = None
-        mock_client_instance.post = AsyncMock(side_effect=[mock_response_fail, mock_response_success])
-        mock_client.return_value = mock_client_instance
-        
-        result = await provider.call(
-            model="gpt-4",
-            messages=[{"role": "user", "content": "Hello"}]
+        mock_client_instance.post = AsyncMock(
+            side_effect=[mock_response_fail, mock_response_success]
         )
-        
+        mock_client.return_value = mock_client_instance
+
+        result = await provider.call(
+            model="gpt-4", messages=[{"role": "user", "content": "Hello"}]
+        )
+
         assert result == mock_openai_response
         assert mock_client_instance.post.call_count == 2
 
@@ -119,33 +111,33 @@ async def test_openai_provider_call_error_retry(monkeypatch, mock_openai_respons
 async def test_openai_provider_stream(monkeypatch):
     """Test OpenAI provider streaming."""
     monkeypatch.setenv("OPENAI_API_KEY_1", "test_key")
-    
+
     provider = OpenAIProvider()
-    
+
     async def mock_iter_lines():
-        yield "data: {\"content\": \"chunk1\"}\n"
-        yield "data: {\"content\": \"chunk2\"}\n"
-    
+        yield 'data: {"content": "chunk1"}\n'
+        yield 'data: {"content": "chunk2"}\n'
+
     mock_stream = AsyncMock()
     mock_stream.__aenter__ = AsyncMock(return_value=mock_stream)
     mock_stream.__aexit__ = AsyncMock(return_value=None)
     mock_stream.status_code = 200
     mock_stream.aiter_lines = mock_iter_lines
-    
+
     mock_client_instance = AsyncMock()
     mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
     mock_client_instance.__aexit__ = AsyncMock(return_value=None)
     mock_client_instance.stream = MagicMock(return_value=mock_stream)
-    
+
     with patch("httpx.AsyncClient", return_value=mock_client_instance):
         chunks = []
         async for chunk in provider.call_stream(
             model="gpt-4",
             messages=[{"role": "user", "content": "Hello"}],
-            max_tokens=100
+            max_tokens=100,
         ):
             chunks.append(chunk)
-        
+
         assert len(chunks) > 0
 
 
@@ -153,61 +145,65 @@ async def test_openai_provider_stream(monkeypatch):
 async def test_anthropic_provider_call_success(monkeypatch, mock_anthropic_response):
     """Test successful Anthropic provider call."""
     monkeypatch.setenv("ANTHROPIC_API_KEY_1", "test_key")
-    
+
     provider = AnthropicProvider()
-    
+
     with patch("httpx.AsyncClient") as mock_client:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = mock_anthropic_response
-        
+
         mock_client_instance = AsyncMock()
         mock_client_instance.__aenter__.return_value = mock_client_instance
         mock_client_instance.__aexit__.return_value = None
         mock_client_instance.post = AsyncMock(return_value=mock_response)
         mock_client.return_value = mock_client_instance
-        
+
         result = await provider.call(
-            model="claude-3-opus-20240229",
+            model="claude-4.5-opus",
             messages=[{"role": "user", "content": "Hello"}],
-            max_tokens=100
+            max_tokens=100,
         )
-        
+
         assert result == mock_anthropic_response
         mock_client_instance.post.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_anthropic_provider_call_error_retry(monkeypatch, mock_anthropic_response):
+async def test_anthropic_provider_call_error_retry(
+    monkeypatch, mock_anthropic_response
+):
     """Test Anthropic provider retries with different key on error."""
     monkeypatch.setenv("ANTHROPIC_API_KEY_1", "key1")
     monkeypatch.setenv("ANTHROPIC_API_KEY_2", "key2")
-    
+
     provider = AnthropicProvider()
-    
+
     with patch("httpx.AsyncClient") as mock_client:
         # First call fails
         mock_response_fail = MagicMock()
         mock_response_fail.status_code = 500
         mock_response_fail.text = "Internal server error"
-        
+
         # Second call succeeds
         mock_response_success = MagicMock()
         mock_response_success.status_code = 200
         mock_response_success.json.return_value = mock_anthropic_response
-        
+
         mock_client_instance = AsyncMock()
         mock_client_instance.__aenter__.return_value = mock_client_instance
         mock_client_instance.__aexit__.return_value = None
-        mock_client_instance.post = AsyncMock(side_effect=[mock_response_fail, mock_response_success])
-        mock_client.return_value = mock_client_instance
-        
-        result = await provider.call(
-            model="claude-3-opus-20240229",
-            messages=[{"role": "user", "content": "Hello"}],
-            max_tokens=100
+        mock_client_instance.post = AsyncMock(
+            side_effect=[mock_response_fail, mock_response_success]
         )
-        
+        mock_client.return_value = mock_client_instance
+
+        result = await provider.call(
+            model="claude-4.5-opus",
+            messages=[{"role": "user", "content": "Hello"}],
+            max_tokens=100,
+        )
+
         assert result == mock_anthropic_response
         assert mock_client_instance.post.call_count == 2
 
@@ -216,34 +212,34 @@ async def test_anthropic_provider_call_error_retry(monkeypatch, mock_anthropic_r
 async def test_anthropic_provider_stream(monkeypatch):
     """Test Anthropic provider streaming."""
     monkeypatch.setenv("ANTHROPIC_API_KEY_1", "test_key")
-    
+
     provider = AnthropicProvider()
-    
+
     async def mock_iter_lines():
         yield "event: message_start\n"
-        yield "data: {\"content\": \"chunk1\"}\n"
-        yield "data: {\"content\": \"chunk2\"}\n"
-    
+        yield 'data: {"content": "chunk1"}\n'
+        yield 'data: {"content": "chunk2"}\n'
+
     mock_stream = AsyncMock()
     mock_stream.__aenter__ = AsyncMock(return_value=mock_stream)
     mock_stream.__aexit__ = AsyncMock(return_value=None)
     mock_stream.status_code = 200
     mock_stream.aiter_lines = mock_iter_lines
-    
+
     mock_client_instance = AsyncMock()
     mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
     mock_client_instance.__aexit__ = AsyncMock(return_value=None)
     mock_client_instance.stream = MagicMock(return_value=mock_stream)
-    
+
     with patch("httpx.AsyncClient", return_value=mock_client_instance):
         chunks = []
         async for chunk in provider.call_stream(
-            model="claude-3-opus-20240229",
+            model="claude-4.5-opus",
             messages=[{"role": "user", "content": "Hello"}],
-            max_tokens=100
+            max_tokens=100,
         ):
             chunks.append(chunk)
-        
+
         assert len(chunks) > 0
 
 
@@ -251,25 +247,26 @@ async def test_anthropic_provider_stream(monkeypatch):
 async def test_openai_provider_all_keys_fail(monkeypatch):
     """Test OpenAI provider when all keys fail."""
     monkeypatch.setenv("OPENAI_API_KEY_1", "key1")
-    
+
     provider = OpenAIProvider()
-    
+
     with patch("httpx.AsyncClient") as mock_client:
         mock_response = MagicMock()
         mock_response.status_code = 401
         mock_response.text = "Invalid API key"
-        
+
         mock_client_instance = AsyncMock()
         mock_client_instance.__aenter__.return_value = mock_client_instance
         mock_client_instance.__aexit__.return_value = None
         mock_client_instance.post = AsyncMock(return_value=mock_response)
         mock_client.return_value = mock_client_instance
-        
+
         with pytest.raises(Exception) as exc_info:
             await provider.call(
-                model="gpt-4",
-                messages=[{"role": "user", "content": "Hello"}]
+                model="gpt-4", messages=[{"role": "user", "content": "Hello"}]
             )
-        
-        assert "error" in str(exc_info.value).lower() or "failed" in str(exc_info.value).lower()
 
+        assert (
+            "error" in str(exc_info.value).lower()
+            or "failed" in str(exc_info.value).lower()
+        )
