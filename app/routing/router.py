@@ -5,19 +5,92 @@ Enhanced with RouteExecutor integration and streaming support.
 """
 
 import asyncio
+import json
 import logging
 import os
 from typing import Any, AsyncGenerator, Callable, Dict, List, Literal, Optional
 
 import aiohttp
 
-from app.core.api_key_manager import get_available_keys
+from app.core.api_key_manager import (
+    KeyCycleTracker,
+    get_available_keys,
+)
 from app.core.provider_config import get_provider_wire_protocol
 from app.routing.config_loader import config_loader
 from app.routing.executor import RouteExecutionError, RouteExecutor, get_executor
 from app.routing.models import Attempt, ResolvedRoute, RoutingError
 
 logger = logging.getLogger("fallback_router")
+
+# Verbose error logging (shows full error body)
+VERBOSE_HTTP_ERRORS = os.getenv("VERBOSE_HTTP_ERRORS", "false").lower() == "true"
+
+
+def _format_error_for_log(
+    error: Exception,
+    provider: str,
+    model: str,
+    api_key: Optional[str] = None,
+) -> str:
+    """
+    Format an error for logging, with concise or verbose output.
+
+    For 401 errors, includes last 4 chars of API key for debugging.
+    Verbose mode (VERBOSE_HTTP_ERRORS=true) shows full error body.
+
+    Args:
+        error: The exception that occurred
+        provider: Provider name
+        model: Model name
+        api_key: Optional API key (last 4 chars shown for 401 errors)
+
+    Returns:
+        Formatted error string for logging
+    """
+    status_code = None
+    error_code = None
+
+    # Extract status code from various error types
+    if hasattr(error, "status"):
+        status_code = error.status
+    elif hasattr(error, "status_code"):
+        status_code = error.status_code
+
+    # Try to extract error code from body for concise display
+    if hasattr(error, "body") and error.body:
+        try:
+            body_json = json.loads(error.body)
+            # Handle list responses (e.g., from Gemini: [{"error": {...}}])
+            if isinstance(body_json, list) and body_json:
+                body_json = body_json[0]
+            if isinstance(body_json, dict):
+                error_code = body_json.get("code") or body_json.get("type")
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            pass
+
+    # Build concise error message
+    parts = [f"provider={provider}", f"model={model}"]
+
+    if status_code:
+        parts.append(f"status={status_code}")
+
+    # For 401 errors, show last 4 chars of API key
+    if status_code == 401 and api_key:
+        key_hint = f"...{api_key[-4:]}" if len(api_key) >= 4 else "***"
+        parts.append(f"key={key_hint}")
+
+    if error_code:
+        parts.append(f"code={error_code}")
+
+    base_msg = ", ".join(parts)
+
+    # Verbose mode: include full error
+    if VERBOSE_HTTP_ERRORS:
+        return f"{base_msg}, error={str(error)}"
+
+    return base_msg
+
 
 # Type alias for wire protocols
 WireProtocol = Literal["openai", "anthropic"]
@@ -51,18 +124,21 @@ class FallbackRouter:
         request_data: Dict[str, Any],
         target_protocol: WireProtocol,
         stream: bool = False,
+        max_key_cycles: Optional[int] = None,
     ) -> Any:
         """
         Execute a request with full fallback routing.
 
-        This method resolves all possible routes for a logical model and
-        tries them in sequence until one succeeds.
+        This method uses KeyCycleTracker for each provider to implement
+        round-robin key selection with configurable cycle limits.
 
         Args:
             logical_model: The logical model name (e.g., 'glm-4.6')
             request_data: Request payload in target_protocol format
             target_protocol: The protocol the client expects ("openai" or "anthropic")
             stream: Whether to return a streaming response
+            max_key_cycles: Maximum cycles through all keys per provider before
+                           falling back to next provider. Defaults to MAX_KEY_RETRY_CYCLES.
 
         Returns:
             For non-streaming: Response dictionary in target_protocol format
@@ -71,6 +147,212 @@ class FallbackRouter:
         Raises:
             RoutingError: If all routes fail
         """
+        # Collect route configs from model and its fallbacks
+        route_configs = self._collect_route_configs(logical_model)
+
+        if not route_configs:
+            raise RoutingError(
+                logical_model=logical_model,
+                attempted_routes=[],
+                errors=[
+                    {"error": "No routes available", "error_type": "NoRoutesError"}
+                ],
+                message=f"No routes available for logical model '{logical_model}'",
+            )
+
+        errors = []
+        all_attempts = []  # Track all attempts for error reporting
+        attempt_number = 1
+
+        if stream:
+            return self._stream_with_fallback_dynamic(
+                route_configs=route_configs,
+                request_data=request_data,
+                target_protocol=target_protocol,
+                logical_model=logical_model,
+                max_key_cycles=max_key_cycles,
+            )
+
+        # Non-streaming: iterate through route configs with KeyCycleTracker
+        for route_config, is_fallback, source_model in route_configs:
+            tracker = KeyCycleTracker(
+                route_config.provider,
+                max_cycles=max_key_cycles,
+            )
+
+            # Skip provider if all keys are in cooldown from previous failures
+            if tracker.all_keys_in_cooldown():
+                logger.info(
+                    f"Skipping provider {route_config.provider}: "
+                    f"all {tracker.total_keys} keys are in cooldown"
+                )
+                continue
+
+            while not tracker.exhausted():
+                api_key = tracker.get_next_key()
+                if api_key is None:
+                    break  # No more keys available for this provider
+
+                resolved_route = self._build_resolved_route(
+                    route_config=route_config,
+                    source_logical_model=source_model,
+                    api_key=api_key,
+                )
+
+                attempt = Attempt(
+                    route=resolved_route,
+                    attempt_number=attempt_number,
+                    is_fallback_route=is_fallback,
+                )
+                all_attempts.append(attempt)
+
+                logger.info(
+                    f"Attempting route {attempt_number}: "
+                    f"provider={resolved_route.provider}, model={resolved_route.model}, "
+                    f"is_fallback={is_fallback}, cycle={tracker.current_cycle}"
+                )
+
+                try:
+                    result = await self._executor.execute(
+                        route=resolved_route,
+                        request_data=request_data,
+                        target_protocol=target_protocol,
+                    )
+                    logger.info(
+                        f"Route succeeded: provider={resolved_route.provider}, "
+                        f"model={resolved_route.model}"
+                    )
+                    return result
+
+                except Exception as e:
+                    tracker.mark_failed(api_key)
+
+                    error_info = {
+                        "attempt": attempt_number,
+                        "provider": resolved_route.provider,
+                        "model": resolved_route.model,
+                        "route_id": resolved_route.route_id,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    }
+
+                    if self._is_fallback_worthy_error(e):
+                        err_msg = _format_error_for_log(
+                            e,
+                            resolved_route.provider,
+                            resolved_route.model,
+                            api_key=resolved_route.api_key,
+                        )
+                        logger.warning(f"Route failed (fallback): {err_msg}")
+                        errors.append(error_info)
+                        attempt_number += 1
+                        continue
+                    else:
+                        err_msg = _format_error_for_log(
+                            e,
+                            resolved_route.provider,
+                            resolved_route.model,
+                            api_key=resolved_route.api_key,
+                        )
+                        logger.error(f"Route failed (non-recoverable): {err_msg}")
+                        raise
+
+                attempt_number += 1
+
+        # All providers exhausted
+        error_message = self._format_routing_error_message(
+            logical_model, all_attempts, errors
+        )
+        logger.error(
+            f"All routes failed for '{logical_model}': {len(errors)} attempts failed"
+        )
+
+        raise RoutingError(
+            logical_model=logical_model,
+            attempted_routes=all_attempts,
+            errors=errors,
+            message=error_message,
+        )
+
+    def _collect_route_configs(self, logical_model: str) -> List[tuple]:
+        """
+        Collect all route configs from a model and its fallbacks.
+
+        Returns:
+            List of tuples: (RouteConfig, is_fallback: bool, source_model: str)
+        """
+        self._visited_models.clear()
+        return self._collect_route_configs_recursive(logical_model, is_fallback=False)
+
+    def _collect_route_configs_recursive(
+        self,
+        logical_model: str,
+        is_fallback: bool = False,
+    ) -> List[tuple]:
+        """
+        Recursively collect route configs, including fallback models.
+        """
+        if logical_model in self._visited_models:
+            logger.debug(f"Skipping already-visited model: {logical_model}")
+            return []
+
+        self._visited_models.add(logical_model)
+
+        try:
+            config = config_loader.load_config(logical_model)
+        except Exception as e:
+            logger.warning(f"Failed to load config for '{logical_model}': {e}")
+            self._visited_models.discard(logical_model)
+            return []
+
+        routes = []
+
+        # Add routes from this model
+        for route_config in config.model_routings:
+            routes.append((route_config, is_fallback, logical_model))
+
+        # Recursively add routes from fallback models
+        for fallback_model in config.fallback_model_routings:
+            fallback_routes = self._collect_route_configs_recursive(
+                fallback_model, is_fallback=True
+            )
+            routes.extend(fallback_routes)
+
+        self._visited_models.discard(logical_model)
+        return routes
+
+    def _build_resolved_route(
+        self,
+        route_config,
+        source_logical_model: str,
+        api_key: str,
+    ) -> ResolvedRoute:
+        """
+        Build a ResolvedRoute from a route config and API key.
+        """
+        wire_protocol = route_config.wire_protocol or get_provider_wire_protocol(
+            route_config.provider
+        )
+        return ResolvedRoute(
+            source_logical_model=source_logical_model,
+            wire_protocol=wire_protocol,
+            provider=route_config.provider,
+            model=route_config.model,
+            base_url=route_config.base_url,
+            api_key=api_key,
+            timeout_seconds=route_config.timeout_seconds or 60,
+            route_id=route_config.id,
+        )
+
+    # Legacy method - keep for backward compatibility with resolve_attempts
+    async def _call_with_fallback_legacy(
+        self,
+        logical_model: str,
+        request_data: Dict[str, Any],
+        target_protocol: WireProtocol,
+        stream: bool = False,
+    ) -> Any:
+        """Legacy implementation using pre-computed attempts."""
         attempts = self.resolve_attempts(logical_model)
 
         if not attempts:
@@ -126,33 +408,155 @@ class FallbackRouter:
 
                 # Check if this is a fallback-worthy error
                 if self._is_fallback_worthy_error(e):
-                    logger.warning(
-                        f"Route failed (will try fallback): "
-                        f"provider={attempt.route.provider}, model={attempt.route.model}, "
-                        f"error={str(e)}"
+                    err_msg = _format_error_for_log(
+                        e,
+                        attempt.route.provider,
+                        attempt.route.model,
+                        api_key=attempt.route.api_key,
                     )
+                    logger.warning(f"Route failed (fallback): {err_msg}")
                     errors.append(error_info)
                     continue
                 else:
                     # Non-fallback error, re-raise immediately
-                    logger.error(
-                        f"Route failed (non-recoverable): "
-                        f"provider={attempt.route.provider}, model={attempt.route.model}, "
-                        f"error={str(e)}"
+                    err_msg = _format_error_for_log(
+                        e,
+                        attempt.route.provider,
+                        attempt.route.model,
+                        api_key=attempt.route.api_key,
                     )
+                    logger.error(f"Route failed (non-recoverable): {err_msg}")
                     raise
 
         # All attempts failed
         error_message = self._format_routing_error_message(
             logical_model, attempts, errors
         )
-        logger.error(
-            f"All routes failed for '{logical_model}': {len(errors)} attempts failed"
-        )
+        logger.error(f"All routes failed for '{logical_model}': {len(errors)} attempts")
 
         raise RoutingError(
             logical_model=logical_model,
             attempted_routes=attempts,
+            errors=errors,
+            message=error_message,
+        )
+
+    async def _stream_with_fallback_dynamic(
+        self,
+        route_configs: List[tuple],
+        request_data: Dict[str, Any],
+        target_protocol: WireProtocol,
+        logical_model: str,
+        max_key_cycles: Optional[int] = None,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Execute streaming request with dynamic key selection and fallback support.
+
+        Uses KeyCycleTracker for each provider to implement round-robin
+        key selection with configurable cycle limits.
+        """
+        errors = []
+        all_attempts = []
+        attempt_number = 1
+
+        for route_config, is_fallback, source_model in route_configs:
+            tracker = KeyCycleTracker(
+                route_config.provider,
+                max_cycles=max_key_cycles,
+            )
+
+            # Skip provider if all keys are in cooldown from previous failures
+            if tracker.all_keys_in_cooldown():
+                logger.info(
+                    f"Skipping provider {route_config.provider}: "
+                    f"all {tracker.total_keys} keys are in cooldown"
+                )
+                continue
+
+            while not tracker.exhausted():
+                api_key = tracker.get_next_key()
+                if api_key is None:
+                    break  # No more keys available for this provider
+
+                resolved_route = self._build_resolved_route(
+                    route_config=route_config,
+                    source_logical_model=source_model,
+                    api_key=api_key,
+                )
+
+                attempt = Attempt(
+                    route=resolved_route,
+                    attempt_number=attempt_number,
+                    is_fallback_route=is_fallback,
+                )
+                all_attempts.append(attempt)
+
+                logger.info(
+                    f"Attempting streaming route {attempt_number}: "
+                    f"provider={resolved_route.provider}, model={resolved_route.model}, "
+                    f"is_fallback={is_fallback}, cycle={tracker.current_cycle}"
+                )
+
+                try:
+                    stream_gen = self._executor.execute_stream(
+                        route=resolved_route,
+                        request_data=request_data,
+                        target_protocol=target_protocol,
+                    )
+
+                    async for chunk in stream_gen:
+                        yield chunk
+
+                    logger.info(
+                        f"Streaming route completed: provider={resolved_route.provider}, "
+                        f"model={resolved_route.model}"
+                    )
+                    return  # Success!
+
+                except Exception as e:
+                    tracker.mark_failed(api_key)
+
+                    error_info = {
+                        "attempt": attempt_number,
+                        "provider": resolved_route.provider,
+                        "model": resolved_route.model,
+                        "route_id": resolved_route.route_id,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    }
+
+                    if self._is_fallback_worthy_error(e):
+                        err_msg = _format_error_for_log(
+                            e,
+                            resolved_route.provider,
+                            resolved_route.model,
+                            api_key=api_key,
+                        )
+                        logger.warning(f"Stream failed (fallback): {err_msg}")
+                        errors.append(error_info)
+                        attempt_number += 1
+                        continue
+                    else:
+                        err_msg = _format_error_for_log(
+                            e,
+                            resolved_route.provider,
+                            resolved_route.model,
+                            api_key=api_key,
+                        )
+                        logger.error(f"Stream failed (non-recoverable): {err_msg}")
+                        raise
+
+                attempt_number += 1
+
+        # All providers exhausted
+        error_message = self._format_routing_error_message(
+            logical_model, all_attempts, errors
+        )
+        logger.error(f"All routes failed for '{logical_model}': {len(errors)} attempts")
+
+        raise RoutingError(
+            logical_model=logical_model,
+            attempted_routes=all_attempts,
             errors=errors,
             message=error_message,
         )
@@ -165,10 +569,9 @@ class FallbackRouter:
         logical_model: str,
     ) -> AsyncGenerator[str, None]:
         """
-        Execute streaming request with fallback support.
+        Legacy streaming implementation using pre-computed attempts.
 
-        This is a separate async generator to avoid lifecycle issues with
-        nested generators and closures.
+        Kept for backward compatibility with resolve_attempts().
         """
         errors = []
 
@@ -209,29 +612,31 @@ class FallbackRouter:
 
                 # Check if this is a fallback-worthy error
                 if self._is_fallback_worthy_error(e):
-                    logger.warning(
-                        f"Route failed (will try fallback): "
-                        f"provider={attempt.route.provider}, model={attempt.route.model}, "
-                        f"error={str(e)}"
+                    err_msg = _format_error_for_log(
+                        e,
+                        attempt.route.provider,
+                        attempt.route.model,
+                        api_key=attempt.route.api_key,
                     )
+                    logger.warning(f"Stream failed (fallback): {err_msg}")
                     errors.append(error_info)
                     continue  # Try next attempt
                 else:
                     # Non-fallback error, re-raise
-                    logger.error(
-                        f"Route failed (non-recoverable): "
-                        f"provider={attempt.route.provider}, model={attempt.route.model}, "
-                        f"error={str(e)}"
+                    err_msg = _format_error_for_log(
+                        e,
+                        attempt.route.provider,
+                        attempt.route.model,
+                        api_key=attempt.route.api_key,
                     )
+                    logger.error(f"Stream failed (non-recoverable): {err_msg}")
                     raise
 
         # All attempts failed
         error_message = self._format_routing_error_message(
             logical_model, attempts, errors
         )
-        logger.error(
-            f"All streaming routes failed for '{logical_model}': {len(errors)} attempts failed"
-        )
+        logger.error(f"All routes failed for '{logical_model}': {len(errors)} attempts")
 
         raise RoutingError(
             logical_model=logical_model,
@@ -503,6 +908,7 @@ async def call_with_fallback(
     request_data: Dict[str, Any],
     target_protocol: WireProtocol,
     stream: bool = False,
+    max_key_cycles: Optional[int] = None,
 ) -> Any:
     """
     Convenience function to call with fallback routing.
@@ -514,6 +920,8 @@ async def call_with_fallback(
         request_data: Request payload in target_protocol format
         target_protocol: Expected response protocol ("openai" or "anthropic")
         stream: Whether to return a streaming response
+        max_key_cycles: Maximum cycles through all keys per provider before
+                       falling back to next provider. Defaults to MAX_KEY_RETRY_CYCLES.
 
     Returns:
         Response data or async generator for streaming
@@ -524,6 +932,7 @@ async def call_with_fallback(
         request_data=request_data,
         target_protocol=target_protocol,
         stream=stream,
+        max_key_cycles=max_key_cycles,
     )
 
 

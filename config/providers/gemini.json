@@ -9,17 +9,16 @@
   },
 
   "endpoints": {
-    "base_url": "https://generativelanguage.googleapis.com/v1beta",
-    "completions": "/models/{model}:generateContent",
-    "streaming": "/models/{model}:streamGenerateContent",
-    "compatible_format": "native"
+    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "completions": "chat/completions",
+    "streaming": "chat/completions",
+    "compatible_format": "openai"
   },
 
   "authentication": {
     "type": "api_key",
-    "header_name": "x-goog-api-key",
-    "header_format": "{api_key}",
-    "note": "Native SDK handles authentication automatically"
+    "header_name": "Authorization",
+    "header_format": "Bearer {api_key}"
   },
 
   "request_config": {
@@ -45,7 +44,6 @@
   },
 
   "provider_notes": {
-    "sdk": "google-genai",
-    "description": "Uses the native Google GenAI Python SDK for better compatibility with tools, streaming, and multimodal content"
+    "description": "Uses Google's OpenAI-compatible API endpoint for Gemini models"
   }
 }

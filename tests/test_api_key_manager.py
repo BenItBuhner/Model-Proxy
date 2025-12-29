@@ -63,39 +63,52 @@ def test_get_api_key_random_selection(monkeypatch):
 
 def test_mark_key_failed(monkeypatch):
     """Test marking a key as failed."""
+    from app.core.api_key_manager import _rotation_state, reset_failed_keys
+
+    reset_failed_keys()  # Clean state
+
     monkeypatch.setenv("OPENAI_API_KEY_1", "key1")
     monkeypatch.setenv("OPENAI_API_KEY_2", "key2")
 
     # Mark a key as failed
     mark_key_failed("openai", "key1")
 
-    # Check that key1 is not in available keys
+    # get_available_keys returns ALL keys (filtering happens in get_api_key)
     available = get_available_keys("openai")
-    assert "key1" not in available
+    assert "key1" in available
     assert "key2" in available
+
+    # But the key should be tracked as failed in rotation state
+    assert "key1" in _rotation_state["openai"].failed_keys
 
 
 def test_failed_key_cooldown(monkeypatch):
-    """Test that failed keys become available after cooldown."""
+    """Test that failed keys are tracked and can be reset."""
+    from app.core.api_key_manager import _rotation_state, reset_failed_keys
+
+    reset_failed_keys()  # Clean state
+
     monkeypatch.setenv("OPENAI_API_KEY_1", "key1")
 
     # Mark key as failed
     mark_key_failed("openai", "key1")
 
-    # Should not be available immediately
-    available = get_available_keys("openai")
-    assert "key1" not in available
+    # Key should be tracked as failed
+    assert "key1" in _rotation_state["openai"].failed_keys
 
     # Reset failed keys to simulate cooldown passing
     reset_failed_keys("openai")
 
-    # Now should be available
-    available = get_available_keys("openai")
-    assert "key1" in available
+    # Now key should no longer be tracked as failed
+    assert "key1" not in _rotation_state["openai"].failed_keys
 
 
 def test_reset_failed_keys(monkeypatch):
     """Test resetting failed keys."""
+    from app.core.api_key_manager import _rotation_state
+
+    reset_failed_keys()  # Clean state
+
     monkeypatch.setenv("OPENAI_API_KEY_1", "key1")
     monkeypatch.setenv("ANTHROPIC_API_KEY_1", "anth_key1")
 
@@ -103,16 +116,20 @@ def test_reset_failed_keys(monkeypatch):
     mark_key_failed("openai", "key1")
     mark_key_failed("anthropic", "anth_key1")
 
+    # Verify both are tracked as failed
+    assert "key1" in _rotation_state["openai"].failed_keys
+    assert "anth_key1" in _rotation_state["anthropic"].failed_keys
+
     # Reset OpenAI keys
     reset_failed_keys("openai")
 
-    # OpenAI key should be available, Anthropic should not
-    assert "key1" in get_available_keys("openai")
-    assert "anth_key1" not in get_available_keys("anthropic")
+    # OpenAI key should no longer be failed, Anthropic still failed
+    assert "key1" not in _rotation_state["openai"].failed_keys
+    assert "anth_key1" in _rotation_state["anthropic"].failed_keys
 
     # Reset all
     reset_failed_keys()
-    assert "anth_key1" in get_available_keys("anthropic")
+    assert "anth_key1" not in _rotation_state["anthropic"].failed_keys
 
 
 def test_get_available_keys_empty(monkeypatch):
@@ -136,6 +153,10 @@ def test_get_api_key_no_keys(monkeypatch):
 
 def test_multiple_failed_keys(monkeypatch):
     """Test handling multiple failed keys."""
+    from app.core.api_key_manager import _rotation_state
+
+    reset_failed_keys()  # Clean state
+
     monkeypatch.setenv("OPENAI_API_KEY_1", "key1")
     monkeypatch.setenv("OPENAI_API_KEY_2", "key2")
     monkeypatch.setenv("OPENAI_API_KEY_3", "key3")
@@ -144,8 +165,13 @@ def test_multiple_failed_keys(monkeypatch):
     mark_key_failed("openai", "key1")
     mark_key_failed("openai", "key2")
 
-    # Only key3 should be available
+    # get_available_keys returns ALL keys
     available = get_available_keys("openai")
-    assert "key1" not in available
-    assert "key2" not in available
+    assert "key1" in available
+    assert "key2" in available
     assert "key3" in available
+
+    # But two should be tracked as failed
+    assert "key1" in _rotation_state["openai"].failed_keys
+    assert "key2" in _rotation_state["openai"].failed_keys
+    assert "key3" not in _rotation_state["openai"].failed_keys

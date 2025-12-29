@@ -8,7 +8,9 @@ This module provides the RouteExecutor class which handles:
 - Consistent error handling and propagation
 """
 
+import json
 import logging
+import os
 from typing import Any, AsyncGenerator, Dict, Literal, Optional
 
 from app.core.format_converters import (
@@ -21,6 +23,38 @@ from app.providers.registry import ProviderRegistry
 from app.routing.models import ResolvedRoute
 
 logger = logging.getLogger("route_executor")
+
+# Verbose error logging (shows full error body)
+VERBOSE_HTTP_ERRORS = os.getenv("VERBOSE_HTTP_ERRORS", "false").lower() == "true"
+
+
+def _format_error(error: Exception, provider: str, model: str) -> str:
+    """Format error concisely, or verbosely if VERBOSE_HTTP_ERRORS is set."""
+    status_code = getattr(error, "status", None) or getattr(error, "status_code", None)
+    error_code = None
+
+    if hasattr(error, "body") and error.body:
+        try:
+            body_json = json.loads(error.body)
+            # Handle list responses (e.g., from Gemini: [{"error": {...}}])
+            if isinstance(body_json, list) and body_json:
+                body_json = body_json[0]
+            if isinstance(body_json, dict):
+                error_code = body_json.get("code") or body_json.get("type")
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            pass
+
+    parts = [f"provider={provider}", f"model={model}"]
+    if status_code:
+        parts.append(f"status={status_code}")
+    if error_code:
+        parts.append(f"code={error_code}")
+
+    base_msg = ", ".join(parts)
+    if VERBOSE_HTTP_ERRORS:
+        return f"{base_msg}, error={str(error)}"
+    return base_msg
+
 
 # Type alias for wire protocols
 WireProtocol = Literal["openai", "anthropic"]
@@ -130,12 +164,10 @@ class RouteExecutor:
             # Re-raise our own errors
             raise
         except Exception as e:
-            logger.error(
-                f"Route execution failed: provider={route.provider}, "
-                f"model={route.model}, error={str(e)}"
-            )
+            err_msg = _format_error(e, route.provider, route.model)
+            logger.error(f"Execution failed: {err_msg}")
             raise RouteExecutionError(
-                message=f"Failed to execute route {route.provider}/{route.model}: {str(e)}",
+                message=f"Failed: {err_msg}",
                 route=route,
                 original_error=e,
             )
@@ -206,12 +238,10 @@ class RouteExecutor:
         except RouteExecutionError:
             raise
         except Exception as e:
-            logger.error(
-                f"Streaming route execution failed: provider={route.provider}, "
-                f"model={route.model}, error={str(e)}"
-            )
+            err_msg = _format_error(e, route.provider, route.model)
+            logger.error(f"Stream execution failed: {err_msg}")
             raise RouteExecutionError(
-                message=f"Failed to execute streaming route {route.provider}/{route.model}: {str(e)}",
+                message=f"Stream failed: {err_msg}",
                 route=route,
                 original_error=e,
             )
@@ -283,7 +313,6 @@ class RouteExecutor:
                 f"Unknown protocol conversion: {from_protocol} -> {to_protocol}"
             )
             return response
-
 
     async def _call_provider(
         self,

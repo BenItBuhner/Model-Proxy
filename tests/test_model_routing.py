@@ -550,12 +550,14 @@ class TestFallbackRouter:
             ],
         )
 
-        with patch(
-            "app.routing.router.config_loader.load_config", return_value=config
-        ), patch(
-            "app.routing.router.get_available_keys", return_value=["key1", "key2"]
-        ), patch(
-            "app.routing.router.get_provider_wire_protocol", return_value="openai"
+        with (
+            patch("app.routing.router.config_loader.load_config", return_value=config),
+            patch(
+                "app.routing.router.get_available_keys", return_value=["key1", "key2"]
+            ),
+            patch(
+                "app.routing.router.get_provider_wire_protocol", return_value="openai"
+            ),
         ):
             attempts = router.resolve_attempts("model-x")
 
