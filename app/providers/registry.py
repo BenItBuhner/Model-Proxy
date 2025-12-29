@@ -118,9 +118,8 @@ class ProviderRegistry:
         # Some providers don't take provider_name in constructor
         from app.providers.anthropic_provider import AnthropicProvider
         from app.providers.gemini_openai_provider import GeminiOpenAIProvider
-        from app.providers.gemini_provider import GeminiProvider
 
-        if provider_class in (AnthropicProvider, GeminiProvider, GeminiOpenAIProvider):
+        if provider_class in (AnthropicProvider, GeminiOpenAIProvider):
             provider = provider_class()
         else:
             provider = provider_class(provider_name)

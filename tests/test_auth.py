@@ -36,16 +36,16 @@ async def test_verify_client_api_key_invalid():
 async def test_verify_client_api_key_missing():
     """Test missing Authorization header."""
     with pytest.raises(HTTPException) as exc_info:
-        await verify_client_api_key(authorization=None)
+        await verify_client_api_key(authorization=None, x_api_key=None)
 
     assert exc_info.value.status_code == 401
-    assert "Missing Authorization header" in exc_info.value.detail
+    assert "Missing API key" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
 async def test_verify_client_api_key_empty():
     """Test empty Authorization header."""
     with pytest.raises(HTTPException) as exc_info:
-        await verify_client_api_key(authorization="")
+        await verify_client_api_key(authorization="", x_api_key=None)
 
     assert exc_info.value.status_code == 401
