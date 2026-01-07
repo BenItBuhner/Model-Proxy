@@ -1,0 +1,12 @@
+#!/bin/bash
+
+# Wrapper script for model-proxy CLI
+# This script allows running the model-proxy command directly
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Change to project root and run the CLI with uv
+cd "$PROJECT_ROOT"
+exec uv run python -c "from app.cli import main; main()" "$@"

@@ -1,42 +1,109 @@
-# Centralized Inference Endpoint
+# Model Proxy
 
 A production-ready FastAPI application that provides a unified, multi-provider LLM inference proxy with automatic API key fallback, rate limiting, structured logging, and health monitoring. Supports OpenAI and Anthropic APIs with seamless format conversion and cross-provider routing.
 
-**Warning:** This repo is *functional* but incomplete and may undergo further restructuring; model schemas, API handling, and execution may vary as devlopment progresses.
+**Warning:** This repo is *functional* but incomplete and may undergo further restructuring; model schemas, API handling, and execution may vary as development progresses.
 
 ![Model Proxy Banner](assets/github/model-proxy-banner.png)
 
-## Features
-
-- **Multi-Provider Support**: Route requests to OpenAI or Anthropic based on model configuration
-- **API Key Fallback**: Automatic failover to backup API keys when rate limits or errors occur
-- **Circuit Breaker Pattern**: Failed keys enter cooldown period before retry
-- **Format Conversion**: Seamless conversion between OpenAI and Anthropic API formats (not perfect yet)
-- **Streaming Support**: Full Server-Sent Events (SSE) streaming for both providers
-- **Structured Logging**: Comprehensive request/response logging to SQLite database
-- **Rate Limiting**: Configurable per-client rate limits (requests and tokens per minute)
-- **Health Checks**: Basic and detailed health monitoring endpoints
-- **CORS Support**: Configurable Cross-Origin Resource Sharing
-- **Error Handling**: Provider-standardized error responses matching OpenAI/Anthropic formats
-
 ## Installation
+
+### From Source (Recommended)
 
 1. Clone the repository:
 ```bash
 git clone https://github.com/BenItBuhner/model-proxy.git
-cd centralized-inference-endpoint
+cd model-proxy
 ```
 
-2. Install dependencies:
+2. Install with uv:
 ```bash
 # Install uv if you don't have it
 pip install uv
 
-# Install project dependencies
-uv sync
+# Install the package and dependencies
+uv pip install .
+
+# Or install in development mode
+uv pip install -e .
 ```
 
 3. Set up environment variables (see [Configuration](#configuration) below)
+
+#### Quick Start with Wrapper Script
+
+If you don't want to install the package system-wide, you can use the provided wrapper script:
+
+```bash
+# Make the script executable (if needed)
+chmod +x scripts/model-proxy
+
+# Run the model proxy
+./scripts/model-proxy run --port 8000
+```
+
+### Alternative Installation Methods
+
+You can also install the package using pip directly:
+```bash
+pip install .
+```
+
+Or install from a git repository:
+```bash
+pip install git+https://github.com/BenItBuhner/model-proxy.git
+```
+
+## Usage
+
+### Command Line Interface
+
+The `model-proxy` command provides a CLI interface for running the server:
+
+#### Basic Usage
+```bash
+# Start the server with default settings (host: 0.0.0.0, port: 8000)
+model-proxy run
+
+# Start on a specific port
+model-proxy run --port 9876
+
+# Start on a specific host and port
+model-proxy run --host localhost --port 8080
+
+# Enable auto-reload for development
+model-proxy run --reload
+
+# Use multiple workers for production
+model-proxy run --workers 4
+
+# Set custom log level
+model-proxy run --log-level debug
+```
+
+#### Available Options
+- `--host TEXT`: Host to bind the server to (default: "0.0.0.0")
+- `--port INTEGER`: Port to bind the server to (default: 8000)
+- `--reload`: Enable auto-reload for development
+- `--workers INTEGER`: Number of worker processes (default: 1, only used when reload=False)
+- `--log-level TEXT`: Log level for the server (default: "info")
+
+#### Help and Version
+```bash
+# Show help
+model-proxy --help
+
+# Show version
+model-proxy version
+```
+
+### API Access
+
+Once the server is running, access the API at:
+- **Local**: http://localhost:8000
+- **Network**: http://0.0.0.0:8000
+- **Interactive Docs**: http://localhost:8000/docs
+- **Alternative Docs**: http://localhost:8000/redoc
 
 ## Configuration
 
@@ -107,30 +174,69 @@ Notes:
 - `wire_protocol` and `api_key_env` are optional per-route overrides. If omitted, the provider config determines the wire protocol and API key env var patterns.
 - If you previously used a single `config/models.json` (the legacy flat mapping), you should migrate to per-model files by creating one JSON file per logical model in `config/models/`. A migration script can be added to automate splitting the flat mapping into per-model files; otherwise create files by hand using the example above.
 
-## Running the Application
+## Features
 
-### Local Development
+- **Multi-Provider Support**: Route requests to OpenAI or Anthropic based on model configuration
+- **API Key Fallback**: Automatic failover to backup API keys when rate limits or errors occur
+- **Circuit Breaker Pattern**: Failed keys enter cooldown period before retry
+- **Format Conversion**: Seamless conversion between OpenAI and Anthropic API formats (not perfect yet)
+- **Streaming Support**: Full Server-Sent Events (SSE) streaming for both providers
+- **Structured Logging**: Comprehensive request/response logging to SQLite database
+- **Rate Limiting**: Configurable per-client rate limits (requests and tokens per minute)
+- **Health Checks**: Basic and detailed health monitoring endpoints
+- **CORS Support**: Configurable Cross-Origin Resource Sharing
+- **Error Handling**: Provider-standardized error responses matching OpenAI/Anthropic formats
+- **CLI Interface**: Easy-to-use command-line interface with multiple configuration options
 
+## Development
+
+For developers who want to contribute or run the application in development mode:
+
+### Local Development Setup
+
+1. Clone the repository:
 ```bash
-uv run uvicorn app.main:app --port 9876
+git clone https://github.com/BenItBuhner/model-proxy.git
+cd model-proxy
 ```
 
-The API will be available at `http://localhost:9876`
+2. Install dependencies:
+```bash
+# Install uv if you don't have it
+pip install uv
 
-### Docker
+# Install project dependencies
+uv sync
+
+# Install in development mode
+uv pip install -e .
+```
+
+3. Run with auto-reload for development:
+```bash
+# Using the CLI (recommended)
+model-proxy run --reload
+
+# Or using uvicorn directly
+uv run uvicorn app.main:app --reload --port 8000
+```
+
+4. The API will be available at http://localhost:8000
+
+### Docker Development
 
 Build the Docker image:
 ```bash
-docker build -t centralized-inference-endpoint .
+docker build -t model-proxy .
 ```
 
 Run the container:
 ```bash
-docker run -d -p 9876:9876 \
+docker run -d -p 8000:8000 \
   -e CLIENT_API_KEY=your_client_key \
   -e OPENAI_API_KEY_1=your_openai_key \
   -e ANTHROPIC_API_KEY_1=your_anthropic_key \
-  centralized-inference-endpoint
+  model-proxy
 ```
 
 ### Docker Compose
