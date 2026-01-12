@@ -34,7 +34,22 @@
   "rate_limiting": {
     "enabled": false,
     "requests_per_minute": null,
-    "tokens_per_minute": null
+    "tokens_per_minute": null,
+    "cooldown_seconds": 180
+  },
+
+  "models": {},
+
+  "error_handling": {
+    "401": {
+      "action": "global_key_failure"
+    },
+    "403": {
+      "action": "global_key_failure"
+    },
+    "429": {
+      "action": "model_key_failure"
+    }
   },
 
   "proxy_support": {

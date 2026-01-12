@@ -16,10 +16,16 @@ from app.core.api_key_manager import (
     KeyCycleTracker,
     get_available_keys,
 )
-from app.core.provider_config import get_provider_wire_protocol
+from app.core.provider_config import get_provider_wire_protocol, get_provider_config
 from app.routing.config_loader import config_loader
 from app.routing.executor import RouteExecutionError, RouteExecutor, get_executor
-from app.routing.models import Attempt, ResolvedRoute, RoutingError
+from app.routing.models import (
+    Attempt,
+    ResolvedRoute,
+    RoutingError,
+    RouteConfig,
+    ModelRoutingConfig,
+)
 
 logger = logging.getLogger("fallback_router")
 
@@ -117,6 +123,72 @@ class FallbackRouter:
         """
         self._visited_models: set[str] = set()  # Track visited models to prevent cycles
         self._executor = executor or get_executor()
+        self._model_config_cache: Dict[str, ModelRoutingConfig] = {}
+
+    def resolve_error_action(self, provider_name: str, error: Exception) -> dict:
+        """
+        Resolve the action to take for a given error based on provider config.
+        """
+        status_code = None
+        if hasattr(error, "status"):
+            status_code = error.status
+        elif hasattr(error, "status_code"):
+            status_code = error.status_code
+        elif isinstance(error, RouteExecutionError) and error.status_code:
+            status_code = error.status_code
+
+        if status_code is None:
+            return {"action": "model_key_failure"}
+
+        config = get_provider_config(provider_name)
+        error_handling = (config or {}).get("error_handling", {})
+
+        # Look up specific status code action
+        action_info = error_handling.get(str(status_code))
+        if action_info:
+            return action_info
+
+        # Fallback to standard behavior
+        if status_code in (401, 403):
+            return {"action": "global_key_failure"}
+
+        return {"action": "model_key_failure"}
+
+    def _create_tracker_for_route(
+        self,
+        route_config: RouteConfig,
+        model_config: ModelRoutingConfig,
+        max_key_cycles: Optional[int] = None,
+    ) -> KeyCycleTracker:
+        """
+        Create a KeyCycleTracker with granular cooldown settings.
+        """
+        provider_config = get_provider_config(route_config.provider)
+
+        # 1. Get provider default cooldown
+        provider_cooldown = provider_config.get("rate_limiting", {}).get(
+            "cooldown_seconds"
+        )
+
+        # 2. Get provider-model specific cooldown
+        provider_models = provider_config.get("models", {})
+        model_specific = provider_models.get(route_config.model, {})
+        model_cooldown = model_specific.get("cooldown_seconds")
+
+        # 3. Get route-level override or model default
+        route_cooldown = (
+            route_config.cooldown_seconds
+            or model_cooldown
+            or model_config.default_cooldown_seconds
+        )
+
+        return KeyCycleTracker(
+            provider=route_config.provider,
+            model=route_config.model,
+            max_cycles=max_key_cycles,
+            provider_cooldown=provider_cooldown,
+            route_cooldown=route_cooldown,
+        )
 
     async def call_with_fallback(
         self,
@@ -175,10 +247,16 @@ class FallbackRouter:
 
         # Non-streaming: iterate through route configs with KeyCycleTracker
         for route_config, is_fallback, source_model in route_configs:
-            tracker = KeyCycleTracker(
-                provider=route_config.provider,
-                model=route_config.model,
-                max_cycles=max_key_cycles,
+            if source_model not in self._model_config_cache:
+                self._model_config_cache[source_model] = config_loader.load_config(
+                    source_model
+                )
+            model_config = self._model_config_cache[source_model]
+
+            tracker = self._create_tracker_for_route(
+                route_config=route_config,
+                model_config=model_config,
+                max_key_cycles=max_key_cycles,
             )
 
             # Skip provider if all keys are in cooldown from previous failures
@@ -232,8 +310,12 @@ class FallbackRouter:
                     return result
 
                 except Exception as e:
-                    is_global = self._is_global_error(e)
-                    tracker.mark_failed(api_key, is_global=is_global)
+                    action_info = self.resolve_error_action(resolved_route.provider, e)
+                    tracker.mark_failed(
+                        api_key,
+                        action=action_info.get("action", "model_key_failure"),
+                        cooldown_duration=action_info.get("cooldown_seconds"),
+                    )
 
                     error_info = {
                         "attempt": attempt_number,
@@ -471,10 +553,16 @@ class FallbackRouter:
         attempt_number = 1
 
         for route_config, is_fallback, source_model in route_configs:
-            tracker = KeyCycleTracker(
-                provider=route_config.provider,
-                model=route_config.model,
-                max_cycles=max_key_cycles,
+            if source_model not in self._model_config_cache:
+                self._model_config_cache[source_model] = config_loader.load_config(
+                    source_model
+                )
+            model_config = self._model_config_cache[source_model]
+
+            tracker = self._create_tracker_for_route(
+                route_config=route_config,
+                model_config=model_config,
+                max_key_cycles=max_key_cycles,
             )
 
             # Skip provider if all keys are in cooldown from previous failures
@@ -532,8 +620,12 @@ class FallbackRouter:
                     return  # Success!
 
                 except Exception as e:
-                    is_global = self._is_global_error(e)
-                    tracker.mark_failed(api_key, is_global=is_global)
+                    action_info = self.resolve_error_action(resolved_route.provider, e)
+                    tracker.mark_failed(
+                        api_key,
+                        action=action_info.get("action", "model_key_failure"),
+                        cooldown_duration=action_info.get("cooldown_seconds"),
+                    )
 
                     error_info = {
                         "attempt": attempt_number,

@@ -23,7 +23,7 @@ from app.core.provider_config import get_provider_env_var_patterns
 logger = logging.getLogger("api_key_manager")
 
 # Cooldown period for failed keys before they re-enter rotation (can be overridden via env)
-KEY_COOLDOWN_SECONDS = int(os.getenv("KEY_COOLDOWN_SECONDS", "60"))
+KEY_COOLDOWN_SECONDS = int(os.getenv("KEY_COOLDOWN_SECONDS", "180"))
 
 # Maximum retry cycles through all keys before falling back to next provider
 MAX_KEY_RETRY_CYCLES = int(os.getenv("MAX_KEY_RETRY_CYCLES", "1"))
@@ -34,12 +34,14 @@ class KeyRotationState:
     """Tracks per-provider key rotation state (global, persists across requests)."""
 
     last_used_index: int = -1
-    # Global failures: {key: timestamp}
-    failed_keys: Dict[str, float] = field(default_factory=dict)
-    # Model-scoped failures: {model: {key: timestamp}}
-    model_failed_keys: Dict[str, Dict[str, float]] = field(
+    # Global failures: {key: (timestamp, cooldown_duration)}
+    failed_keys: Dict[str, Tuple[float, int]] = field(default_factory=dict)
+    # Unified model-scoped failures: {provider/model: {key: (timestamp, cooldown_duration)}}
+    model_failed_keys: Dict[str, Dict[str, Tuple[float, int]]] = field(
         default_factory=lambda: defaultdict(dict)
     )
+    # Provider-wide failure (all keys): {provider: timestamp_until}
+    provider_failed_until: float = 0
 
 
 # Global rotation state: {provider: KeyRotationState}
@@ -126,6 +128,8 @@ class KeyCycleTracker:
         provider: str,
         model: Optional[str] = None,
         max_cycles: Optional[int] = None,
+        provider_cooldown: Optional[int] = None,
+        route_cooldown: Optional[int] = None,
     ):
         """
         Initialize tracker for a specific provider and optional model context.
@@ -135,15 +139,21 @@ class KeyCycleTracker:
             model: Optional model name for scoped failure tracking
             max_cycles: Maximum cycles through all keys before exhaustion.
                         Defaults to MAX_KEY_RETRY_CYCLES env setting.
+            provider_cooldown: Optional custom cooldown for provider-wide failures
+            route_cooldown: Optional custom cooldown for model-specific failures
         """
         self.provider = provider
         self.model = model
         self.max_cycles = max_cycles if max_cycles is not None else MAX_KEY_RETRY_CYCLES
+        self.provider_cooldown = provider_cooldown or KEY_COOLDOWN_SECONDS
+        self.route_cooldown = route_cooldown or self.provider_cooldown
         self.current_cycle = 0
         self.keys_tried_this_cycle: Set[str] = set()
         self._keys_attempted: Set[str] = set()  # All keys attempted by this tracker
         self._all_keys = _parse_provider_keys(provider)
         self._key_index = _rotation_state[provider].last_used_index
+        # Unified route key for cross-logical-model cooldown unification
+        self.route_key = f"{provider}/{model}" if model else provider
 
     def get_next_key(self) -> Optional[str]:
         """
@@ -153,6 +163,7 @@ class KeyCycleTracker:
         - No keys available for this provider
         - All cycles exhausted (max_cycles reached)
         - All keys in current cycle failed and cooldown not expired
+        - Provider is in provider-wide cooldown
 
         Within the same request, keys that have already been attempted by this
         tracker can be retried (cooldown check is bypassed). Across requests,
@@ -169,6 +180,12 @@ class KeyCycleTracker:
 
         state = _rotation_state[self.provider]
         current_time = time.time()
+
+        # Check provider-wide cooldown
+        if state.provider_failed_until > current_time:
+            logger.info(f"Provider {self.provider} is in provider-wide cooldown")
+            return None
+
         num_keys = len(self._all_keys)
 
         # Try each key starting from current position
@@ -184,25 +201,21 @@ class KeyCycleTracker:
             # BUT: bypass cooldown check if this tracker has already attempted the key
             # (allows retries within the same request)
             if candidate not in self._keys_attempted:
-                # 1. Check Global Failures
-                fail_time = state.failed_keys.get(candidate)
-                if (
-                    fail_time is not None
-                    and KEY_COOLDOWN_SECONDS > 0
-                    and (current_time - fail_time) < KEY_COOLDOWN_SECONDS
-                ):
-                    continue  # Still in global cooldown
+                # 1. Check Global/Provider Failures
+                fail_info = state.failed_keys.get(candidate)
+                if fail_info:
+                    fail_time, cooldown_duration = fail_info
+                    if (current_time - fail_time) < cooldown_duration:
+                        continue  # Still in global cooldown
 
-                # 2. Check Model-Scoped Failures (if model context available)
+                # 2. Check Unified Model-Scoped Failures (if model context available)
                 if self.model:
-                    model_fails = state.model_failed_keys.get(self.model, {})
-                    fail_time = model_fails.get(candidate)
-                    if (
-                        fail_time is not None
-                        and KEY_COOLDOWN_SECONDS > 0
-                        and (current_time - fail_time) < KEY_COOLDOWN_SECONDS
-                    ):
-                        continue  # Still in model-scoped cooldown
+                    model_fails = state.model_failed_keys.get(self.route_key, {})
+                    fail_info = model_fails.get(candidate)
+                    if fail_info:
+                        fail_time, cooldown_duration = fail_info
+                        if (current_time - fail_time) < cooldown_duration:
+                            continue  # Still in model-scoped cooldown
 
             # Key is available
             self.keys_tried_this_cycle.add(candidate)
@@ -249,49 +262,78 @@ class KeyCycleTracker:
         if not self._all_keys:
             return True
 
-        if KEY_COOLDOWN_SECONDS <= 0:
-            return False
-
         state = _rotation_state[self.provider]
         current_time = time.time()
 
+        # Check provider-wide cooldown
+        if state.provider_failed_until > current_time:
+            return True
+
         for key in self._all_keys:
             # A key is available if it's NOT in global cooldown AND (NOT in model cooldown)
-            global_fail = state.failed_keys.get(key)
-            if (
-                global_fail is None
-                or (current_time - global_fail) >= KEY_COOLDOWN_SECONDS
-            ):
-                # Key is not in global cooldown. Now check model cooldown.
-                if self.model:
-                    model_fail = state.model_failed_keys.get(self.model, {}).get(key)
-                    if (
-                        model_fail is None
-                        or (current_time - model_fail) >= KEY_COOLDOWN_SECONDS
-                    ):
-                        return False  # Available for this model
-                else:
-                    return False  # Available (no model context to restrict it)
+            fail_info = state.failed_keys.get(key)
+            if fail_info:
+                fail_time, cooldown_duration = fail_info
+                if (current_time - fail_time) < cooldown_duration:
+                    continue  # In global cooldown
+
+            # Key is not in global cooldown. Now check model cooldown.
+            if self.model:
+                model_fail_info = state.model_failed_keys.get(self.route_key, {}).get(
+                    key
+                )
+                if model_fail_info:
+                    fail_time, cooldown_duration = model_fail_info
+                    if (current_time - fail_time) < cooldown_duration:
+                        continue  # In model-scoped cooldown
+
+            return False  # Found at least one available key
 
         return True  # All keys are blocked either globally or for this model
 
-    def mark_failed(self, key: str, is_global: bool = False) -> None:
+    def mark_failed(
+        self,
+        key: str,
+        action: str = "model_key_failure",
+        is_global: Optional[bool] = None,
+        cooldown_duration: Optional[int] = None,
+    ) -> None:
         """
-        Mark key as failed (updates state).
+        Mark key or provider as failed (updates state).
 
         Args:
             key: The API key that failed
-            is_global: If True, key is marked failed for ALL models (e.g. 401).
-                       If False, key is only marked failed for current model (e.g. 429).
+            action: The action to take (model_key_failure, global_key_failure, provider_cooldown)
+            is_global: For backward compatibility. If True, maps to global_key_failure.
+            cooldown_duration: Optional custom cooldown duration.
         """
-        key_hint = f"...{key[-4:]}" if len(key) >= 4 else "****"
-        scope = "global" if is_global else f"model:{self.model}"
-        logger.warning(f"API key {key_hint} failed ({scope}) for {self.provider}")
+        # Handle backward compatibility
+        effective_action = action
+        if is_global is True:
+            effective_action = "global_key_failure"
+        elif is_global is False:
+            effective_action = "model_key_failure"
 
-        if is_global:
-            mark_key_failed(self.provider, key)
-        elif self.model:
-            mark_key_failed(self.provider, key, model=self.model)
+        key_hint = f"...{key[-4:]}" if len(key) >= 4 else "****"
+        logger.warning(
+            f"API key {key_hint} failed (action: {effective_action}) for {self.provider}"
+        )
+
+        duration = cooldown_duration
+        if duration is None:
+            if effective_action == "model_key_failure":
+                duration = self.route_cooldown
+            else:
+                duration = self.provider_cooldown
+
+        if effective_action == "provider_cooldown":
+            mark_provider_failed(self.provider, duration)
+        elif effective_action == "global_key_failure":
+            mark_key_failed(self.provider, key, cooldown_duration=duration)
+        else:  # model_key_failure
+            mark_key_failed(
+                self.provider, key, model=self.route_key, cooldown_duration=duration
+            )
 
     def exhausted(self) -> bool:
         """Check if all cycles are exhausted."""
@@ -336,31 +378,33 @@ def get_api_key(provider: str, model: Optional[str] = None) -> Optional[str]:
 
     state = _rotation_state[provider]
     current_time = time.time()
+
+    # Check provider-wide cooldown
+    if state.provider_failed_until > current_time:
+        return None
+
     num_keys = len(all_keys)
+    route_key = f"{provider}/{model}" if model else provider
 
     for offset in range(num_keys):
         next_index = (state.last_used_index + 1 + offset) % num_keys
         candidate_key = all_keys[next_index]
 
         # 1. Check global cooldown
-        fail_time = state.failed_keys.get(candidate_key)
-        if (
-            fail_time is not None
-            and KEY_COOLDOWN_SECONDS > 0
-            and (current_time - fail_time) < KEY_COOLDOWN_SECONDS
-        ):
-            continue
+        fail_info = state.failed_keys.get(candidate_key)
+        if fail_info:
+            fail_time, cooldown_duration = fail_info
+            if (current_time - fail_time) < cooldown_duration:
+                continue
 
         # 2. Check model-scoped cooldown
         if model:
-            model_fails = state.model_failed_keys.get(model, {})
-            fail_time = model_fails.get(candidate_key)
-            if (
-                fail_time is not None
-                and KEY_COOLDOWN_SECONDS > 0
-                and (current_time - fail_time) < KEY_COOLDOWN_SECONDS
-            ):
-                continue
+            model_fails = state.model_failed_keys.get(route_key, {})
+            fail_info = model_fails.get(candidate_key)
+            if fail_info:
+                fail_time, cooldown_duration = fail_info
+                if (current_time - fail_time) < cooldown_duration:
+                    continue
 
         state.last_used_index = next_index
         return candidate_key
@@ -368,24 +412,46 @@ def get_api_key(provider: str, model: Optional[str] = None) -> Optional[str]:
     return None
 
 
-def mark_key_failed(provider: str, key: str, model: Optional[str] = None) -> None:
+def mark_key_failed(
+    provider: str, key: str, model: Optional[str] = None, cooldown_duration: int = 180
+) -> None:
     """
     Mark an API key as failed.
 
     Args:
         provider: Provider name
         key: The failed API key
-        model: If provided, failure is scoped to this model only (e.g. 429).
+        model: If provided, failure is scoped to this model (provider/model).
                If None, failure is global for the provider (e.g. 401).
+        cooldown_duration: Duration in seconds for the cooldown.
     """
     state = _rotation_state[provider]
     now = time.time()
     if model:
-        state.model_failed_keys[model][key] = now
-        logger.debug(f"Marked key failed for {provider} model {model}")
+        state.model_failed_keys[model][key] = (now, cooldown_duration)
+        logger.debug(
+            f"Marked key failed for {provider} model {model} (duration: {cooldown_duration}s)"
+        )
     else:
-        state.failed_keys[key] = now
-        logger.debug(f"Marked key failed globally for {provider}")
+        state.failed_keys[key] = (now, cooldown_duration)
+        logger.debug(
+            f"Marked key failed globally for {provider} (duration: {cooldown_duration}s)"
+        )
+
+
+def mark_provider_failed(provider: str, cooldown_duration: int = 180) -> None:
+    """
+    Mark an entire provider as failed (provider-wide cooldown).
+
+    Args:
+        provider: Provider name
+        cooldown_duration: Duration in seconds for the cooldown.
+    """
+    state = _rotation_state[provider]
+    state.provider_failed_until = time.time() + cooldown_duration
+    logger.warning(
+        f"Marked provider {provider} failed for {cooldown_duration}s (provider-wide cooldown)"
+    )
 
 
 def get_all_keys(provider: str) -> List[str]:
@@ -399,10 +465,12 @@ def reset_failed_keys(provider: Optional[str] = None) -> None:
         if provider in _rotation_state:
             _rotation_state[provider].failed_keys.clear()
             _rotation_state[provider].model_failed_keys.clear()
+            _rotation_state[provider].provider_failed_until = 0
     else:
         for state in _rotation_state.values():
             state.failed_keys.clear()
             state.model_failed_keys.clear()
+            state.provider_failed_until = 0
 
 
 def reset_rotation_state(provider: Optional[str] = None) -> None:

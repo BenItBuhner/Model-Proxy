@@ -32,7 +32,7 @@ def test_model_scoped_failure(monkeypatch):
     monkeypatch.setenv("TEST_PROVIDER_API_KEY_2", "key-2")
 
     # 1. Mark key-1 as failed for model-a (scoped)
-    mark_key_failed(provider, "key-1", model=model_a)
+    mark_key_failed(provider, "key-1", model=f"{provider}/{model_a}")
 
     # 2. Check availability for model-a
     # Since key-1 is failed for model-a, it should return key-2
@@ -84,7 +84,7 @@ def test_all_keys_in_cooldown_scoped(monkeypatch):
     monkeypatch.setenv("TEST_PROVIDER_API_KEY_1", "key-1")
 
     # Mark key-1 failed for model-a only
-    mark_key_failed(provider, "key-1", model=model_a)
+    mark_key_failed(provider, "key-1", model=f"{provider}/{model_a}")
 
     # Should be in cooldown for model-a
     tracker_a = KeyCycleTracker(provider, model=model_a)
@@ -104,14 +104,14 @@ def test_tracker_mark_failed_logic(monkeypatch):
 
     tracker = KeyCycleTracker(provider, model=model_a)
 
-    # 1. Mark failed with is_global=False
-    tracker.mark_failed("key-1", is_global=False)
+    # 1. Mark failed with action="model_key_failure"
+    tracker.mark_failed("key-1", action="model_key_failure")
     state = _rotation_state[provider]
-    assert "key-1" in state.model_failed_keys[model_a]
+    assert "key-1" in state.model_failed_keys[f"{provider}/{model_a}"]
     assert "key-1" not in state.failed_keys
 
-    # 2. Mark failed with is_global=True
-    tracker.mark_failed("key-1", is_global=True)
+    # 2. Mark failed with action="global_key_failure"
+    tracker.mark_failed("key-1", action="global_key_failure")
     assert "key-1" in state.failed_keys
 
 
@@ -126,7 +126,7 @@ def test_mixed_failures(monkeypatch):
     # key-1 failed globally
     mark_key_failed(provider, "key-1", model=None)
     # key-2 failed for model-a
-    mark_key_failed(provider, "key-2", model=model_a)
+    mark_key_failed(provider, "key-2", model=f"{provider}/{model_a}")
 
     tracker = KeyCycleTracker(provider, model=model_a)
     # Both keys should be considered in cooldown for model-a
@@ -150,12 +150,19 @@ def test_error_code_classification():
         timeout_seconds=60,
     )
 
-    # Global: 400, 401, 403
-    for code in [400, 401, 403]:
+    # Global: 401, 403
+    for code in [401, 403]:
         err = RouteExecutionError("err", route=route, status_code=code)
-        assert router._is_global_error(err) is True, f"Status {code} should be global"
+        action = router.resolve_error_action(route.provider, err)
+        assert action["action"] == "global_key_failure", (
+            f"Status {code} should be global"
+        )
 
-    # Scoped: 404, 429, 500
-    for code in [404, 429, 500]:
+    # Scoped: 400, 404, 429, 500
+    # Note: 400 is now scoped by default unless mapped otherwise
+    for code in [400, 404, 429, 500]:
         err = RouteExecutionError("err", route=route, status_code=code)
-        assert router._is_global_error(err) is False, f"Status {code} should be scoped"
+        action = router.resolve_error_action(route.provider, err)
+        assert action["action"] == "model_key_failure", (
+            f"Status {code} should be scoped"
+        )

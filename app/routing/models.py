@@ -36,6 +36,10 @@ class RouteConfig(BaseModel):
     timeout_seconds: Optional[int] = Field(
         default=None, description="Timeout for this specific route"
     )
+    cooldown_seconds: Optional[int] = Field(
+        default=None,
+        description="Route-specific cooldown duration in seconds for model-specific errors (429, 500)",
+    )
 
 
 class ModelRoutingConfig(BaseModel):
@@ -46,6 +50,10 @@ class ModelRoutingConfig(BaseModel):
     )
     timeout_seconds: Optional[int] = Field(
         default=60, description="Default timeout for all routes in seconds"
+    )
+    default_cooldown_seconds: int = Field(
+        default=180,
+        description="Default cooldown duration for routes without explicit cooldown_seconds",
     )
     model_routings: List[RouteConfig] = Field(
         ..., description="Ordered list of provider routes to try"
