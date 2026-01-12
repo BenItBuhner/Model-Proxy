@@ -35,7 +35,7 @@
     "enabled": false,
     "requests_per_minute": null,
     "tokens_per_minute": null,
-    "cooldown_seconds": 180
+    "cooldown_seconds": 600
   },
 
   "models": {},
