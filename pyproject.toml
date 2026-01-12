@@ -25,6 +25,11 @@ dependencies = [
 [project.scripts]
 model-proxy = "app.cli_main:main"
 
+[project.urls]
+Homepage = "https://github.com/BenItBuhner/Model-Proxy"
+Documentation = "https://github.com/BenItBuhner/Model-Proxy#readme"
+Repository = "https://github.com/BenItBuhner/Model-Proxy"
+
 [project.optional-dependencies]
 dev = [
     "pytest",
