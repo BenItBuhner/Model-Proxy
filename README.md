@@ -32,7 +32,7 @@ A production-ready FastAPI application that provides a unified, multi-provider L
 ```bash
 # Clone the repository
 git clone https://github.com/BenItBuhner/model-proxy.git
-cd model-proxy  # or centralized-inference-endpoint
+cd model-proxy
 
 # Install in editable mode (development)
 uv pip install -e .
@@ -64,10 +64,7 @@ model-proxy --help
 ```bash
 # Clone the repository
 git clone https://github.com/BenItBuhner/model-proxy.git
-cd model-proxy  # or centralized-inference-endpoint
-
-# Install dependencies
-pip install -r pyproject.toml
+cd model-proxy
 
 # Install in editable mode
 pip install -e .
@@ -272,6 +269,92 @@ model-proxy config show MODEL
 ```bash
 # Show configuration for a model
 model-proxy config show gpt-5.2
+```
+
+#### `model-proxy add provider`
+Add a new LLM provider interactively or via flags.
+
+```bash
+model-proxy add provider [OPTIONS]
+```
+
+**Options:**
+- `--list, -l`: List available providers without adding
+- `--name, -n`: Provider identifier (non-interactive)
+- `--display-name, -d`: Provider display name (non-interactive)
+- `--base-url, -u`: Provider base URL (non-interactive)
+- `--format, -f`: Provider format: `openai`, `anthropic`, `gemini`, `azure` (non-interactive)
+- `--overwrite, -o`: Overwrite existing provider
+
+**Examples:**
+```bash
+# Add provider interactively
+model-proxy add provider
+
+# List available providers
+model-proxy add provider --list
+
+# Add provider non-interactively
+model-proxy add provider --name myapi --display-name "My API" --base-url https://api.example.com --format openai
+```
+
+#### `model-proxy add model`
+Add model configurations interactively or via flags.
+
+```bash
+model-proxy add model [OPTIONS]
+```
+
+**Options:**
+- `--list, -l`: List models without configuring
+- `--name, -n`: Logical model name (non-interactive)
+- `--provider, -p`: Provider name (non-interactive)
+- `--model, -m`: Model ID from provider (non-interactive)
+- `--timeout, -t`: Timeout in seconds (default: 240)
+- `--custom, -c`: Add as custom model to cache only
+- `--overwrite, -o`: Overwrite existing model config
+
+**Examples:**
+```bash
+# Add model interactively
+model-proxy add model
+
+# List available models
+model-proxy add model --list
+
+# Add model non-interactively
+model-proxy add model --name gpt4-fallback --provider openai --model gpt-4 --timeout 120
+
+# Add custom model
+model-proxy add model --custom --provider openai --model gpt-4-custom
+```
+
+#### `model-proxy add key`
+Add API keys interactively or via flags.
+
+```bash
+model-proxy add key [OPTIONS]
+```
+
+**Options:**
+- `--list, -l`: List API keys without adding
+- `--provider, -p`: Provider name (non-interactive)
+- `--key, -k`: API key value (non-interactive, use with caution)
+- `--env-var, -e`: Custom environment variable name
+
+**Examples:**
+```bash
+# Add API key interactively
+model-proxy add key
+
+# List configured keys
+model-proxy add key --list
+
+# Add key non-interactively
+model-proxy add key --provider openai --key sk-xxx
+
+# Add key with custom env variable
+model-proxy add key --provider openai --key sk-xxx --env-var OPENAI_API_KEY_2
 ```
 
 ### Diagnostics Commands
