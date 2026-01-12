@@ -1313,6 +1313,51 @@ def add_key(
         raise typer.Exit(1)
 
 
+@app.command()
+def setup(
+    resume: Annotated[
+        bool, Option("--resume", "-r", help="Resume from saved progress")
+    ] = False,
+    quick: Annotated[
+        bool, Option("--quick", "-q", help="Quick setup (skip optional steps)")
+    ] = False,
+):
+    """
+    Run the interactive setup wizard.
+
+    Guides you through provider setup, model configuration, and API key management.
+
+    Examples:
+        model-proxy setup
+        model-proxy setup --resume
+        model-proxy setup --quick
+    """
+    ensure_env_loaded()
+
+    from app.cli.interactive import ask_yes_no
+    from app.cli.setup_wizard import SetupWizard
+
+    wizard = SetupWizard()
+
+    if resume:
+        wizard.setup_type = "resume"
+
+    if quick:
+        wizard.setup_type = "quick"
+
+    try:
+        wizard.run()
+    except KeyboardInterrupt:
+        print()
+        print_warning("Setup wizard cancelled")
+        if ask_yes_no("Save progress for later?", default=True):
+            wizard.save_progress()
+        raise typer.Exit(0)
+    except Exception as e:
+        print_error(f"Setup wizard failed: {e}")
+        raise typer.Exit(1)
+
+
 @app.command(name="help")
 def help_command():
     """Show help information (alias for --help)."""
@@ -1322,6 +1367,7 @@ def help_command():
     typer.echo("\nQuick reference:")
     typer.echo("  model-proxy start         Start the server")
     typer.echo("  model-proxy doctor         Run diagnostics")
+    typer.echo("  model-proxy setup          Run interactive setup wizard")
     typer.echo("  model-proxy config list    List available models")
     typer.echo("  model-proxy add provider   Add a new provider interactively")
     typer.echo("  model-proxy add model      Configure models interactively")

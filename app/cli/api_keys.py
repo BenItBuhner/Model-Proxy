@@ -37,13 +37,25 @@ def add_api_key_interactive() -> None:
     config_manager = ConfigManager()
 
     try:
-        _add_api_key_interactive_loop(config_manager)
+        add_api_key_interactive_core(config_manager)
     except UserCancelled:
         handle_user_cancelled()
 
 
+def add_api_key_interactive_core(config_manager: ConfigManager) -> None:
+    """
+    Core API key addition logic - can be called from wizard or directly.
+
+    Args:
+        config_manager: ConfigManager instance for file operations
+
+    Raises:
+        UserCancelled: If user cancels the operation
+    """
+    _add_api_key_interactive_loop(config_manager)
+
+
 def _add_api_key_interactive_loop(config_manager: ConfigManager) -> None:
-    """Internal loop for API key addition - can raise UserCancelled."""
     current_provider = None
 
     while True:

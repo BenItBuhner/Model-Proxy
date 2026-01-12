@@ -861,3 +861,116 @@ def safe_input(prompt: str = "") -> str:
     except (EOFError, KeyboardInterrupt):
         print()
         raise UserCancelled()
+
+
+# Wizard-specific display functions
+def display_welcome_header(title: str) -> None:
+    """
+    Display stylized welcome header for the setup wizard.
+
+    Args:
+        title: Welcome message title
+    """
+    print("\n" + "=" * 70)
+    print(f"{' '.join(title.center(68).split())}")
+    print("=" * 70)
+
+
+def display_step_header(step_name: str, step_number: int, total_steps: int) -> None:
+    """
+    Display step header with numbering for the setup wizard.
+
+    Args:
+        step_name: Name of the current step
+        step_number: Current step number (1-based)
+        total_steps: Total number of steps
+    """
+    print(f"\nStep {step_number} of {total_steps}: {step_name}")
+    print("-" * len(f"Step {step_number} of {total_steps}: {step_name}"))
+
+
+def display_completion_summary(completed_steps: List[str], total_steps: int) -> None:
+    """
+    Display summary of completed steps in the wizard.
+
+    Args:
+        completed_steps: List of completed step names
+        total_steps: Total number of steps
+    """
+    print("\n" + "=" * 50)
+    print("Setup Progress Summary")
+    print("=" * 50)
+
+    if not completed_steps:
+        print("No steps completed yet.")
+    else:
+        print(f"Completed steps ({len(completed_steps)}/{total_steps}):")
+        for step in completed_steps:
+            print(f"  ✓ {step}")
+
+    print(f"\nOverall progress: {len(completed_steps)}/{total_steps} steps completed")
+
+
+def display_wizard_section_header(title: str, description: str = "") -> None:
+    """
+    Display a section header within a wizard step.
+
+    Args:
+        title: Section title
+        description: Optional description
+    """
+    print(f"\n{'─' * 40}")
+    print(f"{title}")
+    if description:
+        print(f"  {description}")
+    print(f"{'─' * 40}")
+
+
+def display_setup_tips(tips: List[str]) -> None:
+    """
+    Display helpful tips for the current setup step.
+
+    Args:
+        tips: List of tip messages
+    """
+    if tips:
+        print("\n💡 Tips:")
+        for i, tip in enumerate(tips, 1):
+            print(f"  {i}. {tip}")
+
+
+def display_step_prerequisites(prerequisites: List[str]) -> None:
+    """
+    Display prerequisites for the current step.
+
+    Args:
+        prerequisites: List of prerequisite descriptions
+    """
+    if prerequisites:
+        print("\n📋 Prerequisites:")
+        for prereq in prerequisites:
+            print(f"  • {prereq}")
+
+
+def display_next_actions(actions: List[str]) -> None:
+    """
+    Display next possible actions for the user.
+
+    Args:
+        actions: List of action descriptions
+    """
+    print("\n🔄 Next Actions:")
+    for i, action in enumerate(actions, 1):
+        print(f"  {i}. {action}")
+
+
+def display_wizard_footer(message: str = "") -> None:
+    """
+    Display a footer message for wizard sections.
+
+    Args:
+        message: Footer message
+    """
+    if message:
+        print(f"\n{message}")
+    print("\n" + "─" * 70)

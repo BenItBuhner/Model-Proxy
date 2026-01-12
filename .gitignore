@@ -137,6 +137,9 @@ venv.bak/
 .dmypy.json
 dmypy.json
 
+# ruff
+.ruff_cache/
+
 # Pyre type checker
 .pyre/
 
@@ -191,3 +194,9 @@ config/models/
 
 # Model discovery cache
 config/models.json
+
+# Local agent context
+.claude/
+
+# Wizard file
+.model-proxy-setup-progress

@@ -44,13 +44,25 @@ def add_provider_interactive() -> None:
     config_manager = ConfigManager()
 
     try:
-        _add_provider_interactive_loop(config_manager)
+        add_provider_interactive_core(config_manager)
     except UserCancelled:
         handle_user_cancelled()
 
 
+def add_provider_interactive_core(config_manager: ConfigManager) -> None:
+    """
+    Core provider addition logic - can be called from wizard or directly.
+
+    Args:
+        config_manager: ConfigManager instance for file operations
+
+    Raises:
+        UserCancelled: If user cancels the operation
+    """
+    _add_provider_interactive_loop(config_manager)
+
+
 def _add_provider_interactive_loop(config_manager: ConfigManager) -> None:
-    """Internal loop for provider addition - can raise UserCancelled."""
     while True:
         # Step 1: Display existing providers
         existing_providers = config_manager.get_providers()

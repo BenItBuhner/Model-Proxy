@@ -86,7 +86,7 @@ def add_model_interactive() -> None:
     config_manager = ConfigManager()
 
     try:
-        _add_model_interactive_loop(config_manager)
+        add_model_interactive_core(config_manager)
     except UserCancelled:
         handle_user_cancelled()
 
@@ -354,6 +354,19 @@ def _parse_model_selection(selection: str) -> tuple:
     if len(parts) == 2:
         return (parts[0], parts[1])
     return (None, selection)
+
+
+def add_model_interactive_core(config_manager: ConfigManager) -> None:
+    """
+    Core model addition logic - can be called from wizard or directly.
+
+    Args:
+        config_manager: ConfigManager instance for file operations
+
+    Raises:
+        UserCancelled: If user cancels the operation
+    """
+    _add_model_interactive_loop(config_manager)
 
 
 def _add_model_interactive_loop(config_manager: ConfigManager) -> None:
