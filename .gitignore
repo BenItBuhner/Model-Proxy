@@ -200,3 +200,6 @@ config/models.json
 
 # Wizard file
 .model-proxy-setup-progress
+
+# MODELS
+MODELS.md
