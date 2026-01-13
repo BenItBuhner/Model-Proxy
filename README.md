@@ -13,12 +13,6 @@ A production-ready FastAPI application that provides a unified, multi-provider L
 - **Circuit Breaker Pattern**: Failed keys enter cooldown period before retry
 - **Format Conversion**: Seamless conversion between OpenAI and Anthropic API formats
 - **Streaming Support**: Full Server-Sent Events (SSE) streaming for both providers
-- **Structured Logging**: Comprehensive request/response logging to SQLite database
-- **Rate Limiting**: Configurable per-client rate limits (requests and tokens per minute)
-- **Health Checks**: Basic and detailed health monitoring endpoints
-- **CORS Support**: Configurable Cross-Origin Resource Sharing
-- **Error Handling**: Provider-standardized error responses matching OpenAI/Anthropic formats
-- **🚀 Modern CLI**: Full-featured command-line interface for easy management
 
 ## Installation
 
@@ -698,13 +692,6 @@ Anthropic-compatible messages endpoint (non-streaming).
 ```
 
 **Response:** Standard Anthropic message response format.
-
-#### POST `/v1/messages-stream`
-Anthropic-compatible streaming messages endpoint.
-
-**Request:** Same as `/v1/messages` but returns Server-Sent Events stream.
-
-**Response:** SSE stream with Anthropic-formatted chunks.
 
 ### Health Check Endpoints
 
