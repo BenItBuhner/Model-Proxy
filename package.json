@@ -1,0 +1,22 @@
+{
+  "name": "model-proxy",
+  "version": "1.0.0",
+  "description": "A production-ready multi-provider LLM inference proxy supporting OpenAI, Anthropic, Open Responses, and GenAI formats",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --hot src/index.ts",
+    "start": "bun run src/index.ts",
+    "test": "bun test",
+    "test:unit": "bun test tests/unit",
+    "test:integration": "bun test tests/integration",
+    "test:e2e": "bun test tests/e2e",
+    "test:all": "bun test --timeout 60000"
+  },
+  "dependencies": {
+    "hono": "^4.7.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
