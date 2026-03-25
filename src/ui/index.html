@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Model-Proxy Setup</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" />
+  <style>
+    :root {
+      --bg: #0f172a;
+      --bg-elevated: #111c33;
+      --card: #1e293b;
+      --card-hover: #243047;
+      --border: #334155;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --danger: #ef4444;
+      --success: #22c55e;
+      --warning: #eab308;
+      --radius: 10px;
+      --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; font-family: var(--font); background: var(--bg); color: var(--text); line-height: 1.5; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .hidden { display: none !important; }
+    .auth-wrap {
+      min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      padding: 1.5rem; background: radial-gradient(ellipse 80% 60% at 50% -20%, rgba(59,130,246,.18), transparent);
+    }
+    .auth-card {
+      width: 100%; max-width: 400px; background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 2rem; box-shadow: 0 25px 50px -12px rgba(0,0,0,.45);
+    }
+    .auth-card h1 { margin: 0 0 .5rem; font-size: 1.35rem; font-weight: 600; display: flex; align-items: center; gap: .6rem; }
+    .auth-card p { margin: 0 0 1.25rem; color: var(--text-muted); font-size: .9rem; }
+    label { display: block; font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin-bottom: .35rem; }
+    input[type="password"], input[type="text"], input[type="number"], textarea, select {
+      width: 100%; padding: .65rem .75rem; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--bg-elevated); color: var(--text); font-size: .9rem; font-family: inherit;
+    }
+    textarea { min-height: 120px; resize: vertical; font-family: ui-monospace, monospace; font-size: .8rem; }
+    input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,.2); }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: .45rem;
+      padding: .55rem 1rem; border-radius: 8px; border: none; font-size: .875rem; font-weight: 600;
+      font-family: inherit; cursor: pointer; transition: background .15s, transform .05s;
+    }
+    .btn:active { transform: scale(.98); }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-ghost { background: transparent; color: var(--text-muted); border: 1px solid var(--border); }
+    .btn-ghost:hover { background: var(--card-hover); color: var(--text); }
+    .btn-danger { background: rgba(239,68,68,.15); color: #fca5a5; border: 1px solid rgba(239,68,68,.35); }
+    .btn-danger:hover { background: rgba(239,68,68,.25); }
+    .btn-sm { padding: .35rem .65rem; font-size: .8rem; }
+    .btn-block { width: 100%; }
+    .app-header {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem;
+      padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); background: var(--bg-elevated); position: sticky; top: 0; z-index: 50;
+    }
+    .brand { display: flex; align-items: center; gap: .65rem; font-weight: 700; font-size: 1.1rem; }
+    .brand i { color: var(--accent); }
+    .tabs {
+      display: flex; flex-wrap: wrap; gap: .25rem; padding: .75rem 1.25rem; border-bottom: 1px solid var(--border);
+      background: var(--bg); overflow-x: auto;
+    }
+    .tab {
+      padding: .5rem .9rem; border-radius: 8px; border: none; background: transparent; color: var(--text-muted);
+      font-family: inherit; font-size: .85rem; font-weight: 500; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: .4rem;
+    }
+    .tab:hover { color: var(--text); background: var(--card); }
+    .tab.active { background: var(--card); color: var(--accent); }
+    main { padding: 1.25rem; max-width: 1200px; margin: 0 auto; }
+    .panel { display: none; animation: fade .2s ease; }
+    .panel.active { display: block; }
+    @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+    .grid { display: grid; gap: 1rem; }
+    @media (min-width: 640px) { .grid-2 { grid-template-columns: repeat(2, 1fr); } }
+    @media (min-width: 900px) { .grid-3 { grid-template-columns: repeat(3, 1fr); } }
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.1rem;
+    }
+    .card h2 { margin: 0 0 .75rem; font-size: .95rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
+    .stat-val { font-size: 1.75rem; font-weight: 700; color: var(--text); }
+    .stat-sub { font-size: .8rem; color: var(--text-muted); margin-top: .25rem; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; align-items: center; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+    table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+    th, td { padding: .65rem .85rem; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: var(--bg-elevated); color: var(--text-muted); font-weight: 600; font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,.02); }
+    .badge { display: inline-flex; align-items: center; padding: .15rem .45rem; border-radius: 999px; font-size: .7rem; font-weight: 600; }
+    .badge-on { background: rgba(34,197,94,.15); color: #86efac; }
+    .badge-off { background: rgba(148,163,184,.12); color: var(--text-muted); }
+    .mono { font-family: ui-monospace, monospace; font-size: .8rem; }
+    .actions { display: flex; flex-wrap: wrap; gap: .35rem; }
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(15,23,42,.75); display: flex; align-items: flex-start; justify-content: center;
+      padding: 2rem 1rem; z-index: 100; overflow-y: auto;
+    }
+    .modal {
+      width: 100%; max-width: 640px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+      margin: auto; max-height: calc(100vh - 4rem); overflow: hidden; display: flex; flex-direction: column;
+    }
+    .modal-hd { padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+    .modal-hd h3 { margin: 0; font-size: 1.05rem; }
+    .modal-bd { padding: 1.25rem; overflow-y: auto; flex: 1; }
+    .modal-ft { padding: 1rem 1.25rem; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: .5rem; flex-wrap: wrap; }
+    .form-row { margin-bottom: 1rem; }
+    .form-row:last-child { margin-bottom: 0; }
+    .route-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: .5rem; align-items: end; margin-bottom: .5rem; }
+    @media (max-width: 520px) { .route-row { grid-template-columns: 1fr; } }
+    .toast {
+      position: fixed; bottom: 1.25rem; right: 1.25rem; max-width: min(420px, calc(100% - 2rem));
+      padding: .85rem 1rem; border-radius: 8px; font-size: .85rem; z-index: 200; box-shadow: 0 10px 40px rgba(0,0,0,.4);
+      border: 1px solid var(--border); display: none;
+    }
+    .toast.show { display: block; animation: slide .25s ease; }
+    @keyframes slide { from { transform: translateY(12px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    .toast.ok { background: #14532d; color: #bbf7d0; }
+    .toast.err { background: #7f1d1d; color: #fecaca; }
+    .empty { text-align: center; padding: 2rem; color: var(--text-muted); font-size: .9rem; }
+    .path-hint { font-size: .75rem; color: var(--text-muted); word-break: break-all; margin-top: .5rem; }
+    .quick-grid { display: grid; gap: .5rem; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+  </style>
+</head>
+<body>
+  <div id="authScreen" class="auth-wrap">
+    <div class="auth-card">
+      <h1><i class="fa-solid fa-shield-halved"></i> Model-Proxy</h1>
+      <p>Enter the server <strong>CLIENT_API_KEY</strong> to manage providers, models, and keys. Leave blank if the server does not require a key.</p>
+      <div class="form-row">
+        <label for="apiKeyInput">API key</label>
+        <input type="password" id="apiKeyInput" autocomplete="current-password" placeholder="Bearer token value" />
+      </div>
+      <button type="button" class="btn btn-primary btn-block" id="authSubmit"><i class="fa-solid fa-right-to-bracket"></i> Continue</button>
+      <p class="path-hint" style="margin-top:1rem;margin-bottom:0">All requests use <span class="mono">Authorization: Bearer …</span> against <span class="mono">/setup/api/*</span>.</p>
+    </div>
+  </div>
+
+  <div id="appRoot" class="hidden">
+    <header class="app-header">
+      <div class="brand"><i class="fa-solid fa-network-wired"></i> Model-Proxy Setup</div>
+      <div class="actions">
+        <button type="button" class="btn btn-ghost btn-sm" id="btnRefreshGlobal"><i class="fa-solid fa-rotate"></i> Refresh</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnLogout"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign out</button>
+      </div>
+    </header>
+    <nav class="tabs" role="tablist">
+      <button type="button" class="tab active" data-tab="dashboard" role="tab"><i class="fa-solid fa-gauge-high"></i> Dashboard</button>
+      <button type="button" class="tab" data-tab="providers" role="tab"><i class="fa-solid fa-server"></i> Providers</button>
+      <button type="button" class="tab" data-tab="models" role="tab"><i class="fa-solid fa-diagram-project"></i> Models</button>
+      <button type="button" class="tab" data-tab="keys" role="tab"><i class="fa-solid fa-key"></i> API Keys</button>
+      <button type="button" class="tab" data-tab="io" role="tab"><i class="fa-solid fa-file-export"></i> Import / Export</button>
+    </nav>
+    <main>
+      <section id="panel-dashboard" class="panel active" role="tabpanel">
+        <div class="grid grid-2 grid-3" id="dashStats"></div>
+        <div class="card" style="margin-top:1rem">
+          <h2>Quick actions</h2>
+          <div class="quick-grid">
+            <button type="button" class="btn btn-primary btn-sm" id="qaValidate"><i class="fa-solid fa-check-double"></i> Validate config</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="qaReload"><i class="fa-solid fa-rotate"></i> Reload status</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="qaProviders"><i class="fa-solid fa-server"></i> Open Providers</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="qaExport"><i class="fa-solid fa-download"></i> Export JSON</button>
+          </div>
+          <div id="validateResult" class="mono" style="margin-top:1rem;font-size:.8rem;white-space:pre-wrap"></div>
+        </div>
+      </section>
+
+      <section id="panel-providers" class="panel" role="tabpanel">
+        <div class="toolbar">
+          <button type="button" class="btn btn-primary btn-sm" id="btnAddProvider"><i class="fa-solid fa-plus"></i> Add provider</button>
+          <select id="tplSelect" class="btn-ghost" style="max-width:200px;padding:.45rem"></select>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnFromTemplate"><i class="fa-solid fa-file-lines"></i> New from template</button>
+        </div>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Display</th><th>Base URL</th><th>Status</th><th></th></tr></thead><tbody id="providerRows"></tbody></table></div>
+      </section>
+
+      <section id="panel-models" class="panel" role="tabpanel">
+        <div class="toolbar">
+          <button type="button" class="btn btn-primary btn-sm" id="btnAddModel"><i class="fa-solid fa-plus"></i> Add model</button>
+        </div>
+        <div class="table-wrap"><table><thead><tr><th>Logical name</th><th>Routes</th><th>Fallbacks</th><th></th></tr></thead><tbody id="modelRows"></tbody></table></div>
+      </section>
+
+      <section id="panel-keys" class="panel" role="tabpanel">
+        <p style="color:var(--text-muted);font-size:.9rem;margin:0 0 1rem">Key material is never shown in full; previews are redacted on the server.</p>
+        <div class="table-wrap"><table><thead><tr><th>Provider</th><th>Keys</th><th>Status</th><th>Preview</th></tr></thead><tbody id="keyRows"></tbody></table></div>
+      </section>
+
+      <section id="panel-io" class="panel" role="tabpanel">
+        <div class="grid grid-2">
+          <div class="card">
+            <h2>Export</h2>
+            <p style="margin:0 0 1rem;color:var(--text-muted);font-size:.875rem">Download providers, models, and selected environment hints as JSON.</p>
+            <button type="button" class="btn btn-primary" id="btnExport"><i class="fa-solid fa-download"></i> Download export</button>
+          </div>
+          <div class="card">
+            <h2>Import</h2>
+            <p style="margin:0 0 1rem;color:var(--text-muted);font-size:.875rem">Upload a file produced by export (or compatible JSON with <span class="mono">setup</span> object).</p>
+            <input type="file" id="importFile" accept="application/json,.json" style="margin-bottom:.75rem" />
+            <button type="button" class="btn btn-primary" id="btnImport"><i class="fa-solid fa-upload"></i> Import</button>
+            <div id="importResult" class="mono" style="margin-top:1rem;font-size:.8rem;white-space:pre-wrap"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="status"></div>
+
+  <div id="modalProvider" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-hd"><h3 id="providerModalTitle">Provider</h3><button type="button" class="btn btn-ghost btn-sm" data-close="modalProvider"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-bd">
+        <p style="margin:0 0 1rem;color:var(--text-muted);font-size:.85rem">Edit JSON below. <span class="mono">name</span> is required. Use <em>Save</em> to write; existing files need overwrite confirmation.</p>
+        <textarea id="providerJson" spellcheck="false"></textarea>
+      </div>
+      <div class="modal-ft">
+        <label style="display:flex;align-items:center;gap:.5rem;font-size:.85rem;color:var(--text-muted);cursor:pointer">
+          <input type="checkbox" id="providerOverwrite" /> Overwrite if exists
+        </label>
+        <button type="button" class="btn btn-ghost btn-sm" data-close="modalProvider">Cancel</button>
+        <button type="button" class="btn btn-primary btn-sm" id="btnSaveProvider"><i class="fa-solid fa-floppy-disk"></i> Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modalModel" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-hd"><h3 id="modelModalTitle">Model</h3><button type="button" class="btn btn-ghost btn-sm" data-close="modalModel"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-bd">
+        <div class="form-row">
+          <label for="mLogical">Logical name</label>
+          <input type="text" id="mLogical" placeholder="e.g. gpt-5.2" />
+        </div>
+        <div class="form-row">
+          <label for="mTimeout">Timeout (seconds)</label>
+          <input type="number" id="mTimeout" value="60" min="1" />
+        </div>
+        <div class="form-row">
+          <label>Routing chain <span style="font-weight:400;color:var(--text-muted)">(order = priority)</span></label>
+          <div id="routeList"></div>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnAddRoute" style="margin-top:.5rem"><i class="fa-solid fa-plus"></i> Add route</button>
+        </div>
+        <div class="form-row">
+          <label for="mFallbacks">Fallback logical models <span style="font-weight:400">(one per line)</span></label>
+          <textarea id="mFallbacks" rows="3" placeholder="gpt-5.1"></textarea>
+        </div>
+        <div class="form-row">
+          <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
+            <input type="checkbox" id="modelOverwrite" /> Overwrite if exists
+          </label>
+        </div>
+      </div>
+      <div class="modal-ft">
+        <button type="button" class="btn btn-ghost btn-sm" data-close="modalModel">Cancel</button>
+        <button type="button" class="btn btn-primary btn-sm" id="btnSaveModel"><i class="fa-solid fa-floppy-disk"></i> Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+(function () {
+  const API = "/setup/api";
+  const LS_KEY = "model-proxy-setup-token";
+  let providersMap = {};
+  let modelsList = [];
+  let editingProviderName = null;
+  let editingModelName = null;
+  let editingModelExtra = null;
+
+  function getToken() {
+    try { return sessionStorage.getItem(LS_KEY) || ""; } catch { return ""; }
+  }
+  function setToken(v) {
+    try { sessionStorage.setItem(LS_KEY, v || ""); } catch {}
+  }
+
+  function headers(json) {
+    const h = {};
+    if (json) h["Content-Type"] = "application/json";
+    const t = getToken();
+    if (t) h["Authorization"] = "Bearer " + t;
+    return h;
+  }
+
+  async function api(path, opts) {
+    const r = await fetch(API + path, { ...opts, headers: { ...headers(!!opts.body && typeof opts.body === "string"), ...opts.headers } });
+    const ct = r.headers.get("content-type") || "";
+    let data = null;
+    if (ct.includes("application/json")) { try { data = await r.json(); } catch { data = null; } }
+    else { try { data = await r.text(); } catch { data = null; } }
+    if (!r.ok) {
+      const msg = (data && data.error && data.error.message) || (data && data.error) || (typeof data === "string" ? data : r.statusText);
+      throw new Error(msg || "Request failed");
+    }
+    return data;
+  }
+
+  function toast(msg, ok) {
+    const el = document.getElementById("toast");
+    el.textContent = msg;
+    el.className = "toast show " + (ok ? "ok" : "err");
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function () { el.classList.remove("show"); }, 4200);
+  }
+
+  function showApp(on) {
+    document.getElementById("authScreen").classList.toggle("hidden", on);
+    document.getElementById("appRoot").classList.toggle("hidden", !on);
+  }
+
+  function switchTab(name) {
+    document.querySelectorAll(".tab").forEach(function (b) { b.classList.toggle("active", b.dataset.tab === name); });
+    document.querySelectorAll(".panel").forEach(function (p) { p.classList.toggle("active", p.id === "panel-" + name); });
+    if (name === "keys") loadKeys();
+    if (name === "io") document.getElementById("importResult").textContent = "";
+  }
+
+  function renderDash(data) {
+    const s = data.stats || {};
+    const cfg = data.config_dir || "—";
+    document.getElementById("dashStats").innerHTML =
+      '<div class="card"><h2>Providers</h2><div class="stat-val">' + (s.total_providers ?? "—") + '</div><div class="stat-sub">' + (s.enabled_providers ?? 0) + " enabled</div></div>" +
+      '<div class="card"><h2>Models</h2><div class="stat-val">' + (s.total_models ?? "—") + '</div><div class="stat-sub">configured logical models</div></div>' +
+      '<div class="card"><h2>Keys</h2><div class="stat-val">' + (s.providers_with_keys ?? "—") + '</div><div class="stat-sub">providers with env keys</div></div>' +
+      '<div class="card" style="grid-column:1/-1"><h2>Config directory</h2><div class="mono path-hint" style="margin:0">' + escapeHtml(cfg) + '</div><div class="stat-sub">Writable config path on server</div></div>';
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  async function loadStatus() {
+    const data = await api("/status", { method: "GET" });
+    renderDash(data);
+    return data;
+  }
+
+  async function loadProviders() {
+    const data = await api("/providers", { method: "GET" });
+    providersMap = data.providers || {};
+    const tbody = document.getElementById("providerRows");
+    const names = Object.keys(providersMap).sort();
+    if (!names.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty">No providers yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = names.map(function (n) {
+      const p = providersMap[n];
+      const en = p.enabled !== false;
+      const base = (p.endpoints && p.endpoints.base_url) || "—";
+      return "<tr><td class=\"mono\">" + escapeHtml(n) + "</td><td>" + escapeHtml(p.display_name || "—") + "</td><td class=\"mono\">" + escapeHtml(base) + "</td><td>" +
+        (en ? '<span class="badge badge-on">On</span>' : '<span class="badge badge-off">Off</span>') + "</td><td class=\"actions\">" +
+        "<button type=\"button\" class=\"btn btn-ghost btn-sm btn-edit-prov\" data-name=\"" + escapeHtml(n) + "\"><i class=\"fa-solid fa-pen\"></i></button>" +
+        "<button type=\"button\" class=\"btn btn-danger btn-sm btn-del-prov\" data-name=\"" + escapeHtml(n) + "\"><i class=\"fa-solid fa-trash\"></i></button></td></tr>";
+    }).join("");
+  }
+
+  async function loadModels() {
+    const data = await api("/models", { method: "GET" });
+    modelsList = data.models || [];
+    const tbody = document.getElementById("modelRows");
+    if (!modelsList.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty">No models yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = modelsList.map(function (m) {
+      const c = m.config || {};
+      const routes = (c.model_routings || []).map(function (r) { return escapeHtml(r.provider + " → " + r.model); }).join(", ") || "—";
+      const fb = (c.fallback_model_routings || []).map(escapeHtml).join(", ") || "—";
+      return "<tr><td class=\"mono\">" + escapeHtml(m.name) + "</td><td>" + routes + "</td><td class=\"mono\">" + fb + "</td><td class=\"actions\">" +
+        "<button type=\"button\" class=\"btn btn-ghost btn-sm btn-edit-model\" data-name=\"" + escapeHtml(m.name) + "\"><i class=\"fa-solid fa-pen\"></i></button>" +
+        "<button type=\"button\" class=\"btn btn-danger btn-sm btn-del-model\" data-name=\"" + escapeHtml(m.name) + "\"><i class=\"fa-solid fa-trash\"></i></button></td></tr>";
+    }).join("");
+  }
+
+  async function loadTemplatesSelect() {
+    try {
+      const data = await api("/templates", { method: "GET" });
+      const sel = document.getElementById("tplSelect");
+      const keys = Object.keys(data.templates || {}).sort();
+      sel.innerHTML = '<option value="">— template —</option>' + keys.map(function (k) {
+        return "<option value=\"" + escapeHtml(k) + "\">" + escapeHtml(k) + "</option>";
+      }).join("");
+    } catch (e) {
+      document.getElementById("tplSelect").innerHTML = '<option value="">(templates unavailable)</option>';
+    }
+  }
+
+  async function loadKeys() {
+    const tbody = document.getElementById("keyRows");
+    tbody.innerHTML = '<tr><td colspan="4" class="empty">Loading…</td></tr>';
+    const names = Object.keys(providersMap).sort();
+    if (!names.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty">No providers. Open Providers tab first.</td></tr>';
+      return;
+    }
+    const rows = [];
+    for (const n of names) {
+      try {
+        const k = await api("/providers/" + encodeURIComponent(n) + "/keys", { method: "GET" });
+        const prev = (k.key_preview || []).map(escapeHtml).join(", ") || "—";
+        rows.push("<tr><td class=\"mono\">" + escapeHtml(n) + "</td><td>" + k.key_count + "</td><td>" +
+          (k.has_keys ? '<span class="badge badge-on">Present</span>' : '<span class="badge badge-off">None</span>') +
+          "</td><td class=\"mono\">" + prev + "</td></tr>");
+      } catch (e) {
+        rows.push("<tr><td class=\"mono\">" + escapeHtml(n) + "</td><td colspan=\"3\" style=\"color:#fca5a5\">" + escapeHtml(e.message) + "</td></tr>");
+      }
+    }
+    tbody.innerHTML = rows.join("");
+  }
+
+  function openModal(id) { document.getElementById(id).classList.remove("hidden"); }
+  function closeModal(id) { document.getElementById(id).classList.add("hidden"); }
+
+  function openProviderModal(name, initialObj) {
+    editingProviderName = name;
+    document.getElementById("providerModalTitle").textContent = name ? "Edit provider" : "Add provider";
+    document.getElementById("providerJson").value = JSON.stringify(initialObj || { name: "", display_name: "", enabled: true, endpoints: { base_url: "" }, authentication: { header_name: "Authorization", type: "bearer", header_format: "Bearer {api_key}" } }, null, 2);
+    document.getElementById("providerOverwrite").checked = !!name;
+    openModal("modalProvider");
+  }
+
+  document.getElementById("btnAddProvider").onclick = function () { openProviderModal(null, null); };
+  document.getElementById("btnFromTemplate").onclick = async function () {
+    const k = document.getElementById("tplSelect").value;
+    if (!k) { toast("Choose a template first", false); return; }
+    try {
+      const data = await api("/templates", { method: "GET" });
+      const t = (data.templates || {})[k];
+      if (!t) { toast("Template not found", false); return; }
+      openProviderModal(null, JSON.parse(JSON.stringify(t)));
+    } catch (e) { toast(e.message, false); }
+  };
+
+  document.getElementById("btnSaveProvider").onclick = async function () {
+    let obj;
+    try { obj = JSON.parse(document.getElementById("providerJson").value); } catch (e) { toast("Invalid JSON", false); return; }
+    if (!obj.name) { toast("Provider JSON must include name", false); return; }
+    obj._overwrite = document.getElementById("providerOverwrite").checked;
+    try {
+      await api("/providers", { method: "POST", body: JSON.stringify(obj) });
+      toast("Provider saved", true);
+      closeModal("modalProvider");
+      await loadProviders();
+      await loadStatus();
+    } catch (e) { toast(e.message, false); }
+  };
+
+  document.getElementById("providerRows").onclick = async function (e) {
+    const ed = e.target.closest(".btn-edit-prov");
+    const del = e.target.closest(".btn-del-prov");
+    if (ed) {
+      const n = ed.dataset.name;
+      openProviderModal(n, providersMap[n]);
+    }
+    if (del) {
+      const n = del.dataset.name;
+      if (!confirm("Delete provider '" + n + "'?")) return;
+      try {
+        await api("/providers/" + encodeURIComponent(n), { method: "DELETE" });
+        toast("Deleted", true);
+        await loadProviders();
+        await loadStatus();
+      } catch (e) { toast(e.message, false); }
+    }
+  };
+
+  function providerOptions() {
+    return Object.keys(providersMap).sort().map(function (n) { return "<option value=\"" + escapeHtml(n) + "\">" + escapeHtml(n) + "</option>"; }).join("");
+  }
+
+  function addRouteRow(r) {
+    const div = document.createElement("div");
+    div.className = "route-row";
+    div.innerHTML =
+      "<div><label>Provider</label><select class=\"r-prov\">" + providerOptions() + "</select></div>" +
+      "<div><label>Model</label><input type=\"text\" class=\"r-model\" placeholder=\"remote model id\" /></div>" +
+      "<div><button type=\"button\" class=\"btn btn-danger btn-sm r-remove\"><i class=\"fa-solid fa-minus\"></i></button></div>";
+    if (r) {
+      div.querySelector(".r-prov").value = r.provider || "";
+      div.querySelector(".r-model").value = r.model || "";
+    }
+    div.querySelector(".r-remove").onclick = function () { div.remove(); };
+    document.getElementById("routeList").appendChild(div);
+  }
+
+  function openModelModal(name, cfg) {
+    editingModelName = name;
+    editingModelExtra = null;
+    if (cfg) {
+      const extra = { ...cfg };
+      delete extra.logical_name;
+      delete extra.timeout_seconds;
+      delete extra.model_routings;
+      delete extra.fallback_model_routings;
+      editingModelExtra = Object.keys(extra).length ? extra : null;
+    }
+    document.getElementById("modelModalTitle").textContent = name ? "Edit model" : "Add model";
+    document.getElementById("mLogical").value = name || (cfg && cfg.logical_name) || "";
+    document.getElementById("mLogical").disabled = !!name;
+    document.getElementById("mTimeout").value = (cfg && cfg.timeout_seconds) || 60;
+    document.getElementById("mFallbacks").value = ((cfg && cfg.fallback_model_routings) || []).join("\n");
+    document.getElementById("modelOverwrite").checked = !!name;
+    document.getElementById("routeList").innerHTML = "";
+    const routings = (cfg && cfg.model_routings) || [];
+    if (routings.length) routings.forEach(addRouteRow);
+    else addRouteRow({ provider: Object.keys(providersMap)[0] || "", model: "" });
+    openModal("modalModel");
+  }
+
+  document.getElementById("btnAddModel").onclick = function () { openModelModal(null, null); };
+  document.getElementById("btnAddRoute").onclick = function () { addRouteRow(null); };
+
+  document.getElementById("btnSaveModel").onclick = async function () {
+    const logical = document.getElementById("mLogical").value.trim();
+    if (!logical) { toast("Logical name required", false); return; }
+    const rows = document.querySelectorAll("#routeList .route-row");
+    const model_routings = [];
+    rows.forEach(function (row) {
+      const provider = row.querySelector(".r-prov").value.trim();
+      const model = row.querySelector(".r-model").value.trim();
+      if (provider && model) model_routings.push({ provider: provider, model: model });
+    });
+    if (!model_routings.length) { toast("Add at least one routing (provider + model)", false); return; }
+    const fallLines = document.getElementById("mFallbacks").value.split("\n").map(function (s) { return s.trim(); }).filter(Boolean);
+    const body = {
+      logical_name: logical,
+      timeout_seconds: parseInt(document.getElementById("mTimeout").value, 10) || 60,
+      model_routings: model_routings,
+      fallback_model_routings: fallLines,
+      _overwrite: document.getElementById("modelOverwrite").checked
+    };
+    if (editingModelExtra) Object.assign(body, editingModelExtra);
+    try {
+      await api("/models", { method: "POST", body: JSON.stringify(body) });
+      toast("Model saved", true);
+      closeModal("modalModel");
+      await loadModels();
+      await loadStatus();
+    } catch (e) { toast(e.message, false); }
+  };
+
+  document.getElementById("modelRows").onclick = async function (e) {
+    const ed = e.target.closest(".btn-edit-model");
+    const del = e.target.closest(".btn-del-model");
+    if (ed) {
+      const n = ed.dataset.name;
+      const found = modelsList.find(function (x) { return x.name === n; });
+      openModelModal(n, found ? found.config : null);
+    }
+    if (del) {
+      const n = del.dataset.name;
+      if (!confirm("Delete model '" + n + "'?")) return;
+      try {
+        await api("/models/" + encodeURIComponent(n), { method: "DELETE" });
+        toast("Deleted", true);
+        await loadModels();
+        await loadStatus();
+      } catch (e) { toast(e.message, false); }
+    }
+  };
+
+  document.getElementById("qaValidate").onclick = async function () {
+    const out = document.getElementById("validateResult");
+    out.textContent = "Running…";
+    try {
+      const r = await api("/validate", { method: "POST", body: "{}" });
+      out.textContent = r.valid ? ("✓ " + r.message) : ("✗ Invalid:\n" + (r.errors || []).join("\n"));
+      toast(r.valid ? "Configuration valid" : "Validation issues found", !!r.valid);
+    } catch (e) { out.textContent = e.message; toast(e.message, false); }
+  };
+  document.getElementById("qaReload").onclick = async function () {
+    try { await loadStatus(); toast("Status refreshed", true); } catch (e) { toast(e.message, false); }
+  };
+  document.getElementById("qaProviders").onclick = function () { switchTab("providers"); };
+  document.getElementById("qaExport").onclick = function () { document.getElementById("btnExport").click(); switchTab("io"); };
+
+  document.getElementById("btnExport").onclick = async function () {
+    try {
+      const data = await api("/export", { method: "POST", body: "{}" });
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "model-proxy-export-" + new Date().toISOString().slice(0, 10) + ".json";
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast("Export downloaded", true);
+    } catch (e) { toast(e.message, false); }
+  };
+
+  document.getElementById("btnImport").onclick = async function () {
+    const f = document.getElementById("importFile").files[0];
+    const out = document.getElementById("importResult");
+    if (!f) { toast("Choose a JSON file", false); return; }
+    const text = await f.text();
+    let json;
+    try { json = JSON.parse(text); } catch (e) { toast("Invalid JSON file", false); return; }
+    try {
+      const r = await api("/import", { method: "POST", body: JSON.stringify(json) });
+      out.textContent = "Providers: " + r.providers_imported + ", models: " + r.models_imported + "\nErrors: " + (r.errors && r.errors.length ? r.errors.join("\n") : "none");
+      toast("Import complete", true);
+      await loadProviders();
+      await loadModels();
+      await loadStatus();
+    } catch (e) { out.textContent = e.message; toast(e.message, false); }
+  };
+
+  document.querySelectorAll("[data-close]").forEach(function (b) {
+    b.onclick = function () { closeModal(b.getAttribute("data-close")); };
+  });
+
+  document.querySelectorAll(".modal-overlay").forEach(function (ov) {
+    ov.onclick = function (e) { if (e.target === ov) ov.classList.add("hidden"); };
+  });
+
+  document.querySelectorAll(".tab").forEach(function (b) {
+    b.onclick = function () { switchTab(b.dataset.tab); };
+  });
+
+  document.getElementById("btnRefreshGlobal").onclick = async function () {
+    try {
+      await loadStatus();
+      await loadProviders();
+      await loadModels();
+      toast("All data refreshed", true);
+    } catch (e) { toast(e.message, false); }
+  };
+
+  document.getElementById("btnLogout").onclick = function () {
+    setToken("");
+    document.getElementById("apiKeyInput").value = "";
+    showApp(false);
+  };
+
+  document.getElementById("authSubmit").onclick = async function () {
+    const v = document.getElementById("apiKeyInput").value.trim();
+    setToken(v);
+    try {
+      await loadStatus();
+      showApp(true);
+      await loadProviders();
+      await loadModels();
+      await loadTemplatesSelect();
+      toast("Connected", true);
+    } catch (e) {
+      setToken("");
+      toast(e.message || "Authentication failed", false);
+    }
+  };
+
+  if (getToken()) {
+    document.getElementById("apiKeyInput").value = getToken();
+    document.getElementById("authSubmit").click();
+  }
+})();
+  </script>
+</body>
+</html>
