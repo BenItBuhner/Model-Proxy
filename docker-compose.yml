@@ -1,55 +1,21 @@
-version: "3.8"
+version: '3.8'
 
 services:
-  # Main API service with web-based setup UI
-  api:
+  model-proxy:
     build: .
     ports:
       - "9876:9876"
-    volumes:
-      # Mount config directory for persistence
-      - ./config:/app/config
-      # Mount .env file for environment variables (API keys, etc.)
-      - ./.env:/app/.env:ro
     environment:
-      # Only required env var - everything else comes from .env file
-      - CLIENT_API_KEY=${CLIENT_API_KEY:?Required - set in .env file}
+      - HOST=0.0.0.0
+      - PORT=9876
+    env_file:
+      - .env
+    volumes:
+      - ./config:/app/config
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9876/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
-
-  # Development service with auto-reload
-  api-dev:
-    build: .
-    ports:
-      - "9876:9876"
-    volumes:
-      # Mount entire project for development
-      - .:/app
-      # Exclude build artifacts
-      - /app/.venv
-      - /app/__pycache__
-      - /app/*.egg-info
-    environment:
-      - CLIENT_API_KEY=${CLIENT_API_KEY:?Required - set in .env file}
-      - LOG_LEVEL=DEBUG
-    command: ["model-proxy", "start", "--host", "0.0.0.0", "--port", "9876", "--reload"]
-    profiles:
-      - dev
-
-  # Export config to backup file (run: docker-compose --profile backup run --rm config-export)
-  config-export:
-    build: .
-    volumes:
-      - ./config:/app/config
-      - ./backups:/app/backups
-      - ./.env:/app/.env:ro
-    environment:
-      - CLIENT_API_KEY=${CLIENT_API_KEY}
-    command: ["model-proxy", "config", "export", "--output", "/app/backups/config-$(date +%Y%m%d-%H%M%S).json"]
-    profiles:
-      - backup
+      start_period: 10s

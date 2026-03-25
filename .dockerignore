@@ -1,66 +1,44 @@
-# Dockerignore file to reduce build context size
+# Dependencies
+node_modules/
+
 # Git
-.git
+.git/
+.githooks/
 .gitignore
-.gitattributes
-
-# Python
-__pycache__
-*.py[cod]
-*$py.class
-*.so
-.Python
-*.egg-info
-*.egg
-.pytest_cache
-.mypy_cache
-.ruff_cache
-.venv
-venv/
-
-# Environment files (don't copy local .env, use Docker env instead)
-.env
-.env.local
-.env.*.local
 
 # IDE
-.vscode
-.idea
+.vscode/
+.idea/
 *.swp
-*.swo
-*~
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Logs and databases
-*.log
-*.sqlite
-*.db
-sql_app.db
-
-# Temporary files
-*.tmp
-.cache
+# Environment
+.env
+.env.local
 
 # Build artifacts
-dist
-build
-*.tar.gz
+dist/
+*.tsbuildinfo
 
-# Documentation (not needed in container)
-*.md
-!README.md
-assets/
-docs/
-
-# Test files
+# Tests
 tests/
-test_*.py
-*_test.py
+*.test.ts
 
-# Local configuration (will be mounted as volume or set via env)
-config/providers/*.json
-config/models/*.json
-!.model-proxy-setup-progress
+# Docs
+README.md
+assets/
+
+# Legacy Python
+*.py
+__pycache__/
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Database (should not exist)
+*.db
+*.sqlite

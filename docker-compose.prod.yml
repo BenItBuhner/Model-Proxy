@@ -1,42 +1,27 @@
-version: "3.8"
+version: '3.8'
 
 services:
-  api:
+  model-proxy:
     build: .
     ports:
       - "9876:9876"
-    restart: always
-    # Production command with multiple workers
-    command:
-      [
-        "model-proxy",
-        "start",
-        "--host", "0.0.0.0",
-        "--port", "9876",
-        "--workers", "4",
-        "--log-level", "info",
-      ]
     environment:
-      # Only required env var - all API keys come from .env file
-      - CLIENT_API_KEY=${CLIENT_API_KEY:?Required - set in .env file}
-    
+      - HOST=0.0.0.0
+      - PORT=9876
+      - LOG_LEVEL=INFO
+    env_file:
+      - .env
     volumes:
-      # Mount .env file with all API keys
-      - ./.env:/app/.env:ro
-      # Persist configuration across container restarts
-      - model-proxy-config:/app/config
-      # Persist database for request logging
-      - model-proxy-data:/app/data
-    
+      - ./config:/app/config
+    restart: always
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9876/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
-
-volumes:
-  model-proxy-config:
-    driver: local
-  model-proxy-data:
-    driver: local
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '2'
