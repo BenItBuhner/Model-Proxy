@@ -49,7 +49,27 @@ export function createProvider(
   baseUrl?: string | null
 ): BaseProvider {
   const classes = getProviderClasses();
-  const ProviderClass = classes.get(providerName);
+  let ProviderClass = classes.get(providerName);
+
+  // If not a registered provider, try to determine the right class from config
+  if (!ProviderClass) {
+    // Check if there's a provider config for this name
+    try {
+      const { getProviderConfig, getProviderWireProtocol } = require("../core/provider-config.ts");
+      const config = getProviderConfig(providerName);
+      if (config) {
+        const protocol = getProviderWireProtocol(providerName);
+        if (protocol === "anthropic") {
+          const { AnthropicProvider } = require("./anthropic-provider.ts");
+          ProviderClass = AnthropicProvider;
+        } else {
+          // Default to OpenAI-compatible
+          const { OpenAIProvider } = require("./openai-provider.ts");
+          ProviderClass = OpenAIProvider;
+        }
+      }
+    } catch {}
+  }
 
   if (!ProviderClass) {
     const available = [...classes.keys()].sort().join(", ");

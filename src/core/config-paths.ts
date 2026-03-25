@@ -106,3 +106,8 @@ export function findConfigFile(relativePath: string): string | null {
 export function resetConfigDirCache(): void {
   _primaryConfigDir = null;
 }
+
+/** Override the primary config dir (for testing). */
+export function setPrimaryConfigDir(dir: string): void {
+  _primaryConfigDir = dir;
+}
