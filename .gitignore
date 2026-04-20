@@ -1,205 +1,74 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+# ============================================================
+# Model-Proxy v2 (Bun / TypeScript)
+# ============================================================
 
-# C extensions
-*.so
+# Runtime dependencies
+node_modules/
+.pnp/
+.pnp.js
+.yarn/*
 
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
+# Bun
+bun.lockb
+.bun/
+
+# Build output
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+build/
+.next/
+out/
+web/out/
+web-static/
 
-# PyInstaller
-*.manifest
-*.spec
+# TypeScript
+*.tsbuildinfo
+tsconfig.tsbuildinfo
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
-
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-.pybuilder/
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-.python-version
-
-# pipenv
-Pipfile.lock
-
-# poetry
-poetry.lock
-
-# pdm
-.pdm.toml
-
-# uv
-.venv/
-uv.lock
-
-# PEP 582
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
+# Environment
 .env
 .env.local
 .env.development
-.env.production
 .env.test
+.env.production
 .env.staging
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-*.env
 
-# Spyder project settings
-.spyderproject
-.spyproject
+# Runtime model discovery cache
+config/models.json
 
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# ruff
-.ruff_cache/
-
-# Pyre type checker
-.pyre/
-
-# pytype static type analyzer
-.pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# IDEs
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.project
-.pydevproject
-.settings/
-
-# OS files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-Desktop.ini
-
-# Database files
-*.db
-*.sqlite
-*.sqlite3
-sql_app.db
+# Per-model user-editable configs (tracked on the server, not in git)
+config/models/
+config/providers/
 
 # Logs
 *.log
 logs/
 
-# Temporary files
-*.tmp
-*.temp
-*.bak
-*.backup
-
-# Application specific
-*.pid
-*.sock
-
-# Model configurations
-config/models/
-
-# Model discovery cache
-config/models.json
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini
 
 # Local agent context
 .claude/
 
-# Wizard file
+# Python cruft (leftover, should not reappear)
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+uv.lock
+sql_app.db
+
+# Wizard progress + state
 .model-proxy-setup-progress
 
-# MODELS
-MODELS.md
+# Keep these tracked (negations):
+!config/providers/.gitkeep
+!config/models/.gitkeep

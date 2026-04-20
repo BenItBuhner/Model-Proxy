@@ -1,0 +1,149 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@font-face {
+  font-family: "Geist Sans";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/Geist-Variable.woff2")
+    format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("https://cdn.jsdelivr.net/fontsource/fonts/jetbrains-mono:vf@latest/latin-wght-normal.woff2")
+    format("woff2-variations");
+}
+
+:root {
+  color-scheme: dark;
+  --phosphor: #cdff00;
+  --grid-line: rgba(255, 255, 255, 0.04);
+}
+
+html,
+body {
+  background: #060606;
+  color: #d9d6cf;
+  font-family: "Geist Sans", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  min-height: 100vh;
+  background-image:
+    radial-gradient(
+      ellipse 90% 70% at 50% -10%,
+      rgba(205, 255, 0, 0.05),
+      transparent 70%
+    ),
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size:
+    100% 100%,
+    48px 48px,
+    48px 48px;
+  background-position:
+    0 0,
+    center -1px,
+    -1px center;
+}
+
+::selection {
+  background: rgba(205, 255, 0, 0.25);
+  color: #f3f1ec;
+}
+
+/* Scrollbars */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: #242424;
+  border: 2px solid #060606;
+  border-radius: 0;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #3e3e3e;
+}
+
+/* Utility: decorative corner ticks for panels (kept inside bounds — no bleed over siblings) */
+.corners {
+  position: relative;
+  overflow: hidden;
+}
+.corners::before,
+.corners::after {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-color: rgba(205, 255, 0, 0.6);
+  border-style: solid;
+  pointer-events: none;
+  z-index: 1;
+}
+.corners::before {
+  top: 0;
+  left: 0;
+  border-width: 1px 0 0 1px;
+}
+.corners::after {
+  bottom: 0;
+  right: 0;
+  border-width: 0 1px 1px 0;
+}
+
+/* ascii divider */
+.hairline {
+  position: relative;
+  height: 1px;
+  background: #1f1f1f;
+  overflow: hidden;
+}
+.hairline::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(205, 255, 0, 0.45),
+    transparent
+  );
+  animation: sweep 6s linear infinite;
+}
+
+@keyframes sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Keyboard kbd look */
+kbd {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 5px;
+  border: 1px solid #2e2e2e;
+  background: #111111;
+  color: #a09d97;
+  border-radius: 3px;
+}

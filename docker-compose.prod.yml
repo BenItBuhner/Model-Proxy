@@ -1,42 +1,32 @@
-version: "3.8"
-
 services:
-  api:
-    build: .
+  proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: model-proxy:v2
+    container_name: model-proxy
+    restart: always
     ports:
       - "9876:9876"
-    restart: always
-    # Production command with multiple workers
-    command:
-      [
-        "model-proxy",
-        "start",
-        "--host", "0.0.0.0",
-        "--port", "9876",
-        "--workers", "4",
-        "--log-level", "info",
-      ]
+    env_file:
+      - .env
     environment:
-      # Only required env var - all API keys come from .env file
-      - CLIENT_API_KEY=${CLIENT_API_KEY:?Required - set in .env file}
-    
+      - CLIENT_API_KEY=${CLIENT_API_KEY:?Required - set in .env}
+      - NODE_ENV=production
+      - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
-      # Mount .env file with all API keys
-      - ./.env:/app/.env:ro
-      # Persist configuration across container restarts
       - model-proxy-config:/app/config
-      # Persist database for request logging
-      - model-proxy-data:/app/data
-    
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9876/health"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9876/health"]
       interval: 30s
-      timeout: 10s
+      timeout: 3s
       retries: 3
-      start_period: 40s
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   model-proxy-config:
-    driver: local
-  model-proxy-data:
-    driver: local

@@ -1,0 +1,1604 @@
+{
+  "version": "1.0.0",
+  "exported_at": "2026-04-20T04:16:34.286413",
+  "metadata": {
+    "total_providers": 16,
+    "total_models": 14,
+    "total_api_keys": 49,
+    "note": "Full configuration export including all API keys. Store securely!"
+  },
+  "setup": {
+    "providers": [
+      {
+        "name": "gemini",
+        "display_name": "Gemini",
+        "enabled": true,
+        "api_keys": {
+          "env_var_patterns": [
+            "GEMINI_API_KEY",
+            "GEMINI_API_KEY_{INDEX}"
+          ],
+          "description": "Environment variable patterns for API keys. {INDEX} = 1,2,3..."
+        },
+        "endpoints": {
+          "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+          "completions": "chat/completions",
+          "streaming": "chat/completions",
+          "compatible_format": "openai"
+        },
+        "authentication": {
+          "type": "api_key",
+          "header_name": "Authorization",
+          "header_format": "Bearer {api_key}"
+        },
+        "request_config": {
+          "timeout_seconds": 60,
+          "max_retries": 3,
+          "retry_on_status": [
+            429,
+            500,
+            502,
+            503,
+            504
+          ],
+          "default_parameters": {
+            "temperature": 1,
+            "top_p": 1
+          }
+        },
+        "rate_limiting": {
+          "enabled": false,
+          "requests_per_minute": null,
+          "tokens_per_minute": null,
+          "cooldown_seconds": 600
+        },
+        "models": {},
+        "error_handling": {
+          "400": {
+            "action": "fallback_no_cooldown"
+          },
+          "401": {
+            "action": "global_key_failure"
+          },
+          "403": {
+            "action": "global_key_failure"
+          },
+          "429": {
+            "action": "model_key_failure"
+          },
+          "500": {
+            "action": "fallback_no_cooldown"
+          }
+        },
+        "proxy_support": {
+          "enabled": false,
+          "base_url_override": null,
+          "description": "If enabled, use base_url_override instead of base_url (for proxies)"
+        },
+        "provider_notes": {
+          "description": "Uses Google's OpenAI-compatible API endpoint for Gemini models"
+        }
+      },
+      {
+        "name": "nahcrof",
+        "display_name": "Nahcrof AI",
+        "enabled": true,
+        "api_keys": {
+          "env_var_patterns": [
+            "NAHCROF_API_KEY",
+            "NAHCROF_API_KEY_{INDEX}"
+          ],
+          "description": "Environment variable patterns for API keys. {INDEX} = 1,2,3..."
+        },
+        "endpoints": {
+          "base_url": "https://ai.nahcrof.com",
+          "completions": "/v2/chat/completions",
+          "streaming": "/v2/chat/completions",
+          "compatible_format": "openai"
+        },
+        "authentication": {
+          "type": "bearer",
+          "header_name": "Authorization",
+          "header_format": "Bearer {api_key}"
+        },
+        "request_config": {
+          "timeout_seconds": 180,
+          "max_retries": 50,
+          "retry_on_status": [
+            429,
+            500,
+            502,
+            503,
+            504
+          ],
+          "default_parameters": {
+            "temperature": 1,
+            "top_p": 1,
+            "n": 1
+          }
+        },
+        "rate_limiting": {
+          "enabled": false,
+          "requests_per_minute": null,
+          "tokens_per_minute": null,
+          "cooldown_seconds": 600
+        },
+        "models": {},
+        "error_handling": {
+          "400": {
+            "action": "fallback_no_cooldown"
+          },
+          "401": {
+            "action": "global_key_failure"
+          },
+          "403": {
+            "action": "global_key_failure"
+          },
+          "429": {
+            "action": "model_key_failure"
+          },
+          "500": {
+            "action": "fallback_no_cooldown"
+          }
+        },
+        "proxy_support": {
+          "enabled": false,
+          "base_url_override": null,
+          "description": "If enabled, use base_url_override instead of base_url (for proxies)"
+        }
+      },
+      {
+        "name": "cerebras",
+        "display_name": "Cerebras",
+        "enabled": true,
+        "api_keys": {
+          "env_var_patterns": [
+            "CEREBRAS_API_KEY",
+            "CEREBRAS_API_KEY_{INDEX}"
+          ],
+          "description": "Environment variable patterns for API keys. {INDEX} = 1,2,3..."
+        },
+        "endpoints": {
+          "base_url": "https://api.cerebras.ai/v1",
+          "completions": "/chat/completions",
+          "streaming": "/chat/completions",
+          "compatible_format": "openai"
+        },
+        "authentication": {
+          "type": "bearer",
+          "header_name": "Authorization",
+          "header_format": "Bearer {api_key}"
+        },
+        "request_config": {
+          "timeout_seconds": 180,
+          "max_retries": 50,
+          "retry_on_status": [
+            429,
+            500,
+            502,
+            503,
+            504
+          ],
+          "default_parameters": {
+            "temperature": 1,
+            "top_p": 1,
+            "n": 1
+          }
+        },
+        "rate_limiting": {
+          "enabled": false,
+          "requests_per_minute": null,
+          "tokens_per_minute": null,
+          "cooldown_seconds": 600
+        },
+        "models": {},
+        "error_handling": {
+          "400": {
+            "action": "fallback_no_cooldown"
+          },
+          "401": {
+            "action": "global_key_failure"
+          },
+          "403": {
+            "action": "global_key_failure"
+          },
+          "422": {
+            "action": "auto_fix_tool_responses"
+          },
+          "429": {
+            "action": "model_key_failure"
+          },
+          "500": {
+            "action": "fallback_no_cooldown"
+          }
+        },
+        "proxy_support": {
+          "enabled": false,
+          "base_url_override": null,
+          "description": "If enabled, use base_url_override instead of base_url (for proxies)"
+        }
+      },
+      {
+        "name": "zai",
+        "display_name": "Z.AI",
+        "enabled": true,
+        "api_keys": {
+          "env_var_patterns": [
+            "ZAI_API_KEY",
+            "ZAI_API_KEY_{INDEX}"
+          ],
+          "description": "Environment variable patterns for API keys. {INDEX} = 1,2,3..."
+        },
+        "endpoints": {
+          "base_url": "https://api.z.ai",
+          "completions": "/api/paas/v4/chat/completions",
+          "streaming": "/api/paas/v4/chat/completions",
+          "compatible_format": "openai"
+        },
+        "authentication": {
+          "type": "bearer",
+          "header_name": "Authorization",
+          "header_format": "Bearer {api_key}"
+        },
+        "request_config": {
+          "timeout_seconds": 180,
+          "max_retries": 50,
+          "retry_on_status": [
+            429,
+            500,
+            502,
+            503,
+            504
+          ],
+          "default_parameters": {
+            "temperature": 0.7,
+            "top_p": 0.95,
+            "max_tokens": 4096,
+            "do_sample": true,
+            "stream": false
+          }
+        },
+        "rate_limiting": {
+          "enabled": false,
+          "requests_per_minute": null,
+          "tokens_per_minute": null,
+          "cooldown_seconds": 600
+        },
+        "models": {},
+        "error_handling": {
+          "400": {
+            "action": "fallback_no_cooldown"
+          },
+          "401": {
+            "action": "global_key_failure"
+          },
+          "403": {
+            "action": "global_key_failure"
+          },
+          "422": {
+            "action": "auto_fix_tool_responses"
+          },
+          "429": {
+            "action": "model_key_failure"
+          },
+          "500": {
+            "action": "fallback_no_cooldown"
+          }
+        },
+        "proxy_support": {
+          "enabled": false,
+          "base_url_override": null,
+          "description": "If enabled, use base_url_override instead of base_url (for proxies)"
+        }
+      },
+      {
+        "name": "longcat",
+        "display_name": "LongCat",
+        "enabled": true,
+        "api_keys": {
+          "env_var_patterns": [
+            "LONGCAT_API_KEY",
+            "LONGCAT_API_KEY_{INDEX}"
+          ],
+          "description": "Environment variable patterns for API keys. {INDEX} = 1,2,3..."
+        },
+        "endpoints": {
+          "base_url": "https://api.longcat.chat/openai/v1",
+          "completions": "/chat/completions",
+          "streaming": "/chat/completions",
+          "compatible_format": "openai"
+        },
+        "authentication": {
+          "type": "bearer",
+          "header_name": "Authorization",
+          "header_format": "Bearer {api_key}"
+        },
+        "request_config": {
+          "timeout_seconds": 60,
+          "max_retries": 3,
+          "retry_on_status": [
+            429,
+            500,
+            502,
+            503,
+            504
+          ],
+          "default_parameters": {
+            "temperature": 1,
+            "top_p": 1,
+            "n": 1
+          }
+        },
+        "rate_limiting": {
+          "enabled": false,
+          "requests_per_minute": null,
+          "tokens_per_minute": null,
+          "cooldown_seconds": 180
+        },
+        "models": {},
+        "error_handling": {
+          "401": {
+            "action": "global_key_failure"
+          },
+          "403": {
+            "action": "global_key_failure"
+          },
+          "429": {
+            "action": "model_key_failure"
+          }
+        },
+        "proxy_support": {
+          "enabled": false,
+          "base_url_override": null,
+          "description": "If enabled, use base_url_override instead of base_url (for proxies)"
+        }
+      },
+      {
+        "name": "openai",
+        "display_name": "OpenAI",
+        "enabled": true,
+        "api_keys": {
+          "env_var_pattern": "{PROVIDER}_API_KEY",
+          "env_var_patterns": [
+            "{PROVIDER}_API_KEY",
+            "{PROVIDER}_API_KEY_{INDEX}"
+          ],
+          "description": "Environment variable patterns for API keys. {PROVIDER} = 'OPENAI', {INDEX} = 1,2,3..."
+        },
+        "endpoints": {
+          "base_url": "https://api.openai.com/v1",
+          "completions": "/chat/completions",
+          "streaming": "/chat/completions",
+          "compatible_format": "openai"
+        },
+        "authentication": {
+          "type": "bearer",
+          "header_name": "Authorization",
+          "header_format": "Bearer {api_key}"
+        },
+        "request_config": {
+          "timeout_seconds": 60,
+          "max_retries": 3,
+          "retry_on_status": [
+            429,
+            500,
+            502,
+            503,
+            504
+          ],
+          "default_parameters": {
+            "temperature": 1,
+            "top_p": 1,
+            "n": 1
+          }
+        },
+        "rate_limiting": {
+          "enabled": false,
+          "requests_per_minute": null,
+          "tokens_per_minute": null,
+          "cooldown_seconds": 180
+        },
+        "models": {},
+        "error_handling": {
+          "401": {
+            "action": "global_key_failure"
+          },
+          "403": {
+            "action": "global_key_failure"
+          },
+          "429": {
+            "action": "model_key_failure"
+          }
+        },
+        "proxy_support": {
+          "enabled": false,
+          "base_url_override": null,
+          "description": "If enabled, use base_url_override instead of base_url (for proxies like OpenRouter, Together AI, etc.)"
+        },
+        "model_mapping": {
+          "gpt-4": "gpt-4",
+          "gpt-4-turbo": "gpt-4-turbo-preview",
+          "gpt-3.5-turbo": "gpt-3.5-turbo"
+        }
+      },
+      {
+        "name": "llama",
+        "display_name": "Llama API",
+        "enabled": true,
+        "api_keys": {
+          "env_var_patterns": [
+            "LLAMA_API_KEY",
+            "LLAMA_API_KEY_{INDEX}"
+          ],
+          "description": "Environment variable patterns for API keys. {INDEX} = 1,2,3..."
+        },
+        "endpoints": {
+          "base_url": "https://api.llama.com/compat/v1",
+          "completions": "/chat/completions",
+          "streaming": "/chat/completions",
+          "compatible_format": "openai"
+        },
+        "authentication": {
+          "type": "bearer",
+          "header_name": "Authorization",
+          "header_format": "Bearer {api_key}"
+        },
+        "request_config": {
+          "timeout_seconds": 60,
+          "max_retries": 3,
+          "retry_on_status": [
+            429,
+            500,
+            502,
+            503,
+            504
+          ],
+          "default_parameters": {
+            "temperature": 1,
+            "top_p": 1,
+            "n": 1
+          }
+        },
+        "rate_limiting": {
+          "enabled": false,
+          "requests_per_minute": null,
+          "tokens_per_minute": null,
+          "cooldown_seconds": 180
+        },
+        "models": {},
+        "error_handling": {
+          "401": {
+            "action": "global_key_failure"
+          },
+          "403": {
+            "action": "global_key_failure"
+          },
+          "429": {
+            "action": "model_key_failure"
+          }
+        },
+        "proxy_support": {
+          "enabled": false,
+          "base_url_override": null,
+          "description": "If enabled, use base_url_override instead of base_url (for proxies)"
+        }
+      },
+      {
+        "name": "anthropic",
+        "display_name": "Anthropic",
+        "enabled": true,
+        "api_keys": {
+          "env_var_pattern": "{PROVIDER}_API_KEY",
+          "env_var_patterns": [
+            "{PROVIDER}_API_KEY",
+            "{PROVIDER}_API_KEY_{INDEX}"
+          ],
+          "description": "Environment variable patterns for API keys. {PROVIDER} = 'ANTHROPIC', {INDEX} = 1,2,3..."
+        },
+        "endpoints": {
+          "base_url": "https://api.anthropic.com/v1",
+          "completions": "/messages",
+          "streaming": "/messages",
+          "compatible_format": "anthropic"
+        },
+        "authentication": {
+          "type": "x-api-key",
+          "header_name": "x-api-key",
+          "header_format": "{api_key}",
+          "additional_headers": {
+            "anthropic-version": "2023-06-01"
+          }
+        },
+        "request_config": {
+          "timeout_seconds": 60,
+          "max_retries": 3,
+          "retry_on_status": [
+            429,
+            500,
+            502,
+            503,
+            504
+          ],
+          "default_parameters": {
+            "temperature": null,
+            "top_p": null,
+            "max_tokens": 1024
+          },
+          "required_parameters": [
+            "max_tokens"
+          ]
+        },
+        "rate_limiting": {
+          "enabled": false,
+          "requests_per_minute": null,
+          "tokens_per_minute": null,
+          "cooldown_seconds": 180
+        },
+        "models": {},
+        "error_handling": {
+          "401": {
+            "action": "global_key_failure"
+          },
+          "403": {
+            "action": "global_key_failure"
+          },
+          "429": {
+            "action": "model_key_failure"
+          }
+        },
+        "proxy_support": {
+          "enabled": false,
+          "base_url_override": null,
+          "description": "If enabled, use base_url_override instead of base_url (for proxies)"
+        }
+      },
+      {
+        "name": "mistral",
+        "display_name": "Mistral AI",
+        "enabled": true,
+        "api_keys": {
+          "env_var_patterns": [
+            "MISTRAL_API_KEY",
+            "MISTRAL_API_KEY_{INDEX}"
+          ],
+          "description": "Environment variable patterns for API keys. {INDEX} = 1,2,3..."
+        },
+        "endpoints": {
+          "base_url": "https://api.mistral.ai/v1",
+          "completions": "/chat/completions",
+          "streaming": "/chat/completions",
+          "compatible_format": "openai"
+        },
+        "authentication": {
+          "type": "bearer",
+          "header_name": "Authorization",
+          "header_format": "Bearer {api_key}"
+        },
+        "request_config": {
+          "timeout_seconds": 60,
+          "max_retries": 3,
+          "retry_on_status": [
+            429,
+            500,
+            502,
+            503,
+            504
+          ],
+          "default_parameters": {
+            "temperature": 1,
+            "top_p": 1,
+            "n": 1
+          }
+        },
+        "rate_limiting": {
+          "enabled": false,
+          "requests_per_minute": null,
+          "tokens_per_minute": null,
+          "cooldown_seconds": 180
+        },
+        "models": {},
+        "error_handling": {
+          "401": {
+            "action": "global_key_failure"
+          },
+          "403": {
+            "action": "global_key_failure"
+          },
+          "429": {
+            "action": "model_key_failure"
+          }
+        },
+        "proxy_support": {
+          "enabled": false,
+          "base_url_override": null,
+          "description": "If enabled, use base_url_override instead of base_url (for proxies)"
+        }
+      },
+      {
+        "name": "groq",
+        "display_name": "Groq",
+        "enabled": true,
+        "api_keys": {
+          "env_var_patterns": [
+            "GROQ_API_KEY",
+            "GROQ_API_KEY_{INDEX}"
+          ],
+          "description": "Environment variable patterns for API keys. {INDEX} = 1,2,3..."
+        },
+        "endpoints": {
+          "base_url": "https://api.groq.com/openai/v1",
+          "completions": "/chat/completions",
+          "streaming": "/chat/completions",
+          "compatible_format": "openai"
+        },
+        "authentication": {
+          "type": "bearer",
+          "header_name": "Authorization",
+          "header_format": "Bearer {api_key}"
+        },
+        "request_config": {
+          "timeout_seconds": 60,
+          "max_retries": 3,
+          "retry_on_status": [
+            429,
+            500,
+            502,
+            503,
+            504
+          ],
+          "default_parameters": {
+            "temperature": 1,
+            "top_p": 1,
+            "n": 1
+          }
+        },
+        "rate_limiting": {
+          "enabled": false,
+          "requests_per_minute": null,
+          "tokens_per_minute": null,
+          "cooldown_seconds": 180
+        },
+        "models": {},
+        "error_handling": {
+          "401": {
+            "action": "global_key_failure"
+          },
+          "403": {
+            "action": "global_key_failure"
+          },
+          "429": {
+            "action": "model_key_failure"
+          }
+        },
+        "proxy_support": {
+          "enabled": false,
+          "base_url_override": null,
+          "description": "If enabled, use base_url_override instead of base_url (for proxies)"
+        }
+      },
+      {
+        "name": "github",
+        "display_name": "GitHub Models",
+        "enabled": true,
+        "api_keys": {
+          "env_var_patterns": [
+            "GITHUB_TOKEN",
+            "GITHUB_API_KEY_{INDEX}"
+          ],
+          "description": "Environment variable patterns for API keys. {INDEX} = 1,2,3..."
+        },
+        "endpoints": {
+          "base_url": "https://models.github.ai/inference",
+          "completions": "/chat/completions",
+          "streaming": "/chat/completions",
+          "compatible_format": "azure"
+        },
+        "authentication": {
+          "type": "azure_key",
+          "header_name": "Authorization",
+          "header_format": "Bearer {api_key}"
+        },
+        "request_config": {
+          "timeout_seconds": 60,
+          "max_retries": 3,
+          "retry_on_status": [
+            429,
+            500,
+            502,
+            503,
+            504
+          ],
+          "default_parameters": {
+            "temperature": 1,
+            "top_p": 1,
+            "n": 1
+          }
+        },
+        "rate_limiting": {
+          "enabled": false,
+          "requests_per_minute": null,
+          "tokens_per_minute": null,
+          "cooldown_seconds": 180
+        },
+        "models": {},
+        "error_handling": {
+          "401": {
+            "action": "global_key_failure"
+          },
+          "403": {
+            "action": "global_key_failure"
+          },
+          "429": {
+            "action": "model_key_failure"
+          }
+        },
+        "proxy_support": {
+          "enabled": false,
+          "base_url_override": null,
+          "description": "If enabled, use base_url_override instead of base_url (for proxies)"
+        }
+      },
+      {
+        "name": "local-llama",
+        "display_name": "Qwen3.5-35B-A3B (Local)",
+        "enabled": true,
+        "api_keys": {
+          "env_var_patterns": [
+            "LOCAL_LLAMA_API_KEY"
+          ],
+          "description": "Environment variable used for the local llama.cpp bridge"
+        },
+        "endpoints": {
+          "base_url": "http://172.17.0.1:8081",
+          "completions": "/v1/chat/completions",
+          "streaming": "/v1/chat/completions",
+          "compatible_format": "openai"
+        },
+        "authentication": {
+          "type": "bearer",
+          "header_name": "Authorization",
+          "header_format": "Bearer {api_key}",
+          "api_key": "sk-no-key-required"
+        },
+        "request_config": {
+          "timeout_seconds": 120,
+          "max_retries": 2,
+          "retry_on_status": [
+            429,
+            500,
+            502,
+            503,
+            504
+          ],
+          "default_parameters": {
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "n": 1,
+            "max_tokens": 2048
+          }
+        },
+        "rate_limiting": {
+          "enabled": true,
+          "requests_per_minute": 10,
+          "tokens_per_minute": 5000,
+          "cooldown_seconds": 60
+        },
+        "models": {
+          "qwen35-35b-a3b": {
+            "name": "Qwen3.5-35B-A3B",
+            "model_id": "Qwen3.5-35B-A3B",
+            "display_name": "Qwen3.5-35B-A3B (3-bit UD-IQ3_XXS)",
+            "description": "MoE model - 35B total params, 3B activated. Quantized to 3-bit for 2GB RAM constraint.",
+            "context_length": 4096,
+            "supports_streaming": true,
+            "supports_functions": false,
+            "memory_footprint": "~2GB RAM",
+            "quantization": "UD-IQ3_XXS (3-bit)",
+            "memory_optimizations": [
+              "Expert offloading to disk",
+              "KV cache quantization (8-bit)",
+              "Flash attention enabled"
+            ]
+          }
+        },
+        "error_handling": {
+          "401": {
+            "action": "ignore"
+          },
+          "403": {
+            "action": "ignore"
+          },
+          "429": {
+            "action": "cooldown",
+            "cooldown_seconds": 60
+          },
+          "500": {
+            "action": "retry"
+          },
+          "502": {
+            "action": "retry"
+          },
+          "503": {
+            "action": "retry"
+          }
+        },
+        "proxy_support": {
+          "enabled": false,
+          "base_url_override": null,
+          "description": "Direct connection to local llama-server"
+        }
+      },
+      {
+        "name": "chutes",
+        "display_name": "Chutes AI",
+        "enabled": true,
+        "api_keys": {
+          "env_var_patterns": [
+            "CHUTES_API_KEY",
+            "CHUTES_API_KEY_{INDEX}"
+          ],
+          "description": "Environment variable patterns for API keys. {INDEX} = 1,2,3..."
+        },
+        "endpoints": {
+          "base_url": "https://${CHUTES_USERNAME}-${CHUTES_CHUTE_NAME}.chutes.ai/v1",
+          "completions": "/chat/completions",
+          "streaming": "/chat/completions",
+          "compatible_format": "openai"
+        },
+        "authentication": {
+          "type": "bearer",
+          "header_name": "Authorization",
+          "header_format": "Bearer {api_key}"
+        },
+        "request_config": {
+          "timeout_seconds": 60,
+          "max_retries": 3,
+          "retry_on_status": [
+            429,
+            500,
+            502,
+            503,
+            504
+          ],
+          "default_parameters": {
+            "temperature": 1,
+            "top_p": 1,
+            "n": 1
+          }
+        },
+        "rate_limiting": {
+          "enabled": false,
+          "requests_per_minute": null,
+          "tokens_per_minute": null,
+          "cooldown_seconds": 180
+        },
+        "models": {},
+        "error_handling": {
+          "401": {
+            "action": "global_key_failure"
+          },
+          "403": {
+            "action": "global_key_failure"
+          },
+          "429": {
+            "action": "model_key_failure"
+          }
+        },
+        "proxy_support": {
+          "enabled": false,
+          "base_url_override": null,
+          "description": "If enabled, use base_url_override instead of base_url (for proxies)"
+        }
+      },
+      {
+        "name": "cloudflare",
+        "display_name": "Cloudflare Workers AI",
+        "enabled": true,
+        "api_keys": {
+          "env_var_patterns": [
+            "CLOUDFLARE_API_KEY",
+            "CLOUDFLARE_API_KEY_{INDEX}"
+          ],
+          "description": "Environment variable patterns for API keys. {INDEX} = 1,2,3..."
+        },
+        "endpoints": {
+          "base_url": "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1",
+          "completions": "/chat/completions",
+          "streaming": "/chat/completions",
+          "compatible_format": "openai"
+        },
+        "authentication": {
+          "type": "bearer",
+          "header_name": "Authorization",
+          "header_format": "Bearer {api_key}",
+          "additional_headers": {
+            "CF-Access-Client-Id": "${CLOUDFLARE_ACCESS_CLIENT_ID}",
+            "CF-Access-Client-Secret": "${CLOUDFLARE_ACCESS_CLIENT_SECRET}"
+          }
+        },
+        "request_config": {
+          "timeout_seconds": 60,
+          "max_retries": 3,
+          "retry_on_status": [
+            429,
+            500,
+            502,
+            503,
+            504
+          ],
+          "default_parameters": {
+            "temperature": 1,
+            "top_p": 1,
+            "n": 1
+          }
+        },
+        "rate_limiting": {
+          "enabled": false,
+          "requests_per_minute": null,
+          "tokens_per_minute": null,
+          "cooldown_seconds": 180
+        },
+        "models": {},
+        "error_handling": {
+          "401": {
+            "action": "global_key_failure"
+          },
+          "403": {
+            "action": "global_key_failure"
+          },
+          "429": {
+            "action": "model_key_failure"
+          }
+        },
+        "proxy_support": {
+          "enabled": false,
+          "base_url_override": null,
+          "description": "If enabled, use base_url_override instead of base_url (for proxies)"
+        }
+      },
+      {
+        "name": "openrouter",
+        "display_name": "OpenRouter",
+        "enabled": true,
+        "api_keys": {
+          "env_var_pattern": "{PROVIDER}_API_KEY",
+          "env_var_patterns": [
+            "{PROVIDER}_API_KEY",
+            "{PROVIDER}_API_KEY_{INDEX}"
+          ],
+          "description": "Environment variable patterns for API keys. {PROVIDER} = 'OPENROUTER', {INDEX} = 1,2,3..."
+        },
+        "endpoints": {
+          "base_url": "https://openrouter.ai/api/v1",
+          "completions": "/chat/completions",
+          "streaming": "/chat/completions",
+          "compatible_format": "openai"
+        },
+        "authentication": {
+          "type": "bearer",
+          "header_name": "Authorization",
+          "header_format": "Bearer {api_key}",
+          "additional_headers": {
+            "HTTP-Referer": "https://github.com/model-proxy",
+            "X-Title": "Model-Proxy"
+          }
+        },
+        "request_config": {
+          "timeout_seconds": 180,
+          "max_retries": 50,
+          "retry_on_status": [
+            429,
+            500,
+            502,
+            503,
+            504
+          ],
+          "default_parameters": {
+            "temperature": 1,
+            "top_p": 1,
+            "n": 1
+          }
+        },
+        "rate_limiting": {
+          "enabled": false,
+          "requests_per_minute": null,
+          "tokens_per_minute": null,
+          "cooldown_seconds": 600
+        },
+        "models": {},
+        "error_handling": {
+          "400": {
+            "action": "fallback_no_cooldown"
+          },
+          "401": {
+            "action": "global_key_failure"
+          },
+          "403": {
+            "action": "global_key_failure"
+          },
+          "429": {
+            "action": "model_key_failure"
+          },
+          "500": {
+            "action": "fallback_no_cooldown"
+          }
+        },
+        "proxy_support": {
+          "enabled": false,
+          "base_url_override": null,
+          "description": "If enabled, use base_url_override instead of base_url (for proxies like OpenRouter, Together AI, etc.)"
+        }
+      },
+      {
+        "name": "nvidia",
+        "display_name": "Nvidia",
+        "enabled": true,
+        "api_keys": {
+          "env_var_pattern": "{PROVIDER}_API_KEY",
+          "env_var_patterns": [
+            "{PROVIDER}_API_KEY",
+            "{PROVIDER}_API_KEY_{INDEX}"
+          ],
+          "description": "Environment variable patterns for API keys. {PROVIDER} = '{{provider_name_upper}}', {INDEX} = 1,2,3..."
+        },
+        "endpoints": {
+          "base_url": "https://integrate.api.nvidia.com",
+          "completions": "/v1/chat/completions",
+          "streaming": "/v1/chat/completions",
+          "compatible_format": "openai"
+        },
+        "authentication": {
+          "type": "bearer",
+          "header_name": "Authorization",
+          "header_format": "Bearer {api_key}"
+        },
+        "request_config": {
+          "timeout_seconds": 15,
+          "max_retries": 3,
+          "retry_on_status": [
+            429,
+            500,
+            502,
+            503,
+            504
+          ],
+          "default_parameters": {
+            "temperature": 1,
+            "top_p": 1,
+            "n": 1
+          }
+        },
+        "rate_limiting": {
+          "enabled": false,
+          "requests_per_minute": null,
+          "tokens_per_minute": null
+        },
+        "error_handling": {
+          "401": {
+            "action": "global_key_failure"
+          },
+          "429": {
+            "action": "fallback_no_cooldown"
+          },
+          "500": {
+            "action": "fallback_no_cooldown"
+          },
+          "502": {
+            "action": "fallback_no_cooldown"
+          },
+          "503": {
+            "action": "fallback_no_cooldown"
+          },
+          "504": {
+            "action": "fallback_no_cooldown"
+          },
+          "default": {
+            "action": "fallback_no_cooldown"
+          }
+        }
+      }
+    ],
+    "models": [
+      {
+        "logical_name": "complete",
+        "timeout_seconds": 180,
+        "default_cooldown_seconds": 1,
+        "model_routings": [
+          {
+            "provider": "groq",
+            "model": "openai/gpt-oss-120b"
+          },
+          {
+            "provider": "cerebras",
+            "model": "qwen-3-235b-a22b-instruct-2507"
+          }
+        ],
+        "fallback_model_routings": []
+      },
+      {
+        "logical_name": "gemma-4-26b-a4b-it",
+        "timeout_seconds": 180,
+        "default_cooldown_seconds": 180,
+        "model_routings": [
+          {
+            "provider": "openrouter",
+            "model": "google/gemma-4-26b-a4b-it:free"
+          }
+        ],
+        "fallback_model_routings": []
+      },
+      {
+        "logical_name": "glm-4.7-flash-stock",
+        "timeout_seconds": 180,
+        "default_cooldown_seconds": 180,
+        "model_routings": [
+          {
+            "provider": "zai",
+            "model": "glm-4.7-flash"
+          }
+        ],
+        "fallback_model_routings": []
+      },
+      {
+        "logical_name": "glm-5-lightning",
+        "timeout_seconds": 180,
+        "default_cooldown_seconds": 180,
+        "model_routings": [
+          {
+            "provider": "nahcrof",
+            "model": "glm-5-lightning"
+          }
+        ],
+        "fallback_model_routings": []
+      },
+      {
+        "logical_name": "glm-5.1",
+        "timeout_seconds": 180,
+        "default_cooldown_seconds": 180,
+        "model_routings": [
+          {
+            "provider": "nahcrof",
+            "model": "glm-5.1"
+          }
+        ],
+        "fallback_model_routings": []
+      },
+      {
+        "logical_name": "glm-5.1-precision",
+        "timeout_seconds": 180,
+        "default_cooldown_seconds": 180,
+        "model_routings": [
+          {
+            "provider": "nahcrof",
+            "model": "glm-5.1-precision"
+          }
+        ],
+        "fallback_model_routings": []
+      },
+      {
+        "logical_name": "kimi-k2.5",
+        "timeout_seconds": 180,
+        "default_cooldown_seconds": 180,
+        "model_routings": [
+          {
+            "provider": "nahcrof",
+            "model": "kimi-k2.5"
+          }
+        ],
+        "fallback_model_routings": []
+      },
+      {
+        "logical_name": "kimi-k2.5-lightning",
+        "timeout_seconds": 180,
+        "default_cooldown_seconds": 180,
+        "model_routings": [
+          {
+            "provider": "nahcrof",
+            "model": "kimi-k2.5-lightning"
+          }
+        ],
+        "fallback_model_routings": []
+      },
+      {
+        "logical_name": "minimax-m2.5",
+        "timeout_seconds": 180,
+        "default_cooldown_seconds": 180,
+        "model_routings": [
+          {
+            "provider": "openrouter",
+            "model": "minimax-m2.5:free"
+          }
+        ],
+        "fallback_model_routings": []
+      },
+      {
+        "logical_name": "minimax-m2.7",
+        "timeout_seconds": 360,
+        "default_cooldown_seconds": 0,
+        "model_routings": [
+          {
+            "provider": "nvidia",
+            "model": "minimaxai/minimax-m2.7",
+            "cooldown_seconds": 0
+          }
+        ],
+        "fallback_model_routings": []
+      },
+      {
+        "logical_name": "precision",
+        "timeout_seconds": 180,
+        "default_cooldown_seconds": 180,
+        "model_routings": [
+          {
+            "provider": "nahcrof",
+            "model": "glm-5"
+          },
+          {
+            "provider": "nahcrof",
+            "model": "minimax-m2.5"
+          },
+          {
+            "provider": "gemini",
+            "model": "gemini-3-flash-preview"
+          }
+        ],
+        "fallback_model_routings": []
+      },
+      {
+        "logical_name": "qwen35-tiny",
+        "timeout_seconds": 600,
+        "default_cooldown_seconds": 60,
+        "model_routings": [
+          {
+            "provider": "openai",
+            "model": "Qwen3.5-35B-A3B-UD-IQ3_XXS.gguf",
+            "wire_protocol": "openai",
+            "base_url": "http://172.17.0.1:8081",
+            "api_key_env": [
+              "LOCAL_LLAMA_API_KEY"
+            ],
+            "timeout_seconds": 600,
+            "cooldown_seconds": 30
+          }
+        ],
+        "fallback_model_routings": []
+      },
+      {
+        "logical_name": "turbo",
+        "timeout_seconds": 180,
+        "default_cooldown_seconds": 180,
+        "model_routings": [
+          {
+            "provider": "cerebras",
+            "model": "zai-glm-4.7"
+          },
+          {
+            "provider": "gemini",
+            "model": "gemini-3-flash-preview"
+          },
+          {
+            "provider": "nahcrof",
+            "model": "minimax-m2.1-canopy"
+          },
+          {
+            "provider": "nahcrof",
+            "model": "kimi-k2.5"
+          },
+          {
+            "provider": "zai",
+            "model": "glm-4.7-flash"
+          },
+          {
+            "provider": "nahcrof",
+            "model": "glm-4.7"
+          }
+        ],
+        "fallback_model_routings": []
+      },
+      {
+        "logical_name": "turbo-alt",
+        "timeout_seconds": 180,
+        "default_cooldown_seconds": 180,
+        "model_routings": [
+          {
+            "provider": "gemini",
+            "model": "gemini-3-flash-preview"
+          },
+          {
+            "provider": "nahcrof",
+            "model": "minimax-m2.1-precision"
+          },
+          {
+            "provider": "openrouter",
+            "model": "z-ai/glm-4.5-air:free"
+          },
+          {
+            "provider": "nahcrof",
+            "model": "glm-4.7"
+          },
+          {
+            "provider": "nahcrof",
+            "model": "deepseek-v3.2-precision"
+          },
+          {
+            "provider": "nahcrof",
+            "model": "devstral-2"
+          }
+        ],
+        "fallback_model_routings": []
+      }
+    ],
+    "environment": {
+      "GEMINI_API_KEY_1": "scrubbed-GEMINI_API_KEY_1",
+      "GEMINI_API_KEY_2": "scrubbed-GEMINI_API_KEY_2",
+      "GEMINI_API_KEY_3": "scrubbed-GEMINI_API_KEY_3",
+      "GEMINI_API_KEY_4": "scrubbed-GEMINI_API_KEY_4",
+      "GEMINI_API_KEY_5": "scrubbed-GEMINI_API_KEY_5",
+      "GEMINI_API_KEY_6": "scrubbed-GEMINI_API_KEY_6",
+      "GEMINI_API_KEY_7": "scrubbed-GEMINI_API_KEY_7",
+      "GEMINI_API_KEY_8": "scrubbed-GEMINI_API_KEY_8",
+      "GEMINI_API_KEY_9": "scrubbed-GEMINI_API_KEY_9",
+      "GEMINI_API_KEY_10": "scrubbed-GEMINI_API_KEY_10",
+      "GEMINI_API_KEY_11": "scrubbed-GEMINI_API_KEY_11",
+      "NAHCROF_API_KEY": "scrubbed-NAHCROF_API_KEY",
+      "CEREBRAS_API_KEY_1": "scrubbed-CEREBRAS_API_KEY_1",
+      "CEREBRAS_API_KEY_2": "scrubbed-CEREBRAS_API_KEY_2",
+      "CEREBRAS_API_KEY_3": "scrubbed-CEREBRAS_API_KEY_3",
+      "CEREBRAS_API_KEY_4": "scrubbed-CEREBRAS_API_KEY_4",
+      "CEREBRAS_API_KEY_5": "scrubbed-CEREBRAS_API_KEY_5",
+      "CEREBRAS_API_KEY_6": "scrubbed-CEREBRAS_API_KEY_6",
+      "CEREBRAS_API_KEY_7": "scrubbed-CEREBRAS_API_KEY_7",
+      "CEREBRAS_API_KEY_8": "scrubbed-CEREBRAS_API_KEY_8",
+      "CEREBRAS_API_KEY_9": "scrubbed-CEREBRAS_API_KEY_9",
+      "CEREBRAS_API_KEY_10": "scrubbed-CEREBRAS_API_KEY_10",
+      "CEREBRAS_API_KEY_11": "scrubbed-CEREBRAS_API_KEY_11",
+      "CEREBRAS_API_KEY_12": "scrubbed-CEREBRAS_API_KEY_12",
+      "CEREBRAS_API_KEY_13": "scrubbed-CEREBRAS_API_KEY_13",
+      "CEREBRAS_API_KEY_14": "scrubbed-CEREBRAS_API_KEY_14",
+      "ZAI_API_KEY_1": "scrubbed-ZAI_API_KEY_1",
+      "ZAI_API_KEY_2": "scrubbed-ZAI_API_KEY_2",
+      "ZAI_API_KEY_3": "scrubbed-ZAI_API_KEY_3",
+      "OPENAI_API_KEY": "scrubbed-OPENAI_API_KEY",
+      "MISTRAL_API_KEY_1": "scrubbed-MISTRAL_API_KEY_1",
+      "MISTRAL_API_KEY_2": "scrubbed-MISTRAL_API_KEY_2",
+      "GROQ_API_KEY_1": "scrubbed-GROQ_API_KEY_1",
+      "GROQ_API_KEY_2": "scrubbed-GROQ_API_KEY_2",
+      "GROQ_API_KEY_3": "scrubbed-GROQ_API_KEY_3",
+      "GROQ_API_KEY_4": "scrubbed-GROQ_API_KEY_4",
+      "LOCAL_LLAMA_API_KEY": "scrubbed-LOCAL_LLAMA_API_KEY",
+      "OPENROUTER_API_KEY": "scrubbed-OPENROUTER_API_KEY",
+      "OPENROUTER_API_KEY_1": "scrubbed-OPENROUTER_API_KEY_1",
+      "OPENROUTER_API_KEY_2": "scrubbed-OPENROUTER_API_KEY_2",
+      "OPENROUTER_API_KEY_3": "scrubbed-OPENROUTER_API_KEY_3",
+      "OPENROUTER_API_KEY_4": "scrubbed-OPENROUTER_API_KEY_4",
+      "OPENROUTER_API_KEY_5": "scrubbed-OPENROUTER_API_KEY_5",
+      "OPENROUTER_API_KEY_6": "scrubbed-OPENROUTER_API_KEY_6",
+      "OPENROUTER_API_KEY_7": "scrubbed-OPENROUTER_API_KEY_7",
+      "OPENROUTER_API_KEY_8": "scrubbed-OPENROUTER_API_KEY_8",
+      "NVIDIA_API_KEY_1": "scrubbed-NVIDIA_API_KEY_1",
+      "NVIDIA_API_KEY_2": "scrubbed-NVIDIA_API_KEY_2",
+      "NVIDIA_API_KEY_3": "scrubbed-NVIDIA_API_KEY_3",
+      "CLIENT_API_KEY": "ThisIsKindaCoolNgl",
+      "LOG_LEVEL": "DEBUG",
+      "VERBOSE_HTTP_ERRORS": "true"
+    },
+    "api_keys": {
+      "gemini": [
+        {
+          "env_var": "GEMINI_API_KEY_1",
+          "value": "scrubbed-GEMINI_API_KEY_1"
+        },
+        {
+          "env_var": "GEMINI_API_KEY_2",
+          "value": "scrubbed-GEMINI_API_KEY_2"
+        },
+        {
+          "env_var": "GEMINI_API_KEY_3",
+          "value": "scrubbed-GEMINI_API_KEY_3"
+        },
+        {
+          "env_var": "GEMINI_API_KEY_4",
+          "value": "scrubbed-GEMINI_API_KEY_4"
+        },
+        {
+          "env_var": "GEMINI_API_KEY_5",
+          "value": "scrubbed-GEMINI_API_KEY_5"
+        },
+        {
+          "env_var": "GEMINI_API_KEY_6",
+          "value": "scrubbed-GEMINI_API_KEY_6"
+        },
+        {
+          "env_var": "GEMINI_API_KEY_7",
+          "value": "scrubbed-GEMINI_API_KEY_7"
+        },
+        {
+          "env_var": "GEMINI_API_KEY_8",
+          "value": "scrubbed-GEMINI_API_KEY_8"
+        },
+        {
+          "env_var": "GEMINI_API_KEY_9",
+          "value": "scrubbed-GEMINI_API_KEY_9"
+        },
+        {
+          "env_var": "GEMINI_API_KEY_10",
+          "value": "scrubbed-GEMINI_API_KEY_10"
+        },
+        {
+          "env_var": "GEMINI_API_KEY_11",
+          "value": "scrubbed-GEMINI_API_KEY_11"
+        }
+      ],
+      "nahcrof": [
+        {
+          "env_var": "NAHCROF_API_KEY",
+          "value": "scrubbed-NAHCROF_API_KEY"
+        }
+      ],
+      "cerebras": [
+        {
+          "env_var": "CEREBRAS_API_KEY_1",
+          "value": "scrubbed-CEREBRAS_API_KEY_1"
+        },
+        {
+          "env_var": "CEREBRAS_API_KEY_2",
+          "value": "scrubbed-CEREBRAS_API_KEY_2"
+        },
+        {
+          "env_var": "CEREBRAS_API_KEY_3",
+          "value": "scrubbed-CEREBRAS_API_KEY_3"
+        },
+        {
+          "env_var": "CEREBRAS_API_KEY_4",
+          "value": "scrubbed-CEREBRAS_API_KEY_4"
+        },
+        {
+          "env_var": "CEREBRAS_API_KEY_5",
+          "value": "scrubbed-CEREBRAS_API_KEY_5"
+        },
+        {
+          "env_var": "CEREBRAS_API_KEY_6",
+          "value": "scrubbed-CEREBRAS_API_KEY_6"
+        },
+        {
+          "env_var": "CEREBRAS_API_KEY_7",
+          "value": "scrubbed-CEREBRAS_API_KEY_7"
+        },
+        {
+          "env_var": "CEREBRAS_API_KEY_8",
+          "value": "scrubbed-CEREBRAS_API_KEY_8"
+        },
+        {
+          "env_var": "CEREBRAS_API_KEY_9",
+          "value": "scrubbed-CEREBRAS_API_KEY_9"
+        },
+        {
+          "env_var": "CEREBRAS_API_KEY_10",
+          "value": "scrubbed-CEREBRAS_API_KEY_10"
+        },
+        {
+          "env_var": "CEREBRAS_API_KEY_11",
+          "value": "scrubbed-CEREBRAS_API_KEY_11"
+        },
+        {
+          "env_var": "CEREBRAS_API_KEY_12",
+          "value": "scrubbed-CEREBRAS_API_KEY_12"
+        },
+        {
+          "env_var": "CEREBRAS_API_KEY_13",
+          "value": "scrubbed-CEREBRAS_API_KEY_13"
+        },
+        {
+          "env_var": "CEREBRAS_API_KEY_14",
+          "value": "scrubbed-CEREBRAS_API_KEY_14"
+        }
+      ],
+      "zai": [
+        {
+          "env_var": "ZAI_API_KEY_1",
+          "value": "scrubbed-ZAI_API_KEY_1"
+        },
+        {
+          "env_var": "ZAI_API_KEY_2",
+          "value": "scrubbed-ZAI_API_KEY_2"
+        },
+        {
+          "env_var": "ZAI_API_KEY_3",
+          "value": "scrubbed-ZAI_API_KEY_3"
+        }
+      ],
+      "openai": [
+        {
+          "env_var": "OPENAI_API_KEY",
+          "value": "scrubbed-OPENAI_API_KEY"
+        }
+      ],
+      "mistral": [
+        {
+          "env_var": "MISTRAL_API_KEY_1",
+          "value": "scrubbed-MISTRAL_API_KEY_1"
+        },
+        {
+          "env_var": "MISTRAL_API_KEY_2",
+          "value": "scrubbed-MISTRAL_API_KEY_2"
+        }
+      ],
+      "groq": [
+        {
+          "env_var": "GROQ_API_KEY_1",
+          "value": "scrubbed-GROQ_API_KEY_1"
+        },
+        {
+          "env_var": "GROQ_API_KEY_2",
+          "value": "scrubbed-GROQ_API_KEY_2"
+        },
+        {
+          "env_var": "GROQ_API_KEY_3",
+          "value": "scrubbed-GROQ_API_KEY_3"
+        },
+        {
+          "env_var": "GROQ_API_KEY_4",
+          "value": "scrubbed-GROQ_API_KEY_4"
+        }
+      ],
+      "local-llama": [
+        {
+          "env_var": "LOCAL_LLAMA_API_KEY",
+          "value": "scrubbed-LOCAL_LLAMA_API_KEY"
+        }
+      ],
+      "openrouter": [
+        {
+          "env_var": "OPENROUTER_API_KEY",
+          "value": "scrubbed-OPENROUTER_API_KEY"
+        },
+        {
+          "env_var": "OPENROUTER_API_KEY_1",
+          "value": "scrubbed-OPENROUTER_API_KEY_1"
+        },
+        {
+          "env_var": "OPENROUTER_API_KEY_2",
+          "value": "scrubbed-OPENROUTER_API_KEY_2"
+        },
+        {
+          "env_var": "OPENROUTER_API_KEY_3",
+          "value": "scrubbed-OPENROUTER_API_KEY_3"
+        },
+        {
+          "env_var": "OPENROUTER_API_KEY_4",
+          "value": "scrubbed-OPENROUTER_API_KEY_4"
+        },
+        {
+          "env_var": "OPENROUTER_API_KEY_5",
+          "value": "scrubbed-OPENROUTER_API_KEY_5"
+        },
+        {
+          "env_var": "OPENROUTER_API_KEY_6",
+          "value": "scrubbed-OPENROUTER_API_KEY_6"
+        },
+        {
+          "env_var": "OPENROUTER_API_KEY_7",
+          "value": "scrubbed-OPENROUTER_API_KEY_7"
+        },
+        {
+          "env_var": "OPENROUTER_API_KEY_8",
+          "value": "scrubbed-OPENROUTER_API_KEY_8"
+        }
+      ],
+      "nvidia": [
+        {
+          "env_var": "NVIDIA_API_KEY_1",
+          "value": "scrubbed-NVIDIA_API_KEY_1"
+        },
+        {
+          "env_var": "NVIDIA_API_KEY_2",
+          "value": "scrubbed-NVIDIA_API_KEY_2"
+        },
+        {
+          "env_var": "NVIDIA_API_KEY_3",
+          "value": "scrubbed-NVIDIA_API_KEY_3"
+        }
+      ]
+    }
+  }
+}

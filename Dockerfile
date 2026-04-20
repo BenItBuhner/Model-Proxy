@@ -1,33 +1,48 @@
-# Use an official Python runtime as a parent image
-FROM python:3.12-slim
+# syntax=docker/dockerfile:1.7
 
-# Set the working directory in the container
+# ---------- Stage 1: build the Next.js admin UI ----------
+FROM oven/bun:1.1.38-alpine AS web-build
+WORKDIR /app/web
+COPY web/package.json web/bun.lock* ./
+RUN bun install --frozen-lockfile
+COPY web ./
+ENV NODE_ENV=production
+RUN bun run build
+
+# ---------- Stage 2: install proxy runtime deps ----------
+FROM oven/bun:1.1.38-alpine AS server-deps
+WORKDIR /app
+COPY package.json bun.lock* ./
+RUN bun install --frozen-lockfile --production
+
+# ---------- Stage 3: final runtime ----------
+FROM oven/bun:1.1.38-alpine
 WORKDIR /app
 
-# Install system dependencies and uv
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip install uv
+RUN addgroup -S proxy && adduser -S -G proxy proxy
 
-# Copy dependency files first for better Docker layer caching
-COPY pyproject.toml uv.lock ./
+COPY package.json bun.lock* ./
+COPY --from=server-deps /app/node_modules ./node_modules
+COPY src ./src
+COPY shared ./shared
+COPY tsconfig.json ./
 
-# Install dependencies using uv
-RUN uv sync --frozen
+COPY --from=web-build /app/web/out ./web-static
 
-# Copy the application code
-COPY . .
+RUN mkdir -p /app/config/providers /app/config/models /app/config/templates \
+    && chown -R proxy:proxy /app
 
-# Create necessary directories for persistent storage
-RUN mkdir -p /app/config/providers /app/config/models /app/config/templates
+USER proxy
 
-# Install the package in editable mode
-RUN uv pip install -e .
+ENV NODE_ENV=production \
+    HOST=0.0.0.0 \
+    PORT=9876 \
+    MODEL_PROXY_WEB_ROOT=/app/web-static \
+    MODEL_PROXY_ENV_FILE=/app/.env
 
-# Expose the default port
 EXPOSE 9876
 
-# Specify the command to run on container startup
-# The setup UI will be available at http://localhost:9876/setup/
-CMD ["model-proxy", "start", "--host", "0.0.0.0", "--port", "9876"]
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD wget --spider -q http://127.0.0.1:9876/health || exit 1
+
+CMD ["bun", "run", "src/cli/main.ts", "--host", "0.0.0.0", "--port", "9876"]
