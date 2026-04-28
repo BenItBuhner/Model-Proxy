@@ -7,7 +7,7 @@ export interface StartEntry {
   requestedModel: string;
   resolvedModel?: string;
   resolvedProvider?: string;
-  wireProtocol?: "openai" | "anthropic";
+  wireProtocol?: "openai" | "anthropic" | "audio";
   isStreaming: boolean;
   enforceMode: boolean;
 }

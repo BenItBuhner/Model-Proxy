@@ -7,9 +7,10 @@ import { AuthGuard } from "@/components/auth-guard";
 import { PageHeader } from "@/components/page-header";
 import { EnvBody } from "@/components/env/env-body";
 import { TestBody } from "@/components/test/test-body";
+import { AudioBody } from "@/components/audio/audio-body";
 import { cn } from "@/lib/utils";
 
-type LabTab = "env" | "test";
+type LabTab = "env" | "test" | "audio";
 
 export function TestEnvironmentClient(): React.ReactElement {
   const router = useRouter();
@@ -18,6 +19,7 @@ export function TestEnvironmentClient(): React.ReactElement {
 
   const tab: LabTab = useMemo(() => {
     const raw = searchParams.get("tab");
+    if (raw === "audio") return "audio";
     return raw === "env" ? "env" : "test";
   }, [searchParams]);
 
@@ -65,9 +67,27 @@ export function TestEnvironmentClient(): React.ReactElement {
           >
             Test
           </button>
+          <button
+            type="button"
+            onClick={() => setTab("audio")}
+            className={cn(
+              "border px-3 py-2 font-mono text-[10px] uppercase tracking-[0.2em] transition-colors",
+              tab === "audio"
+                ? "border-phosphor-500 bg-phosphor-50 text-bone-900"
+                : "border-ink-500 text-bone-500 hover:border-ink-200 hover:bg-ink-700 hover:text-bone-900",
+            )}
+          >
+            Audio
+          </button>
         </div>
 
-        {tab === "env" ? <EnvBody embedded /> : <TestBody embedded />}
+        {tab === "env" ? (
+          <EnvBody embedded />
+        ) : tab === "audio" ? (
+          <AudioBody embedded />
+        ) : (
+          <TestBody embedded />
+        )}
       </AppShell>
     </AuthGuard>
   );

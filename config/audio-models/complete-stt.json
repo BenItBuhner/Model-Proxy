@@ -1,0 +1,23 @@
+{
+  "logical_name": "complete-stt",
+  "timeout_seconds": 90,
+  "default_cooldown_seconds": 180,
+  "audio_routings": [
+    {
+      "provider": "groq",
+      "model": "whisper-large-v3-turbo",
+      "format": "openai_audio",
+      "timeout_seconds": 60,
+      "capabilities": {
+        "streaming": false,
+        "text": true,
+        "verbose_json": true,
+        "srt": true,
+        "vtt": true,
+        "timestamps": true,
+        "url_input": true
+      }
+    }
+  ],
+  "fallback_audio_routings": ["openai-stt"]
+}

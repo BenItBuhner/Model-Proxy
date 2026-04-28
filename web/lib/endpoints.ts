@@ -21,7 +21,7 @@ export interface RequestLogRecord {
   requestedModel: string;
   resolvedProvider?: string;
   resolvedModel?: string;
-  wireProtocol?: "openai" | "anthropic";
+  wireProtocol?: "openai" | "anthropic" | "audio";
   responseStatus?: number;
   responseTimeMs?: number;
   isStreaming: boolean;
@@ -73,8 +73,18 @@ export async function logout(): Promise<void> {
   await apiFetch("/v1/admin/auth/logout", { method: "POST" });
 }
 
-export async function authStatus(): Promise<{ authenticated: boolean; reason?: string }> {
-  return apiFetch<{ authenticated: boolean; reason?: string }>("/v1/admin/auth/status");
+export async function authStatus(): Promise<{
+  authenticated: boolean;
+  reason?: string;
+  header_authenticated?: boolean;
+  session_authenticated?: boolean;
+}> {
+  return apiFetch<{
+    authenticated: boolean;
+    reason?: string;
+    header_authenticated?: boolean;
+    session_authenticated?: boolean;
+  }>("/v1/admin/auth/status");
 }
 
 // -------- Logs --------

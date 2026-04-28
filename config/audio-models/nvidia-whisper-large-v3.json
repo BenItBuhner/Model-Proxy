@@ -1,0 +1,25 @@
+{
+  "logical_name": "nvidia-whisper-large-v3",
+  "timeout_seconds": 120,
+  "default_cooldown_seconds": 180,
+  "audio_routings": [
+    {
+      "provider": "nvidia-riva-asr",
+      "model": "openai/whisper-large-v3",
+      "format": "nvidia_riva_grpc",
+      "function_id": "b702f636-f60c-4a3d-a6f4-f3568c13bd7d",
+      "timeout_seconds": 120,
+      "language_default": "en",
+      "capabilities": {
+        "streaming": false,
+        "text": false,
+        "verbose_json": false,
+        "srt": false,
+        "vtt": false,
+        "timestamps": false,
+        "url_input": false
+      }
+    }
+  ],
+  "fallback_audio_routings": []
+}

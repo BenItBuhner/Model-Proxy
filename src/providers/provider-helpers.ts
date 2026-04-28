@@ -12,7 +12,12 @@ function substituteEnvVars(text: string): string {
 export function buildEndpointUrl(
   config: ProviderConfig,
   override?: string,
-  endpointType: "completions" | "streaming" = "completions",
+  endpointType:
+    | "completions"
+    | "streaming"
+    | "audio_transcriptions"
+    | "audio_translations"
+    | "audio_streaming" = "completions",
 ): string {
   let base = override ?? config.endpoints.base_url;
   if (config.proxy_support?.enabled === true) {
@@ -26,7 +31,15 @@ export function buildEndpointUrl(
   const rawPath =
     endpointType === "streaming"
       ? config.endpoints.streaming ?? config.endpoints.completions
-      : config.endpoints.completions;
+      : endpointType === "audio_transcriptions"
+        ? config.endpoints.audio_transcriptions ?? "/audio/transcriptions"
+        : endpointType === "audio_translations"
+          ? config.endpoints.audio_translations ?? "/audio/translations"
+          : endpointType === "audio_streaming"
+            ? config.endpoints.audio_streaming ??
+              config.endpoints.audio_transcriptions ??
+              "/audio/transcriptions"
+            : config.endpoints.completions;
   const path = rawPath.startsWith("/") ? rawPath.slice(1) : rawPath;
 
   return base.endsWith("/") ? `${base}${path}` : `${base}/${path}`;

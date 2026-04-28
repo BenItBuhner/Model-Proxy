@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package nvidia.riva.asr;
+
+import "riva/proto/riva_audio.proto";
+import "riva/proto/riva_common.proto";
+
+service RivaSpeechRecognition {
+  rpc Recognize(RecognizeRequest) returns (RecognizeResponse) {}
+}
+
+message RecognizeRequest {
+  RecognitionConfig config = 1;
+  bytes audio = 2;
+  .nvidia.riva.RequestId id = 100;
+}
+
+message RecognitionConfig {
+  .nvidia.riva.AudioEncoding encoding = 1;
+  int32 sample_rate_hertz = 2;
+  string language_code = 3;
+  int32 max_alternatives = 4;
+  bool profanity_filter = 5;
+  int32 audio_channel_count = 7;
+  bool enable_word_time_offsets = 8;
+  bool enable_automatic_punctuation = 11;
+  string model = 13;
+  bool verbatim_transcripts = 14;
+  map<string, string> custom_configuration = 24;
+}
+
+message RecognizeResponse {
+  repeated SpeechRecognitionResult results = 1;
+  .nvidia.riva.RequestId id = 100;
+}
+
+message SpeechRecognitionResult {
+  repeated SpeechRecognitionAlternative alternatives = 1;
+  int32 channel_tag = 2;
+  float audio_processed = 3;
+}
+
+message SpeechRecognitionAlternative {
+  string transcript = 1;
+  float confidence = 2;
+  repeated WordInfo words = 3;
+  repeated string language_code = 4;
+}
+
+message WordInfo {
+  int32 start_time = 1;
+  int32 end_time = 2;
+  string word = 3;
+  float confidence = 4;
+  int32 speaker_tag = 5;
+  string language_code = 6;
+}

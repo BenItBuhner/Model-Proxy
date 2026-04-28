@@ -31,11 +31,19 @@ export default function LoginPage(): React.ReactElement {
     authStatus()
       .then((result) => {
         if (cancelled) return;
-        if (result.authenticated) router.replace("/");
-        else inputRef.current?.focus();
+        if (result.authenticated && (result.header_authenticated ?? true)) {
+          router.replace("/");
+          return;
+        }
+        clearStoredApiKey();
+        if (result.session_authenticated) {
+          setError("Stored client key is stale. Enter the current CLIENT_API_KEY.");
+        }
+        inputRef.current?.focus();
       })
       .catch(() => {
         if (cancelled) return;
+        clearStoredApiKey();
         inputRef.current?.focus();
       });
     return () => {

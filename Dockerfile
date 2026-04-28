@@ -19,8 +19,6 @@ RUN bun install --frozen-lockfile --production
 FROM oven/bun:1.1.38-alpine
 WORKDIR /app
 
-RUN addgroup -S proxy && adduser -S -G proxy proxy
-
 COPY package.json bun.lock* ./
 COPY --from=server-deps /app/node_modules ./node_modules
 COPY src ./src
@@ -30,9 +28,9 @@ COPY tsconfig.json ./
 COPY --from=web-build /app/web/out ./web-static
 
 RUN mkdir -p /app/config/providers /app/config/models /app/config/templates \
-    && chown -R proxy:proxy /app
+    && chown -R bun:bun /app
 
-USER proxy
+USER bun
 
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \

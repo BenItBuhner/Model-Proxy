@@ -13,7 +13,7 @@ export interface RequestLogRecord {
   requestedModel: string;
   resolvedProvider: string | undefined;
   resolvedModel: string | undefined;
-  wireProtocol: "openai" | "anthropic" | undefined;
+  wireProtocol: "openai" | "anthropic" | "audio" | undefined;
   responseStatus: number | undefined;
   responseTimeMs: number | undefined;
   isStreaming: boolean;

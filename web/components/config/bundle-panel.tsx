@@ -1,9 +1,11 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { clearStoredApiKey, setStoredApiKey } from "@/lib/api";
 import { Badge, StatusDot } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/ui/panel";
+import { login } from "@/lib/endpoints";
 import {
   applyBundle,
   downloadBundle,
@@ -130,7 +132,30 @@ export function BundlePanel({
       const result = await applyBundle(stagedBundle, currentOptions());
       setReport(result);
       setStatus(result.aborted ? "aborted (strict)" : "applied");
-      if (!result.aborted && onApplied !== undefined) onApplied();
+      if (!result.aborted) {
+        const nextClientKey = stagedBundle.setup.environment?.CLIENT_API_KEY;
+        const clientKeyChanged =
+          sections.env &&
+          typeof nextClientKey === "string" &&
+          nextClientKey.trim().length > 0 &&
+          !result.env.skipped.includes("CLIENT_API_KEY") &&
+          (result.env.add.includes("CLIENT_API_KEY") ||
+            result.env.overwrite.includes("CLIENT_API_KEY"));
+        if (clientKeyChanged) {
+          setStatus("re-authenticating…");
+          setStoredApiKey(nextClientKey.trim());
+          try {
+            await login(nextClientKey.trim());
+          } catch {
+            clearStoredApiKey();
+            setError(
+              "Config applied, but browser auth changed. Enter the new CLIENT_API_KEY to continue.",
+            );
+            setStatus("reauth required");
+          }
+        }
+        if (onApplied !== undefined) onApplied();
+      }
     } catch (err) {
       setError((err as Error).message);
       setStatus("error");

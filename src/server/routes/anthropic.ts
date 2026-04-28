@@ -34,8 +34,8 @@ export function createAnthropicRoutes(): Hono {
   const app = new Hono();
   // Scope auth to the Anthropic-only path so this router does not gate
   // other sub-apps mounted at the same root.
-  app.use("/v1/messages", requireAuth());
-  app.use("/v1/messages/*", requireAuth());
+  app.use("/v1/messages", requireAuth({ allowSession: true }));
+  app.use("/v1/messages/*", requireAuth({ allowSession: true }));
 
   app.post("/v1/messages", async (c) => {
     const requestId = c.get("requestId");

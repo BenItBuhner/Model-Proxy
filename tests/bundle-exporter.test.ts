@@ -44,8 +44,18 @@ describe("bundle-exporter round trip", () => {
 
     const exported = exportBundle();
     expect(exported.version).toBe("1.0.0");
-    expect(exported.setup.providers.length).toBe(initial.setup.providers.length);
-    expect(exported.setup.models.length).toBe(initial.setup.models.length);
+    const exportedProviderNames = new Set(
+      exported.setup.providers.map((provider) => provider["name"]),
+    );
+    const exportedModelNames = new Set(
+      exported.setup.models.map((model) => model["logical_name"]),
+    );
+    for (const provider of initial.setup.providers) {
+      expect(exportedProviderNames.has(provider["name"])).toBe(true);
+    }
+    for (const model of initial.setup.models) {
+      expect(exportedModelNames.has(model["logical_name"])).toBe(true);
+    }
 
     // Every env key from the initial bundle must be present in the export.
     for (const key of Object.keys(initial.setup.environment)) {

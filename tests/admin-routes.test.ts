@@ -158,5 +158,80 @@ describe("admin routes", () => {
       headers: { cookie: cookie ?? "" },
     });
     expect(statusRes.status).toBe(200);
+    const statusBody = (await json(statusRes)) as {
+      authenticated: boolean;
+      header_authenticated?: boolean;
+      session_authenticated?: boolean;
+    };
+    expect(statusBody.authenticated).toBe(true);
+    expect(statusBody.header_authenticated).toBe(false);
+    expect(statusBody.session_authenticated).toBe(true);
+  });
+
+  test("auth/status exposes stale bearer state even when a session cookie is still valid", async () => {
+    const loginRes = await app.request("/v1/admin/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ api_key: "admin-test-key" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers.get("set-cookie");
+    expect(cookie).toContain("mp_session=");
+
+    const statusRes = await app.request("/v1/admin/auth/status", {
+      headers: {
+        cookie: cookie ?? "",
+        Authorization: "Bearer stale-key",
+      },
+    });
+    expect(statusRes.status).toBe(200);
+    const statusBody = (await json(statusRes)) as {
+      authenticated: boolean;
+      header_authenticated?: boolean;
+      session_authenticated?: boolean;
+    };
+    expect(statusBody.authenticated).toBe(true);
+    expect(statusBody.header_authenticated).toBe(false);
+    expect(statusBody.session_authenticated).toBe(true);
+  });
+
+  test("openai inference accepts a valid admin session cookie", async () => {
+    const loginRes = await app.request("/v1/admin/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ api_key: "admin-test-key" }),
+    });
+    const cookie = loginRes.headers.get("set-cookie");
+    expect(cookie).toContain("mp_session=");
+
+    const res = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        cookie: cookie ?? "",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("anthropic inference accepts a valid admin session cookie", async () => {
+    const loginRes = await app.request("/v1/admin/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ api_key: "admin-test-key" }),
+    });
+    const cookie = loginRes.headers.get("set-cookie");
+    expect(cookie).toContain("mp_session=");
+
+    const res = await app.request("/v1/messages", {
+      method: "POST",
+      headers: {
+        cookie: cookie ?? "",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
   });
 });

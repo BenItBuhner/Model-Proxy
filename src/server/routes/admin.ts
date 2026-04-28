@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { deleteCookie, setCookie } from "hono/cookie";
 
 import {
   deleteModelConfig,
@@ -27,30 +27,18 @@ import { eventSink } from "../../observability/event-sink.ts";
 import { createLogger } from "../../observability/logger.ts";
 import { requestLogRingBuffer } from "../../observability/ring-buffer.ts";
 import {
-  clientApiKeyFingerprint,
   isAuthConfigured,
+  isSessionValid,
   requireAuth,
+  SESSION_COOKIE,
+  currentSessionToken,
   verifyApiKeyString,
   verifyClientApiKey,
 } from "../auth.ts";
 
 const log = createLogger("routes.admin");
 
-const SESSION_COOKIE = "mp_session";
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
-
-function currentSessionToken(): string {
-  // Session token is a fingerprint of the configured key. If the key changes
-  // on disk, all existing sessions immediately become invalid. Simple + safe.
-  return clientApiKeyFingerprint() ?? "no-auth";
-}
-
-function isSessionValid(c: Parameters<typeof getCookie>[0]): boolean {
-  if (!isAuthConfigured()) return true;
-  const cookie = getCookie(c, SESSION_COOKIE);
-  if (cookie === undefined) return false;
-  return cookie === currentSessionToken();
-}
 
 export function createAdminRoutes(): Hono {
   const app = new Hono();
@@ -62,12 +50,27 @@ export function createAdminRoutes(): Hono {
       return c.json({
         authenticated: true,
         reason: "no-auth-configured",
+        header_authenticated: true,
+        session_authenticated: true,
       });
     }
-    if (verifyClientApiKey(c) || isSessionValid(c)) {
-      return c.json({ authenticated: true });
+    const headerAuthenticated = verifyClientApiKey(c);
+    const sessionAuthenticated = isSessionValid(c);
+    if (headerAuthenticated || sessionAuthenticated) {
+      return c.json({
+        authenticated: true,
+        header_authenticated: headerAuthenticated,
+        session_authenticated: sessionAuthenticated,
+      });
     }
-    return c.json({ authenticated: false }, 401);
+    return c.json(
+      {
+        authenticated: false,
+        header_authenticated: false,
+        session_authenticated: false,
+      },
+      401,
+    );
   });
 
   app.post("/v1/admin/auth/login", async (c) => {

@@ -1,0 +1,23 @@
+{
+  "logical_name": "openai-stt",
+  "timeout_seconds": 90,
+  "default_cooldown_seconds": 180,
+  "audio_routings": [
+    {
+      "provider": "openai",
+      "model": "gpt-4o-mini-transcribe",
+      "format": "openai_audio",
+      "timeout_seconds": 90,
+      "capabilities": {
+        "streaming": true,
+        "text": true,
+        "verbose_json": false,
+        "srt": false,
+        "vtt": false,
+        "timestamps": false,
+        "url_input": false
+      }
+    }
+  ],
+  "fallback_audio_routings": []
+}

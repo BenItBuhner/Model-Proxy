@@ -35,8 +35,8 @@ export function createOpenAIRoutes(): Hono {
   const app = new Hono();
   // Scope auth to OpenAI-only paths so this router does not gate
   // admin/auth/health endpoints when mounted at root.
-  app.use("/v1/models", requireAuth());
-  app.use("/v1/chat/*", requireAuth());
+  app.use("/v1/models", requireAuth({ allowSession: true }));
+  app.use("/v1/chat/*", requireAuth({ allowSession: true }));
 
   app.get("/v1/models", (c) => {
     const models = modelConfigLoader.getAvailableModels();

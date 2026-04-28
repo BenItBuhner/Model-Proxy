@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+const EnvSubstitutedUrlSchema = z.string().min(1).refine(
+  (value) => value.includes("${") || z.string().url().safeParse(value).success,
+  "Expected a valid URL or an environment-substituted URL like ${PROVIDER_BASE_URL}.",
+);
+
 /**
  * Schema for `config/providers/<name>.json` files. Mirrors the structure used
  * by the Python implementation (`app/core/provider_config.py` +
@@ -16,9 +21,12 @@ export const ApiKeyPatternSchema = z
 
 export const EndpointsSchema = z
   .object({
-    base_url: z.string().url(),
+    base_url: EnvSubstitutedUrlSchema,
     completions: z.string().min(1),
     streaming: z.string().min(1).optional(),
+    audio_transcriptions: z.string().min(1).optional(),
+    audio_translations: z.string().min(1).optional(),
+    audio_streaming: z.string().min(1).optional(),
     // "azure" is a Python-era alias; GitHub Models / Azure endpoints behave
     // as OpenAI-compatible at the wire level in this runtime.
     compatible_format: z
@@ -100,7 +108,7 @@ export const ProviderConfigSchema = z
     proxy_support: z
       .object({
         enabled: z.boolean().default(false),
-        base_url_override: z.string().url().nullable().optional(),
+        base_url_override: EnvSubstitutedUrlSchema.nullable().optional(),
         description: z.string().optional(),
       })
       .passthrough()

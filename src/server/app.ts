@@ -5,6 +5,7 @@ import { corsMiddleware } from "./middleware/cors.ts";
 import { requestContextMiddleware } from "./middleware/request-context.ts";
 import { createAdminRoutes } from "./routes/admin.ts";
 import { createAnthropicRoutes } from "./routes/anthropic.ts";
+import { createAudioRoutes } from "./routes/audio.ts";
 import { createHealthRoutes } from "./routes/health.ts";
 import { createOpenAIRoutes } from "./routes/openai.ts";
 import { createStaticUIRoutes } from "./routes/static-ui.ts";
@@ -20,6 +21,7 @@ export function createApp(): Hono {
   app.route("/", createHealthRoutes());
   app.route("/", createOpenAIRoutes());
   app.route("/", createAnthropicRoutes());
+  app.route("/", createAudioRoutes());
   app.route("/", createAdminRoutes());
   app.route("/", createStaticUIRoutes());
 
