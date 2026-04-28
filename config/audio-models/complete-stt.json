@@ -19,5 +19,5 @@
       }
     }
   ],
-  "fallback_audio_routings": ["openai-stt"]
+  "fallback_audio_routings": ["nvidia-whisper-large-v3"]
 }
