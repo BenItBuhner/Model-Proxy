@@ -16,6 +16,8 @@ import { generateRequestId, openEventStream } from "@/lib/test-dispatch";
 import type { RequestEvent } from "@/lib/test-events";
 
 const FORMATS = ["json", "text", "verbose_json", "srt", "vtt"] as const;
+const LEVEL_BAR_COUNT = 28;
+const IDLE_LEVELS: number[] = Array.from({ length: LEVEL_BAR_COUNT }, () => 0);
 
 export function AudioBody({
   embedded = false,
@@ -51,6 +53,9 @@ export function AudioBody({
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(
     undefined,
   );
+  const levelsRef = useRef<number[]>(IDLE_LEVELS.slice());
+  const levelFrameRef = useRef<number | undefined>(undefined);
+  const [levels, setLevels] = useState<number[]>(IDLE_LEVELS);
 
   const stopRecordingTimer = useCallback(() => {
     if (recordingTimerRef.current !== undefined) {
@@ -61,6 +66,10 @@ export function AudioBody({
 
   const cleanupRecorder = useCallback(() => {
     stopRecordingTimer();
+    if (levelFrameRef.current !== undefined) {
+      cancelAnimationFrame(levelFrameRef.current);
+      levelFrameRef.current = undefined;
+    }
     const processor = audioProcessorRef.current;
     if (processor !== undefined) {
       processor.onaudioprocess = null;
@@ -74,6 +83,8 @@ export function AudioBody({
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
     mediaStreamRef.current = undefined;
     pcmChunksRef.current = [];
+    levelsRef.current = IDLE_LEVELS.slice();
+    setLevels(IDLE_LEVELS);
   }, [stopRecordingTimer]);
 
   useEffect(() => {
@@ -163,10 +174,24 @@ export function AudioBody({
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
       pcmChunksRef.current = [];
       recordingSampleRateRef.current = audioContext.sampleRate;
+      levelsRef.current = IDLE_LEVELS.slice();
+      setLevels(IDLE_LEVELS);
       processor.onaudioprocess = (event) => {
         const input = event.inputBuffer.getChannelData(0);
         pcmChunksRef.current.push(new Float32Array(input));
         event.outputBuffer.getChannelData(0).fill(0);
+        let sumSquares = 0;
+        for (let i = 0; i < input.length; i += 1) {
+          sumSquares += input[i] * input[i];
+        }
+        const rms = Math.sqrt(sumSquares / input.length);
+        const history = levelsRef.current;
+        const next = new Array<number>(history.length);
+        for (let i = 0; i < history.length - 1; i += 1) {
+          next[i] = history[i + 1] ?? 0;
+        }
+        next[history.length - 1] = rms;
+        levelsRef.current = next;
       };
       source.connect(processor);
       processor.connect(audioContext.destination);
@@ -179,6 +204,11 @@ export function AudioBody({
         () => setRecordingSeconds((seconds) => seconds + 1),
         1000,
       );
+      const tick = () => {
+        setLevels(levelsRef.current.slice());
+        levelFrameRef.current = requestAnimationFrame(tick);
+      };
+      levelFrameRef.current = requestAnimationFrame(tick);
     } catch (err) {
       cleanupRecorder();
       setRecordingState("error");
@@ -285,23 +315,30 @@ export function AudioBody({
               </div>
 
               <div className="space-y-4 p-4">
-                <div className="grid h-16 grid-cols-12 items-end gap-1">
-                  {Array.from({ length: 36 }).map((_, index) => (
-                    <span
-                      key={index}
-                      className={
-                        recordingState === "recording"
-                          ? "bg-phosphor-500/80"
-                          : "bg-ink-500"
-                      }
-                      style={{
-                        height:
-                          recordingState === "recording"
-                            ? `${20 + ((index * 17 + recordingSeconds * 13) % 44)}px`
-                            : `${8 + ((index * 11) % 18)}px`,
-                      }}
-                    />
-                  ))}
+                <div
+                  aria-hidden="true"
+                  className="flex h-16 items-center gap-[3px] bg-ink-950/40 px-2"
+                >
+                  {levels.map((level, index) => {
+                    const scaled = Math.min(1, Math.sqrt(level) * 2.6);
+                    const isActive = recordingState === "recording";
+                    const pixels = isActive
+                      ? Math.max(3, Math.round(scaled * 52))
+                      : 3;
+                    return (
+                      <span
+                        key={index}
+                        className={`flex-1 rounded-[1px] transition-[height,background-color] duration-75 ease-out ${
+                          isActive
+                            ? "bg-phosphor-500/80"
+                            : recordingState === "ready"
+                              ? "bg-phosphor-500/25"
+                              : "bg-ink-500/70"
+                        }`}
+                        style={{ height: `${pixels}px` }}
+                      />
+                    );
+                  })}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-3">
