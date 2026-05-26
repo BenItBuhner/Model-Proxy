@@ -14,6 +14,8 @@ export const RouteConfigSchema = z
     api_key_env: z.array(z.string().min(1)).optional(),
     timeout_seconds: z.number().int().positive().optional(),
     cooldown_seconds: z.number().int().nonnegative().optional(),
+    /** Override context window (tokens) when upstream catalog lacks this route's model. */
+    context_window: z.number().int().positive().optional(),
   })
   .strict();
 
@@ -30,6 +32,8 @@ export const ModelRoutingConfigSchema = z
     timeout_seconds: z.number().int().positive().default(60),
     default_cooldown_seconds: z.number().int().nonnegative().default(180),
     enforce_tool_call: EnforceToolCallConfigSchema.optional(),
+    /** Default context window (tokens) for routes that omit `context_window`. */
+    context_window: z.number().int().positive().optional(),
     model_routings: z.array(RouteConfigSchema).min(1),
     fallback_model_routings: z.array(z.string().min(1)).default([]),
   })

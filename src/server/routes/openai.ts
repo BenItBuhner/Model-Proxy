@@ -21,6 +21,11 @@ import {
   EnforceRouter,
   EnforceValidationError,
 } from "../../routing/enforce/index.ts";
+import {
+  buildLogicalModelListEntry,
+  buildOpenAIModelListEntry,
+  SYSTEM_DEFAULT_CONTEXT_WINDOW,
+} from "../../routing/context-window.ts";
 import { FallbackRouter } from "../../routing/fallback.ts";
 import { requireAuth } from "../auth.ts";
 import { formatOpenAIError } from "../error-formatters.ts";
@@ -38,26 +43,25 @@ export function createOpenAIRoutes(): Hono {
   app.use("/v1/models", requireAuth({ allowSession: true }));
   app.use("/v1/chat/*", requireAuth({ allowSession: true }));
 
-  app.get("/v1/models", (c) => {
+  app.get("/v1/models", async (c) => {
     const models = modelConfigLoader.getAvailableModels();
-    const data = models.map((name) => {
-      let ownedBy = "unknown";
-      try {
-        const cfg = modelConfigLoader.loadConfig(name);
-        ownedBy = cfg.model_routings[0]?.provider ?? "unknown";
-      } catch (err) {
-        log.warn("failed to load model for listing", {
-          name,
-          err: String(err),
-        });
-      }
-      return {
-        id: name,
-        object: "model" as const,
-        created: Math.floor(Date.now() / 1000),
-        owned_by: ownedBy,
-      };
-    });
+    const data = await Promise.all(
+      models.map(async (name) => {
+        try {
+          return await buildLogicalModelListEntry(name);
+        } catch (err) {
+          log.warn("failed to resolve model for listing", {
+            name,
+            err: String(err),
+          });
+          return buildOpenAIModelListEntry(
+            name,
+            SYSTEM_DEFAULT_CONTEXT_WINDOW,
+            "unknown",
+          );
+        }
+      }),
+    );
     return c.json({ object: "list", data });
   });
 

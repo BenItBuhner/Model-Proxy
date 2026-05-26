@@ -82,6 +82,39 @@ describe("zod schemas", () => {
     expect(result.success).toBe(false);
   });
 
+  test("RouteConfig accepts optional context_window", () => {
+    const result = RouteConfigSchema.safeParse({
+      provider: "groq",
+      model: "llama-3.1-70b",
+      context_window: 131072,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.context_window).toBe(131072);
+    }
+  });
+
+  test("RouteConfig rejects non-positive context_window", () => {
+    const result = RouteConfigSchema.safeParse({
+      provider: "groq",
+      model: "llama-3.1-70b",
+      context_window: 0,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test("ModelRoutingConfig accepts model-level context_window", () => {
+    const result = ModelRoutingConfigSchema.safeParse({
+      logical_name: "x",
+      context_window: 200000,
+      model_routings: [{ provider: "a", model: "b" }],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.context_window).toBe(200000);
+    }
+  });
+
   test("ModelRoutingConfig needs at least one routing", () => {
     const result = ModelRoutingConfigSchema.safeParse({
       logical_name: "x",
