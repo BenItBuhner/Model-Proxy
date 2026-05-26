@@ -54,6 +54,10 @@ Desktop.ini
 
 # Local agent context
 .claude/
+.playwright-mcp/
+
+# Root dev install (use web/node_modules for the admin UI)
+/node_modules/
 
 # Python cruft (leftover, should not reappear)
 __pycache__/

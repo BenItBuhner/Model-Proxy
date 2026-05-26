@@ -8,6 +8,7 @@
     "dev": "bun run --hot ./src/cli/main.ts",
     "start": "bun run ./src/cli/main.ts",
     "build": "bun build ./src/cli/main.ts --target=bun --outfile=./dist/server.js",
+    "build:web": "cd web && bun install && bun run build",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
