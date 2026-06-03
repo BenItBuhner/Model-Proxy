@@ -20,6 +20,7 @@ const defaultFactories: Record<string, ProviderFactory> = {
   nvidia: () => new OpenAIProvider("nvidia"),
   "local-llama": () => new OpenAIProvider("local-llama"),
   github: () => new OpenAIProvider("github"),
+  opengateway: () => new OpenAIProvider("opengateway"),
 
   gemini: () => new GeminiOpenAIProvider(),
   anthropic: () => new AnthropicProvider(),
