@@ -15,6 +15,17 @@ export const ApiKeyPatternSchema = z
   .object({
     env_var_pattern: z.string().optional(),
     env_var_patterns: z.array(z.string().min(1)).default([]),
+    /** Used when no env vars match (e.g. OpenCode Zen free tier uses `"public"`). */
+    default_value: z.string().optional(),
+    description: z.string().optional(),
+  })
+  .passthrough();
+
+export const EgressProxiesSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    env_var_patterns: z.array(z.string().min(1)).default([]),
+    cooldown_seconds: z.number().int().nonnegative().default(86400),
     description: z.string().optional(),
   })
   .passthrough();
@@ -114,6 +125,7 @@ export const ProviderConfigSchema = z
       .passthrough()
       .optional(),
     model_mapping: z.record(z.string()).default({}),
+    egress_proxies: EgressProxiesSchema.optional(),
   })
   .passthrough();
 

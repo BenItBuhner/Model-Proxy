@@ -3,6 +3,11 @@ import { providerConfigLoader } from "../config/provider-loader.ts";
 import { ProviderAPIError } from "./errors.ts";
 import { buildAuthHeaders, buildEndpointUrl } from "./provider-helpers.ts";
 import { createLogger } from "../observability/logger.ts";
+import {
+  parseRetryAfterFromErrorBody,
+  parseRetryAfterHeader,
+  upstreamFetch,
+} from "./upstream-fetch.ts";
 
 const log = createLogger("provider.base");
 
@@ -15,6 +20,10 @@ export interface ProviderCallContext {
   timeoutSeconds: number;
   /** Abort signal forwarded to `fetch`. */
   signal: AbortSignal | undefined;
+  /** HTTP(S) egress proxy URL (Bun fetch `proxy` option). */
+  egressProxyUrl?: string;
+  /** Extra headers forwarded to the upstream provider. */
+  extraHeaders?: Record<string, string>;
 }
 
 export interface OpenAICallArgs {
@@ -119,13 +128,23 @@ export abstract class AbstractProvider implements BaseProvider {
     const combinedSignal = mergeSignals(ctx.signal, controller.signal);
 
     try {
-      const response = await fetch(url, { ...init, signal: combinedSignal });
+      const response = await upstreamFetch(url, {
+        ...init,
+        proxy: ctx.egressProxyUrl,
+        timeoutMs,
+        signal: combinedSignal,
+      });
       if (response.status >= 400) {
         const body = await this.readErrorBody(response);
         throw new ProviderAPIError(
           `${this.providerName} API error ${response.status}: ${body.slice(0, 500)}`,
           response.status,
-          { body, provider: this.providerName },
+          {
+            body,
+            provider: this.providerName,
+            retryAfterSeconds:
+              parseRetryAfterHeader(response) ?? parseRetryAfterFromErrorBody(body),
+          },
         );
       }
       return (await response.json()) as Record<string, unknown>;

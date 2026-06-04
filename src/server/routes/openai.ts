@@ -36,6 +36,26 @@ import {
 
 const log = createLogger("routes.openai");
 
+function buildUpstreamExtraHeaders(c: Context, requestId: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const session =
+    c.req.header("x-opencode-session") ??
+    c.req.header("x-session-affinity") ??
+    requestId;
+  headers["x-opencode-session"] = session;
+  headers["x-opencode-request"] = c.req.header("x-opencode-request") ?? requestId;
+  headers["x-opencode-client"] = c.req.header("x-opencode-client") ?? "model-proxy";
+  const project = c.req.header("x-opencode-project");
+  if (project !== undefined && project.length > 0) {
+    headers["x-opencode-project"] = project;
+  }
+  const userAgent = c.req.header("user-agent");
+  if (userAgent !== undefined && userAgent.length > 0) {
+    headers["User-Agent"] = userAgent;
+  }
+  return headers;
+}
+
 export function createOpenAIRoutes(): Hono {
   const app = new Hono();
   // Scope auth to OpenAI-only paths so this router does not gate
@@ -152,6 +172,7 @@ async function handleChatCompletions(
   });
 
   const signal = c.req.raw.signal;
+  const extraHeaders = buildUpstreamExtraHeaders(c, requestId);
 
   if (isStream) {
     const stream = new ReadableStream<Uint8Array>({
@@ -177,12 +198,14 @@ async function handleChatCompletions(
                   requestData: requestDict,
                   targetProtocol: "openai",
                   overrides,
+                  extraHeaders,
                   ...(signal !== undefined ? { signal } : {}),
                 })
               : fallback.streamWithFallback({
                   logicalModel: request.model,
                   requestData: requestDict,
                   targetProtocol: "openai",
+                  extraHeaders,
                   ...(signal !== undefined ? { signal } : {}),
                 });
             for await (const chunk of generator) {
@@ -255,12 +278,14 @@ async function handleChatCompletions(
             requestData: requestDict,
             targetProtocol: "openai",
             overrides,
+            extraHeaders,
             ...(signal !== undefined ? { signal } : {}),
           })
         : await fallback.callWithFallback({
             logicalModel: request.model,
             requestData: requestDict,
             targetProtocol: "openai",
+            extraHeaders,
             ...(signal !== undefined ? { signal } : {}),
           });
       // Preserve the client-visible model name.

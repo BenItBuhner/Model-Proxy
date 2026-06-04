@@ -6,17 +6,24 @@ export class ProviderAPIError extends Error {
   readonly status: number;
   readonly body: string | undefined;
   readonly provider: string | undefined;
+  readonly retryAfterSeconds: number | undefined;
 
   constructor(
     message: string,
     status: number,
-    options: { body?: string; provider?: string; cause?: unknown } = {},
+    options: {
+      body?: string;
+      provider?: string;
+      cause?: unknown;
+      retryAfterSeconds?: number;
+    } = {},
   ) {
     super(message);
     this.name = "ProviderAPIError";
     this.status = Number.isInteger(status) ? status : 500;
     this.body = options.body;
     this.provider = options.provider;
+    this.retryAfterSeconds = options.retryAfterSeconds;
     if (options.cause !== undefined) {
       (this as { cause?: unknown }).cause = options.cause;
     }

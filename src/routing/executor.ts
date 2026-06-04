@@ -28,12 +28,15 @@ function buildContext(
   route: ResolvedRoute,
   signal: AbortSignal | undefined,
 ): ProviderCallContext {
-  return {
+  const ctx: ProviderCallContext = {
     apiKey: route.apiKey,
     baseUrlOverride: route.baseUrl,
     timeoutSeconds: route.timeoutSeconds,
     signal,
   };
+  if (route.egressProxyUrl !== undefined) ctx.egressProxyUrl = route.egressProxyUrl;
+  if (route.extraHeaders !== undefined) ctx.extraHeaders = route.extraHeaders;
+  return ctx;
 }
 
 function openaiArgsFromRequest(

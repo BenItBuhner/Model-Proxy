@@ -12,6 +12,8 @@ import { fileURLToPath } from "node:url";
  */
 
 let primaryConfigDir: string | undefined;
+/** When set, `getConfigSearchPaths()` returns only these roots (tests). */
+let testSearchPathsOnly: string[] | undefined;
 
 function uniquePaths(paths: string[]): string[] {
   const seen = new Set<string>();
@@ -92,14 +94,19 @@ export function getWritableConfigDir(): string {
  */
 export function resetConfigPathCache(): void {
   primaryConfigDir = undefined;
+  testSearchPathsOnly = undefined;
 }
 
 /** Force the writable config dir to a specific path. Tests only. */
 export function setPrimaryConfigDirForTests(path: string | undefined): void {
   primaryConfigDir = path;
+  testSearchPathsOnly = path !== undefined ? [path] : undefined;
 }
 
 export function getConfigSearchPaths(): string[] {
+  if (testSearchPathsOnly !== undefined) {
+    return uniquePaths(testSearchPathsOnly);
+  }
   const primary = getWritableConfigDir();
   return uniquePaths([
     primary,

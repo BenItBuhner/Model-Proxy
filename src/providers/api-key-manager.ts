@@ -76,6 +76,17 @@ export function parseProviderKeys(provider: string): string[] {
     seen.add(value);
     keys.push(value);
   }
+  if (keys.length === 0) {
+    try {
+      const cfg = providerConfigLoader.loadProvider(provider);
+      const defaultValue = cfg.api_keys.default_value;
+      if (typeof defaultValue === "string" && defaultValue.length > 0) {
+        keys.push(defaultValue);
+      }
+    } catch {
+      // no provider config
+    }
+  }
   return keys;
 }
 

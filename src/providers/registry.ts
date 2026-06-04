@@ -2,6 +2,7 @@ import type { BaseProvider } from "./base.ts";
 import { AnthropicProvider } from "./anthropic-provider.ts";
 import { GeminiOpenAIProvider } from "./gemini-provider.ts";
 import { OpenAIProvider } from "./openai-provider.ts";
+import { OpenCodeProvider } from "./opencode-provider.ts";
 
 type ProviderFactory = () => BaseProvider;
 
@@ -20,7 +21,7 @@ const defaultFactories: Record<string, ProviderFactory> = {
   nvidia: () => new OpenAIProvider("nvidia"),
   "local-llama": () => new OpenAIProvider("local-llama"),
   github: () => new OpenAIProvider("github"),
-  opengateway: () => new OpenAIProvider("opengateway"),
+  opencode: () => new OpenCodeProvider(),
 
   gemini: () => new GeminiOpenAIProvider(),
   anthropic: () => new AnthropicProvider(),

@@ -94,6 +94,16 @@ describe("zod schemas", () => {
     }
   });
 
+  test("RouteConfig accepts auth_mode and egress_proxy_env", () => {
+    const result = RouteConfigSchema.safeParse({
+      provider: "opencode",
+      model: "deepseek-v4-flash-free",
+      auth_mode: "public",
+      egress_proxy_env: "OPENCODE_EGRESS_PROXY_1",
+    });
+    expect(result.success).toBe(true);
+  });
+
   test("RouteConfig rejects non-positive context_window", () => {
     const result = RouteConfigSchema.safeParse({
       provider: "groq",

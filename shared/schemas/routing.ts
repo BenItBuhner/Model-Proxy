@@ -16,6 +16,10 @@ export const RouteConfigSchema = z
     cooldown_seconds: z.number().int().nonnegative().optional(),
     /** Override context window (tokens) when upstream catalog lacks this route's model. */
     context_window: z.number().int().positive().optional(),
+    /** Pin this route to a single egress proxy env var (e.g. OPENCODE_EGRESS_PROXY_1). */
+    egress_proxy_env: z.string().min(1).optional(),
+    /** Auth mode override for providers like OpenCode Zen (`public` = Bearer public). */
+    auth_mode: z.enum(["public", "key"]).optional(),
   })
   .strict();
 
@@ -54,6 +58,12 @@ export interface ResolvedRoute {
   apiKeyEnvVar: string;
   timeoutSeconds: number;
   cooldownSeconds: number;
+  /** HTTP(S) egress proxy URL for this attempt (Bun fetch `proxy` option). */
+  egressProxyUrl?: string;
+  /** Env var that supplied `egressProxyUrl`, for logging/cooldown scoping. */
+  egressProxyEnvVar?: string;
+  /** Extra headers forwarded to the upstream provider (e.g. x-opencode-*). */
+  extraHeaders?: Record<string, string>;
 }
 
 export interface Attempt {

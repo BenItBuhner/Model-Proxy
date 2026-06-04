@@ -19,6 +19,11 @@ import {
   getMaxKeyRetryCycles,
   type ErrorAction,
 } from "../providers/api-key-manager.ts";
+import {
+  ProxyCycleTracker,
+  providerHasEgressProxies,
+  resolveRetryAfterSeconds,
+} from "../providers/egress-proxy-manager.ts";
 import { ProviderAPIError, RouteExecutionError } from "../providers/errors.ts";
 import { getProviderWireProtocol } from "../providers/provider-helpers.ts";
 import { execute, executeStream } from "./executor.ts";
@@ -29,6 +34,10 @@ import {
 
 function keyHintOf(apiKey: string): string {
   return apiKey.length >= 4 ? `...${apiKey.slice(-4)}` : "****";
+}
+
+function usesPublicAuth(apiKey: string): boolean {
+  return apiKey === "public";
 }
 
 // Unused-declaration helpers to keep imports stable across callers.
@@ -53,6 +62,8 @@ export interface CallWithFallbackArgs {
   targetProtocol: "openai" | "anthropic";
   maxKeyCycles?: number;
   signal?: AbortSignal;
+  /** Extra headers forwarded to upstream providers (e.g. x-opencode-*). */
+  extraHeaders?: Record<string, string>;
 }
 
 interface ErrorActionResult {
@@ -112,6 +123,18 @@ function resolveErrorAction(
 ): ErrorActionResult {
   const status = extractStatusCode(err);
   if (status === undefined) return { action: "model_key_failure" };
+
+  if (status === 429 && err instanceof ProviderAPIError) {
+    const retryAfter = resolveRetryAfterSeconds(err, providerName);
+    if (
+      err.body?.includes("FreeUsageLimitError") ||
+      err.body?.includes("RateLimitError")
+    ) {
+      const out: ErrorActionResult = { action: "provider_cooldown" };
+      if (retryAfter !== undefined) out.cooldownSeconds = retryAfter;
+      return out;
+    }
+  }
 
   try {
     const cfg = providerConfigLoader.loadProvider(providerName);
@@ -214,16 +237,47 @@ export class FallbackRouter {
     return new KeyCycleTracker(options);
   }
 
+  private createProxyTrackerForRoute(
+    routeConfig: RouteConfig,
+    maxProxyCycles: number | undefined,
+  ): ProxyCycleTracker | undefined {
+    if (!providerHasEgressProxies(routeConfig.provider)) return undefined;
+
+    let defaultCooldown: number | undefined;
+    try {
+      const providerCfg = providerConfigLoader.loadProvider(routeConfig.provider);
+      defaultCooldown = providerCfg.egress_proxies?.cooldown_seconds;
+    } catch {
+      defaultCooldown = undefined;
+    }
+
+    const options: ConstructorParameters<typeof ProxyCycleTracker>[0] = {
+      provider: routeConfig.provider,
+      model: routeConfig.model,
+    };
+    if (maxProxyCycles !== undefined) options.maxCycles = maxProxyCycles;
+    if (defaultCooldown !== undefined) options.defaultCooldownSeconds = defaultCooldown;
+    if (routeConfig.egress_proxy_env !== undefined) {
+      options.pinnedEnvVar = routeConfig.egress_proxy_env;
+    }
+    return new ProxyCycleTracker(options);
+  }
+
   private buildResolvedRoute(
     routeConfig: RouteConfig,
     sourceLogicalModel: string,
     apiKey: string,
     apiKeyEnvVar: string,
     modelConfig: ModelRoutingConfig,
+    options: {
+      egressProxyUrl?: string;
+      egressProxyEnvVar?: string;
+      extraHeaders?: Record<string, string>;
+    } = {},
   ): ResolvedRoute {
     const wireProtocol =
       routeConfig.wire_protocol ?? getProviderWireProtocol(routeConfig.provider);
-    return {
+    const route: ResolvedRoute = {
       sourceLogicalModel,
       wireProtocol,
       provider: routeConfig.provider,
@@ -236,12 +290,21 @@ export class FallbackRouter {
       cooldownSeconds:
         routeConfig.cooldown_seconds ?? modelConfig.default_cooldown_seconds ?? 180,
     };
+    if (options.egressProxyUrl !== undefined) route.egressProxyUrl = options.egressProxyUrl;
+    if (options.egressProxyEnvVar !== undefined) {
+      route.egressProxyEnvVar = options.egressProxyEnvVar;
+    }
+    if (options.extraHeaders !== undefined) route.extraHeaders = options.extraHeaders;
+    return route;
   }
 
   private resolveApiKeyForRoute(
     routeConfig: RouteConfig,
     tracker: KeyCycleTracker,
   ): { apiKey: string; envVar: string } | undefined {
+    if (routeConfig.auth_mode === "public") {
+      return { apiKey: "public", envVar: "(public)" };
+    }
     if (routeConfig.api_key_env !== undefined && routeConfig.api_key_env.length > 0) {
       for (const envVar of routeConfig.api_key_env) {
         const value = process.env[envVar];
@@ -256,8 +319,163 @@ export class FallbackRouter {
     return { apiKey: key, envVar: "(auto)" };
   }
 
+  private shouldSkipRoute(
+    routeConfig: RouteConfig,
+    tracker: KeyCycleTracker,
+    proxyTracker: ProxyCycleTracker | undefined,
+  ): boolean {
+    if (
+      routeConfig.api_key_env === undefined &&
+      routeConfig.auth_mode !== "public" &&
+      tracker.allKeysInCooldown()
+    ) {
+      log.info("skipping provider (all keys in cooldown)", {
+        provider: routeConfig.provider,
+        total: tracker.totalKeys,
+      });
+      return true;
+    }
+    if (proxyTracker !== undefined && proxyTracker.totalProxies > 0 && proxyTracker.allProxiesInCooldown()) {
+      log.info("skipping provider (all egress proxies in cooldown)", {
+        provider: routeConfig.provider,
+        total: proxyTracker.totalProxies,
+      });
+      return true;
+    }
+    return false;
+  }
+
+  private handleAttemptError(
+    err: unknown,
+    route: ResolvedRoute,
+    resolved: { apiKey: string; envVar: string },
+    tracker: KeyCycleTracker,
+    proxyTracker: ProxyCycleTracker | undefined,
+    attemptNumber: number,
+    _isFallback: boolean,
+    errors: Array<Record<string, unknown>>,
+  ): "continue_proxy" | "continue_key" | "break_route" | "throw" {
+    const actionInfo = resolveErrorAction(route.provider, err);
+    const action = actionInfo.action;
+    const errorInfo = {
+      attempt: attemptNumber,
+      provider: route.provider,
+      model: route.model,
+      error: err instanceof Error ? err.message : String(err),
+      error_type: err instanceof Error ? err.name : "Unknown",
+    };
+    const errStatus = extractStatusCode(err);
+    const errMessage = err instanceof Error ? err.message : String(err);
+    const errType = err instanceof Error ? err.name : "Unknown";
+
+    if (action === "fallback_no_cooldown") {
+      log.info("route failed (no cooldown)", {
+        msg: formatErrorForLog(err, route.provider, route.model, resolved.apiKey),
+      });
+      emit({
+        type: "route.failed",
+        at: nowIso(),
+        attempt: attemptNumber,
+        provider: route.provider,
+        model: route.model,
+        ...(errStatus !== undefined ? { status: errStatus } : {}),
+        errorType: errType,
+        message: errMessage,
+        willFallback: true,
+      });
+      errors.push(errorInfo);
+      return "break_route";
+    }
+
+    if (
+      errStatus === 429 &&
+      route.egressProxyUrl !== undefined &&
+      proxyTracker !== undefined
+    ) {
+      const cooldown = resolveRetryAfterSeconds(err, route.provider);
+      proxyTracker.markFailed(route.egressProxyUrl, {
+        ...(cooldown !== undefined ? { cooldownSeconds: cooldown } : {}),
+      });
+      emit({
+        type: "key.cooldown",
+        at: nowIso(),
+        provider: route.provider,
+        model: route.model,
+        action: "provider_cooldown",
+        ...(cooldown !== undefined ? { cooldownSeconds: cooldown } : {}),
+      });
+      if (!proxyTracker.exhausted()) return "continue_proxy";
+    }
+
+    if (usesPublicAuth(resolved.apiKey) && errStatus === 429) {
+      if (proxyTracker !== undefined && !proxyTracker.exhausted()) {
+        return "continue_proxy";
+      }
+    } else {
+      tracker.markFailed(resolved.apiKey, {
+        action,
+        ...(actionInfo.cooldownSeconds !== undefined
+          ? { cooldownSeconds: actionInfo.cooldownSeconds }
+          : {}),
+      });
+      emit({
+        type: "key.cooldown",
+        at: nowIso(),
+        provider: route.provider,
+        model: route.model,
+        action,
+        ...(actionInfo.cooldownSeconds !== undefined
+          ? { cooldownSeconds: actionInfo.cooldownSeconds }
+          : {}),
+      });
+    }
+
+    if (isFallbackWorthy(err)) {
+      log.warn("route failed (will fallback)", {
+        msg: formatErrorForLog(err, route.provider, route.model, resolved.apiKey),
+      });
+      emit({
+        type: "route.failed",
+        at: nowIso(),
+        attempt: attemptNumber,
+        provider: route.provider,
+        model: route.model,
+        ...(errStatus !== undefined ? { status: errStatus } : {}),
+        errorType: errType,
+        message: errMessage,
+        willFallback: true,
+      });
+      errors.push(errorInfo);
+      if (
+        proxyTracker !== undefined &&
+        proxyTracker.totalProxies > 0 &&
+        !proxyTracker.exhausted()
+      ) {
+        return "continue_proxy";
+      }
+      return "continue_key";
+    }
+
+    log.error("route failed (non-recoverable)", {
+      msg: formatErrorForLog(err, route.provider, route.model, resolved.apiKey),
+    });
+    emit({
+      type: "route.failed",
+      at: nowIso(),
+      attempt: attemptNumber,
+      provider: route.provider,
+      model: route.model,
+      ...(errStatus !== undefined ? { status: errStatus } : {}),
+      errorType: errType,
+      message: errMessage,
+      willFallback: false,
+    });
+    return "throw";
+  }
+
   async callWithFallback(args: CallWithFallbackArgs): Promise<Record<string, unknown>> {
-    const { logicalModel, requestData, targetProtocol, maxKeyCycles, signal } = args;
+    const { logicalModel, requestData, targetProtocol, maxKeyCycles, signal, extraHeaders } =
+      args;
     const routeTuples = this.collectRouteConfigs(logicalModel);
     if (routeTuples.length === 0) {
       throw new RoutingError(
@@ -279,12 +497,9 @@ export class FallbackRouter {
         modelConfig,
         maxKeyCycles,
       );
+      const proxyTracker = this.createProxyTrackerForRoute(routeConfig, maxKeyCycles);
 
-      if (routeConfig.api_key_env === undefined && tracker.allKeysInCooldown()) {
-        log.info("skipping provider (all keys in cooldown)", {
-          provider: routeConfig.provider,
-          total: tracker.totalKeys,
-        });
+      if (this.shouldSkipRoute(routeConfig, tracker, proxyTracker)) {
         continue;
       }
 
@@ -292,215 +507,159 @@ export class FallbackRouter {
         const resolved = this.resolveApiKeyForRoute(routeConfig, tracker);
         if (resolved === undefined) break;
 
-        const route = this.buildResolvedRoute(
-          routeConfig,
-          sourceModel,
-          resolved.apiKey,
-          resolved.envVar,
-          modelConfig,
-        );
+        let directAttemptDone = false;
+        proxyLoop: while (true) {
+          let proxyEntry:
+            | { url: string; envVar: string }
+            | undefined;
+          if (proxyTracker !== undefined && proxyTracker.totalProxies > 0) {
+            proxyEntry = proxyTracker.getNextProxy();
+            if (proxyEntry === undefined) break;
+          } else {
+            if (directAttemptDone) break;
+            directAttemptDone = true;
+          }
 
-        const attempt: Attempt = {
-          route,
-          attemptNumber,
-          isFallbackRoute: isFallback,
-        };
-        allAttempts.push(attempt);
+          const route = this.buildResolvedRoute(
+            routeConfig,
+            sourceModel,
+            resolved.apiKey,
+            resolved.envVar,
+            modelConfig,
+            {
+              ...(proxyEntry !== undefined
+                ? {
+                    egressProxyUrl: proxyEntry.url,
+                    egressProxyEnvVar: proxyEntry.envVar,
+                  }
+                : {}),
+              ...(extraHeaders !== undefined ? { extraHeaders } : {}),
+            },
+          );
 
-        log.info("attempting route", {
-          attempt: attemptNumber,
-          provider: route.provider,
-          model: route.model,
-          isFallback,
-        });
-        emit({
-          type: "route.attempted",
-          at: nowIso(),
-          attempt: attemptNumber,
-          provider: route.provider,
-          model: route.model,
-          wireProtocol: route.wireProtocol,
-          isFallback,
-          keyHint: keyHintOf(resolved.apiKey),
-        });
-
-        const routeStartMs = performance.now();
-        try {
-          const result = await execute({
+          const attempt: Attempt = {
             route,
-            requestData,
-            targetProtocol,
-            ...(signal !== undefined ? { signal } : {}),
-          });
-          log.info("route succeeded", {
-            provider: route.provider,
-            model: route.model,
-          });
-          emit({
-            type: "route.succeeded",
-            at: nowIso(),
-            attempt: attemptNumber,
-            provider: route.provider,
-            model: route.model,
-            latencyMs: Math.round(performance.now() - routeStartMs),
-          });
-          return result;
-        } catch (err) {
-          const actionInfo = resolveErrorAction(route.provider, err);
-          const action = actionInfo.action;
-          const errorInfo = {
-            attempt: attemptNumber,
-            provider: route.provider,
-            model: route.model,
-            error: err instanceof Error ? err.message : String(err),
-            error_type: err instanceof Error ? err.name : "Unknown",
+            attemptNumber,
+            isFallbackRoute: isFallback,
           };
-          const errStatus = extractStatusCode(err);
-          const errMessage =
-            err instanceof Error ? err.message : String(err);
-          const errType = err instanceof Error ? err.name : "Unknown";
+          allAttempts.push(attempt);
 
-          if (action === "fallback_no_cooldown") {
-            log.info("route failed (no cooldown)", {
-              msg: formatErrorForLog(err, route.provider, route.model, resolved.apiKey),
-            });
-            emit({
-              type: "route.failed",
-              at: nowIso(),
-              attempt: attemptNumber,
-              provider: route.provider,
-              model: route.model,
-              ...(errStatus !== undefined ? { status: errStatus } : {}),
-              errorType: errType,
-              message: errMessage,
-              willFallback: true,
-            });
-            errors.push(errorInfo);
-            attemptNumber += 1;
-            break;
-          }
-
-          if (action === "auto_fix_tool_responses") {
-            log.info("attempting auto-fix for missing tool responses", {
-              provider: route.provider,
-              model: route.model,
-            });
-            emit({
-              type: "autofix.applied",
-              at: nowIso(),
-              protocol: targetProtocol,
-              provider: route.provider,
-              model: route.model,
-            });
-            const fixed =
-              targetProtocol === "anthropic"
-                ? fixMissingToolResultsAnthropic(requestData)
-                : fixMissingToolResponsesOpenAI(requestData);
-            const fixStartMs = performance.now();
-            try {
-              const result = await execute({
-                route,
-                requestData: fixed,
-                targetProtocol,
-                ...(signal !== undefined ? { signal } : {}),
-              });
-              log.info("route succeeded after auto-fix", {
-                provider: route.provider,
-                model: route.model,
-              });
-              emit({
-                type: "route.succeeded",
-                at: nowIso(),
-                attempt: attemptNumber,
-                provider: route.provider,
-                model: route.model,
-                latencyMs: Math.round(performance.now() - fixStartMs),
-              });
-              return result;
-            } catch (retryErr) {
-              const retryMsg = formatErrorForLog(
-                retryErr,
-                route.provider,
-                route.model,
-                resolved.apiKey,
-              );
-              log.warn("auto-fix retry failed", { msg: retryMsg });
-              const retryStatus = extractStatusCode(retryErr);
-              emit({
-                type: "route.failed",
-                at: nowIso(),
-                attempt: attemptNumber,
-                provider: route.provider,
-                model: route.model,
-                ...(retryStatus !== undefined ? { status: retryStatus } : {}),
-                errorType: retryErr instanceof Error ? retryErr.name : "Unknown",
-                message:
-                  retryErr instanceof Error ? retryErr.message : String(retryErr),
-                willFallback: true,
-              });
-              errors.push({
-                ...errorInfo,
-                error: retryErr instanceof Error ? retryErr.message : String(retryErr),
-              });
-              attemptNumber += 1;
-              break;
-            }
-          }
-
-          tracker.markFailed(resolved.apiKey, {
-            action,
-            ...(actionInfo.cooldownSeconds !== undefined
-              ? { cooldownSeconds: actionInfo.cooldownSeconds }
-              : {}),
-          });
-          emit({
-            type: "key.cooldown",
-            at: nowIso(),
+          log.info("attempting route", {
+            attempt: attemptNumber,
             provider: route.provider,
             model: route.model,
-            action,
-            ...(actionInfo.cooldownSeconds !== undefined
-              ? { cooldownSeconds: actionInfo.cooldownSeconds }
-              : {}),
-          });
-
-          if (isFallbackWorthy(err)) {
-            log.warn("route failed (will fallback)", {
-              msg: formatErrorForLog(err, route.provider, route.model, resolved.apiKey),
-            });
-            emit({
-              type: "route.failed",
-              at: nowIso(),
-              attempt: attemptNumber,
-              provider: route.provider,
-              model: route.model,
-              ...(errStatus !== undefined ? { status: errStatus } : {}),
-              errorType: errType,
-              message: errMessage,
-              willFallback: true,
-            });
-            errors.push(errorInfo);
-            attemptNumber += 1;
-            continue;
-          }
-          log.error("route failed (non-recoverable)", {
-            msg: formatErrorForLog(err, route.provider, route.model, resolved.apiKey),
+            isFallback,
+            ...(proxyEntry !== undefined ? { egressProxy: proxyEntry.envVar } : {}),
           });
           emit({
-            type: "route.failed",
+            type: "route.attempted",
             at: nowIso(),
             attempt: attemptNumber,
             provider: route.provider,
             model: route.model,
-            ...(errStatus !== undefined ? { status: errStatus } : {}),
-            errorType: errType,
-            message: errMessage,
-            willFallback: false,
+            wireProtocol: route.wireProtocol,
+            isFallback,
+            keyHint: keyHintOf(resolved.apiKey),
           });
-          throw err;
+
+          const routeStartMs = performance.now();
+          try {
+            const result = await execute({
+              route,
+              requestData,
+              targetProtocol,
+              ...(signal !== undefined ? { signal } : {}),
+            });
+            log.info("route succeeded", {
+              provider: route.provider,
+              model: route.model,
+            });
+            emit({
+              type: "route.succeeded",
+              at: nowIso(),
+              attempt: attemptNumber,
+              provider: route.provider,
+              model: route.model,
+              latencyMs: Math.round(performance.now() - routeStartMs),
+            });
+            return result;
+          } catch (err) {
+            const actionInfo = resolveErrorAction(route.provider, err);
+            if (actionInfo.action === "auto_fix_tool_responses") {
+              log.info("attempting auto-fix for missing tool responses", {
+                provider: route.provider,
+                model: route.model,
+              });
+              emit({
+                type: "autofix.applied",
+                at: nowIso(),
+                protocol: targetProtocol,
+                provider: route.provider,
+                model: route.model,
+              });
+              const fixed =
+                targetProtocol === "anthropic"
+                  ? fixMissingToolResultsAnthropic(requestData)
+                  : fixMissingToolResponsesOpenAI(requestData);
+              const fixStartMs = performance.now();
+              try {
+                const result = await execute({
+                  route,
+                  requestData: fixed,
+                  targetProtocol,
+                  ...(signal !== undefined ? { signal } : {}),
+                });
+                emit({
+                  type: "route.succeeded",
+                  at: nowIso(),
+                  attempt: attemptNumber,
+                  provider: route.provider,
+                  model: route.model,
+                  latencyMs: Math.round(performance.now() - fixStartMs),
+                });
+                return result;
+              } catch (retryErr) {
+                const disposition = this.handleAttemptError(
+                  retryErr,
+                  route,
+                  resolved,
+                  tracker,
+                  proxyTracker,
+                  attemptNumber,
+                  isFallback,
+                  errors,
+                );
+                attemptNumber += 1;
+                if (disposition === "continue_proxy") continue proxyLoop;
+                if (disposition === "continue_key") break proxyLoop;
+                if (disposition === "break_route") break outer;
+                throw retryErr;
+              }
+            }
+
+            const disposition = this.handleAttemptError(
+              err,
+              route,
+              resolved,
+              tracker,
+              proxyTracker,
+              attemptNumber,
+              isFallback,
+              errors,
+            );
+            attemptNumber += 1;
+            if (disposition === "continue_proxy") continue proxyLoop;
+            if (disposition === "continue_key") break proxyLoop;
+            if (disposition === "break_route") break outer;
+            throw err;
+          }
         }
 
-        // Route used a fixed api_key_env list - move on after one attempt if that list exhausts.
+        // Public auth uses a single synthetic key; once the proxy pool is exhausted, advance route.
+        if (routeConfig.auth_mode === "public") {
+          break;
+        }
+
         if (routeConfig.api_key_env !== undefined) break outer;
       }
     }
@@ -517,7 +676,8 @@ export class FallbackRouter {
   async *streamWithFallback(
     args: CallWithFallbackArgs,
   ): AsyncGenerator<string, void, unknown> {
-    const { logicalModel, requestData, targetProtocol, maxKeyCycles, signal } = args;
+    const { logicalModel, requestData, targetProtocol, maxKeyCycles, signal, extraHeaders } =
+      args;
     const routeTuples = this.collectRouteConfigs(logicalModel);
     if (routeTuples.length === 0) {
       throw new RoutingError(
@@ -539,8 +699,9 @@ export class FallbackRouter {
         modelConfig,
         maxKeyCycles,
       );
+      const proxyTracker = this.createProxyTrackerForRoute(routeConfig, maxKeyCycles);
 
-      if (routeConfig.api_key_env === undefined && tracker.allKeysInCooldown()) {
+      if (this.shouldSkipRoute(routeConfig, tracker, proxyTracker)) {
         continue;
       }
 
@@ -548,189 +709,144 @@ export class FallbackRouter {
         const resolved = this.resolveApiKeyForRoute(routeConfig, tracker);
         if (resolved === undefined) break;
 
-        const route = this.buildResolvedRoute(
-          routeConfig,
-          sourceModel,
-          resolved.apiKey,
-          resolved.envVar,
-          modelConfig,
-        );
+        let directAttemptDone = false;
+        proxyLoop: while (true) {
+          let proxyEntry:
+            | { url: string; envVar: string }
+            | undefined;
+          if (proxyTracker !== undefined && proxyTracker.totalProxies > 0) {
+            proxyEntry = proxyTracker.getNextProxy();
+            if (proxyEntry === undefined) break;
+          } else {
+            if (directAttemptDone) break;
+            directAttemptDone = true;
+          }
 
-        const attempt: Attempt = {
-          route,
-          attemptNumber,
-          isFallbackRoute: isFallback,
-        };
-        allAttempts.push(attempt);
+          const route = this.buildResolvedRoute(
+            routeConfig,
+            sourceModel,
+            resolved.apiKey,
+            resolved.envVar,
+            modelConfig,
+            {
+              ...(proxyEntry !== undefined
+                ? {
+                    egressProxyUrl: proxyEntry.url,
+                    egressProxyEnvVar: proxyEntry.envVar,
+                  }
+                : {}),
+              ...(extraHeaders !== undefined ? { extraHeaders } : {}),
+            },
+          );
 
-        log.info("attempting streaming route", {
-          attempt: attemptNumber,
-          provider: route.provider,
-          model: route.model,
-          isFallback,
-        });
-        emit({
-          type: "route.attempted",
-          at: nowIso(),
-          attempt: attemptNumber,
-          provider: route.provider,
-          model: route.model,
-          wireProtocol: route.wireProtocol,
-          isFallback,
-          keyHint: keyHintOf(resolved.apiKey),
-        });
-
-        const streamStartMs = performance.now();
-        try {
-          for await (const chunk of executeStream({
+          const attempt: Attempt = {
             route,
-            requestData,
-            targetProtocol,
-            ...(signal !== undefined ? { signal } : {}),
-          })) {
-            yield chunk;
-          }
-          log.info("streaming route succeeded", {
-            provider: route.provider,
-            model: route.model,
-          });
-          emit({
-            type: "route.succeeded",
-            at: nowIso(),
-            attempt: attemptNumber,
-            provider: route.provider,
-            model: route.model,
-            latencyMs: Math.round(performance.now() - streamStartMs),
-          });
-          return;
-        } catch (err) {
-          const actionInfo = resolveErrorAction(route.provider, err);
-          const action = actionInfo.action;
-          const errorInfo = {
-            attempt: attemptNumber,
-            provider: route.provider,
-            model: route.model,
-            error: err instanceof Error ? err.message : String(err),
-            error_type: err instanceof Error ? err.name : "Unknown",
+            attemptNumber,
+            isFallbackRoute: isFallback,
           };
-          const errStatus = extractStatusCode(err);
-          const errMessage = err instanceof Error ? err.message : String(err);
-          const errType = err instanceof Error ? err.name : "Unknown";
+          allAttempts.push(attempt);
 
-          if (action === "fallback_no_cooldown") {
-            emit({
-              type: "route.failed",
-              at: nowIso(),
-              attempt: attemptNumber,
-              provider: route.provider,
-              model: route.model,
-              ...(errStatus !== undefined ? { status: errStatus } : {}),
-              errorType: errType,
-              message: errMessage,
-              willFallback: true,
-            });
-            errors.push(errorInfo);
-            attemptNumber += 1;
-            break;
-          }
-          if (action === "auto_fix_tool_responses") {
-            emit({
-              type: "autofix.applied",
-              at: nowIso(),
-              protocol: targetProtocol,
-              provider: route.provider,
-              model: route.model,
-            });
-            const fixed =
-              targetProtocol === "anthropic"
-                ? fixMissingToolResultsAnthropic(requestData)
-                : fixMissingToolResponsesOpenAI(requestData);
-            const fixStartMs = performance.now();
-            try {
-              for await (const chunk of executeStream({
-                route,
-                requestData: fixed,
-                targetProtocol,
-                ...(signal !== undefined ? { signal } : {}),
-              })) {
-                yield chunk;
-              }
-              emit({
-                type: "route.succeeded",
-                at: nowIso(),
-                attempt: attemptNumber,
-                provider: route.provider,
-                model: route.model,
-                latencyMs: Math.round(performance.now() - fixStartMs),
-              });
-              return;
-            } catch (retryErr) {
-              const retryStatus = extractStatusCode(retryErr);
-              emit({
-                type: "route.failed",
-                at: nowIso(),
-                attempt: attemptNumber,
-                provider: route.provider,
-                model: route.model,
-                ...(retryStatus !== undefined ? { status: retryStatus } : {}),
-                errorType: retryErr instanceof Error ? retryErr.name : "Unknown",
-                message:
-                  retryErr instanceof Error ? retryErr.message : String(retryErr),
-                willFallback: true,
-              });
-              errors.push({
-                ...errorInfo,
-                error: retryErr instanceof Error ? retryErr.message : String(retryErr),
-              });
-              attemptNumber += 1;
-              break;
-            }
-          }
-
-          tracker.markFailed(resolved.apiKey, {
-            action,
-            ...(actionInfo.cooldownSeconds !== undefined
-              ? { cooldownSeconds: actionInfo.cooldownSeconds }
-              : {}),
-          });
-          emit({
-            type: "key.cooldown",
-            at: nowIso(),
+          log.info("attempting streaming route", {
+            attempt: attemptNumber,
             provider: route.provider,
             model: route.model,
-            action,
-            ...(actionInfo.cooldownSeconds !== undefined
-              ? { cooldownSeconds: actionInfo.cooldownSeconds }
-              : {}),
+            isFallback,
+            ...(proxyEntry !== undefined ? { egressProxy: proxyEntry.envVar } : {}),
           });
-          if (isFallbackWorthy(err)) {
-            emit({
-              type: "route.failed",
-              at: nowIso(),
-              attempt: attemptNumber,
-              provider: route.provider,
-              model: route.model,
-              ...(errStatus !== undefined ? { status: errStatus } : {}),
-              errorType: errType,
-              message: errMessage,
-              willFallback: true,
-            });
-            errors.push(errorInfo);
-            attemptNumber += 1;
-            continue;
-          }
           emit({
-            type: "route.failed",
+            type: "route.attempted",
             at: nowIso(),
             attempt: attemptNumber,
             provider: route.provider,
             model: route.model,
-            ...(errStatus !== undefined ? { status: errStatus } : {}),
-            errorType: errType,
-            message: errMessage,
-            willFallback: false,
+            wireProtocol: route.wireProtocol,
+            isFallback,
+            keyHint: keyHintOf(resolved.apiKey),
           });
-          throw err;
+
+          const streamStartMs = performance.now();
+          try {
+            for await (const chunk of executeStream({
+              route,
+              requestData,
+              targetProtocol,
+              ...(signal !== undefined ? { signal } : {}),
+            })) {
+              yield chunk;
+            }
+            emit({
+              type: "route.succeeded",
+              at: nowIso(),
+              attempt: attemptNumber,
+              provider: route.provider,
+              model: route.model,
+              latencyMs: Math.round(performance.now() - streamStartMs),
+            });
+            return;
+          } catch (err) {
+            const actionInfo = resolveErrorAction(route.provider, err);
+            if (actionInfo.action === "auto_fix_tool_responses") {
+              const fixed =
+                targetProtocol === "anthropic"
+                  ? fixMissingToolResultsAnthropic(requestData)
+                  : fixMissingToolResponsesOpenAI(requestData);
+              try {
+                for await (const chunk of executeStream({
+                  route,
+                  requestData: fixed,
+                  targetProtocol,
+                  ...(signal !== undefined ? { signal } : {}),
+                })) {
+                  yield chunk;
+                }
+                emit({
+                  type: "route.succeeded",
+                  at: nowIso(),
+                  attempt: attemptNumber,
+                  provider: route.provider,
+                  model: route.model,
+                  latencyMs: Math.round(performance.now() - streamStartMs),
+                });
+                return;
+              } catch (retryErr) {
+                const disposition = this.handleAttemptError(
+                  retryErr,
+                  route,
+                  resolved,
+                  tracker,
+                  proxyTracker,
+                  attemptNumber,
+                  isFallback,
+                  errors,
+                );
+                attemptNumber += 1;
+                if (disposition === "continue_proxy") continue proxyLoop;
+                if (disposition === "continue_key") break proxyLoop;
+                if (disposition === "break_route") break outer;
+                throw retryErr;
+              }
+            }
+
+            const disposition = this.handleAttemptError(
+              err,
+              route,
+              resolved,
+              tracker,
+              proxyTracker,
+              attemptNumber,
+              isFallback,
+              errors,
+            );
+            attemptNumber += 1;
+            if (disposition === "continue_proxy") continue proxyLoop;
+            if (disposition === "continue_key") break proxyLoop;
+            if (disposition === "break_route") break outer;
+            throw err;
+          }
+        }
+
+        if (routeConfig.auth_mode === "public") {
+          break;
         }
 
         if (routeConfig.api_key_env !== undefined) break outer;

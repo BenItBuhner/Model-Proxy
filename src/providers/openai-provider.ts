@@ -6,6 +6,11 @@ import {
   type ProviderCallContext,
 } from "./base.ts";
 import { ProviderAPIError } from "./errors.ts";
+import {
+  parseRetryAfterFromErrorBody,
+  parseRetryAfterHeader,
+  upstreamFetch,
+} from "./upstream-fetch.ts";
 
 const log = createLogger("provider.openai");
 
@@ -29,6 +34,18 @@ export class OpenAIProvider extends AbstractProvider {
     };
   }
 
+  protected openAIRequestHeaders(
+    ctx: ProviderCallContext,
+    accept: string,
+  ): Record<string, string> {
+    return {
+      ...this.authHeaders(ctx),
+      ...(ctx.extraHeaders ?? {}),
+      "Content-Type": "application/json",
+      Accept: accept,
+    };
+  }
+
   async callOpenAI(
     args: OpenAICallArgs,
     ctx: ProviderCallContext,
@@ -44,11 +61,7 @@ export class OpenAIProvider extends AbstractProvider {
       url,
       {
         method: "POST",
-        headers: {
-          ...this.authHeaders(ctx),
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: this.openAIRequestHeaders(ctx, "application/json"),
         body: JSON.stringify(payload),
       },
       ctx,
@@ -75,15 +88,12 @@ export class OpenAIProvider extends AbstractProvider {
     }
 
     try {
-      const response = await fetch(url, {
+      const response = await upstreamFetch(url, {
         method: "POST",
-        headers: {
-          ...this.authHeaders(ctx),
-          "Content-Type": "application/json",
-          Accept: "text/event-stream",
-          "Cache-Control": "no-cache",
-        },
+        headers: this.openAIRequestHeaders(ctx, "text/event-stream"),
         body: JSON.stringify(payload),
+        proxy: ctx.egressProxyUrl,
+        timeoutMs: Math.max(1, ctx.timeoutSeconds * 1000),
         signal: controller.signal,
       });
 
@@ -92,7 +102,12 @@ export class OpenAIProvider extends AbstractProvider {
         throw new ProviderAPIError(
           `${this.providerName} API error ${response.status}: ${body.slice(0, 500)}`,
           response.status,
-          { body, provider: this.providerName },
+          {
+            body,
+            provider: this.providerName,
+            retryAfterSeconds:
+              parseRetryAfterHeader(response) ?? parseRetryAfterFromErrorBody(body),
+          },
         );
       }
 
