@@ -71,9 +71,9 @@ function DashboardBody(): React.ReactElement {
 
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4 mb-6">
         <MetricCard label="Status" value={health?.status ?? "…"} tone="phosphor" sublabel={health !== undefined ? `uptime ${formatUptime(health.uptime_seconds)}` : undefined} />
-        <MetricCard label="Requests" value={String(records.length)} sublabel={`${metrics.success} ok · ${metrics.failed} err`} />
-        <MetricCard label="Avg latency" value={metrics.avgMs !== undefined ? `${metrics.avgMs}ms` : "–"} sublabel={metrics.p95Ms !== undefined ? `p95 ${metrics.p95Ms}ms` : undefined} />
-        <MetricCard label="Enforce mode" value={`${metrics.enforcedPercent}%`} sublabel="last 15 requests" />
+        <MetricCard label="Requests" value={String(records.length)} sublabel={`${metrics.active} running · ${metrics.success} ok · ${metrics.failed} err`} />
+        <MetricCard label="Avg duration" value={metrics.avgMs !== undefined ? formatDurationMs(metrics.avgMs) : "–"} sublabel={metrics.p95Ms !== undefined ? `p95 ${formatDurationMs(metrics.p95Ms)}` : "completed only"} />
+        <MetricCard label="Avg speed" value={metrics.avgTokensPerSecond !== undefined ? `${metrics.avgTokensPerSecond.toFixed(1)} tok/s` : "–"} sublabel={`${metrics.enforcedPercent}% enforce · completed`} />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-3">
@@ -84,16 +84,18 @@ function DashboardBody(): React.ReactElement {
                 <Th width="14ch">When</Th>
                 <Th>Model</Th>
                 <Th>Route</Th>
-                <Th align="right" width="10ch">Latency</Th>
+                <Th align="right" width="10ch">Duration</Th>
+                <Th align="right" width="10ch">Tokens in</Th>
+                <Th align="right" width="10ch">Speed</Th>
                 <Th align="center" width="14ch">Status</Th>
               </Tr>
             </Thead>
             <tbody>
               {records.length === 0 ? (
-                <EmptyRow colSpan={5}>no requests yet</EmptyRow>
+                <EmptyRow colSpan={7}>no requests yet</EmptyRow>
               ) : (
                 records.map((r) => (
-                  <Tr key={r.requestId}>
+                  <Tr key={r.requestId} className={r.state === "running" ? "bg-phosphor-50/40" : undefined}>
                     <Td className="text-bone-300">{formatRelativeTime(r.timestamp)}</Td>
                     <Td className="text-bone-900">{truncate(r.requestedModel, 30)}</Td>
                     <Td>
@@ -108,10 +110,16 @@ function DashboardBody(): React.ReactElement {
                       )}
                     </Td>
                     <Td align="right" className="text-bone-500">
-                      {r.responseTimeMs !== undefined ? `${r.responseTimeMs}` : "-"}
+                      {formatDurationMs(r.elapsedMs)}
+                    </Td>
+                    <Td align="right" className="text-bone-500">
+                      {formatTokenCount(r.promptTokens, r.promptTokensEstimated)}
+                    </Td>
+                    <Td align="right" className="text-bone-500">
+                      {formatSpeed(r)}
                     </Td>
                     <Td align="center">
-                      <StatusChip status={r.responseStatus} error={r.errorType} enforce={r.enforceMode} />
+                      <StatusChip status={r.responseStatus} error={r.errorType} enforce={r.enforceMode} state={r.state} />
                     </Td>
                   </Tr>
                 ))
@@ -146,23 +154,43 @@ function DashboardBody(): React.ReactElement {
 }
 
 function computeMetrics(records: RequestLogRecord[]): {
+  active: number;
   success: number;
   failed: number;
   avgMs: number | undefined;
   p95Ms: number | undefined;
   enforcedPercent: number;
+  avgTokensPerSecond: number | undefined;
 } {
   if (records.length === 0) {
-    return { success: 0, failed: 0, avgMs: undefined, p95Ms: undefined, enforcedPercent: 0 };
+    return {
+      active: 0,
+      success: 0,
+      failed: 0,
+      avgMs: undefined,
+      p95Ms: undefined,
+      enforcedPercent: 0,
+      avgTokensPerSecond: undefined,
+    };
   }
+  let active = 0;
   let success = 0;
   let failed = 0;
   let enforced = 0;
   const latencies: number[] = [];
+  const tokenSpeeds: number[] = [];
   for (const r of records) {
-    if (r.responseStatus !== undefined && r.responseStatus < 400) success += 1;
+    if (r.state === "running") active += 1;
+    else if (r.responseStatus !== undefined && r.responseStatus < 400) success += 1;
     else failed += 1;
     if (r.responseTimeMs !== undefined) latencies.push(r.responseTimeMs);
+    if (
+      r.completionTokens !== undefined &&
+      r.responseTimeMs !== undefined &&
+      r.responseTimeMs > 0
+    ) {
+      tokenSpeeds.push(r.completionTokens / (r.responseTimeMs / 1000));
+    }
     if (r.enforceMode) enforced += 1;
   }
   const avgMs =
@@ -173,7 +201,11 @@ function computeMetrics(records: RequestLogRecord[]): {
   const p95Ms =
     sorted.length > 0 ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] : undefined;
   const enforcedPercent = Math.round((enforced / records.length) * 100);
-  return { success, failed, avgMs, p95Ms, enforcedPercent };
+  const avgTokensPerSecond =
+    tokenSpeeds.length > 0
+      ? tokenSpeeds.reduce((a, b) => a + b, 0) / tokenSpeeds.length
+      : undefined;
+  return { active, success, failed, avgMs, p95Ms, enforcedPercent, avgTokensPerSecond };
 }
 
 function MetricCard({
@@ -238,16 +270,50 @@ function StatusChip({
   status,
   error,
   enforce,
+  state,
 }: {
   status?: number;
   error?: string;
   enforce: boolean;
+  state: "running" | "completed";
 }): React.ReactElement {
+  if (state === "running") return <Badge tone="phosphor">running</Badge>;
   if (status === undefined) return <Badge tone="muted">pending</Badge>;
   if (status >= 500) return <Badge tone="danger">{status}</Badge>;
   if (status >= 400) return <Badge tone="warning">{status}</Badge>;
   if (error !== undefined) return <Badge tone="warning">{status}</Badge>;
   return enforce ? <Badge tone="phosphor">{status} · enforce</Badge> : <Badge tone="bone">{status}</Badge>;
+}
+
+function formatDurationMs(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes < 60) return `${minutes}m ${remainingSeconds}s`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours}h ${remainingMinutes}m`;
+}
+
+function formatTokenCount(value: number | undefined, estimated: boolean | undefined): string {
+  if (value === undefined) return "–";
+  return `${value}${estimated === true ? "~" : ""}`;
+}
+
+function formatSpeed(record: RequestLogRecord): string {
+  if (
+    record.completionTokens !== undefined &&
+    record.responseTimeMs !== undefined &&
+    record.responseTimeMs > 0
+  ) {
+    return `${(record.completionTokens / (record.responseTimeMs / 1000)).toFixed(1)} tok/s`;
+  }
+  if (record.streamBytes !== undefined && record.elapsedMs > 0) {
+    return `${(record.streamBytes / (record.elapsedMs / 1000) / 1024).toFixed(1)} KB/s`;
+  }
+  return "–";
 }
 
 function formatUptime(seconds: number): string {

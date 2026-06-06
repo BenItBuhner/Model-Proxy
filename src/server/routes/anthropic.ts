@@ -24,7 +24,9 @@ import { FallbackRouter } from "../../routing/fallback.ts";
 import { requireAuth } from "../auth.ts";
 import { formatAnthropicError } from "../error-formatters.ts";
 import {
+  estimateRequestTokens,
   recordRequestFinish,
+  recordRequestProgress,
   recordRequestStart,
 } from "../request-log.ts";
 
@@ -99,6 +101,8 @@ export function createAnthropicRoutes(): Hono {
       wireProtocol: "anthropic",
       isStreaming: isStream,
       enforceMode: enforceConfig.enabled,
+      promptTokens: estimateRequestTokens(requestDict),
+      promptTokensEstimated: true,
     });
 
     const signal = c.req.raw.signal;
@@ -133,7 +137,13 @@ export function createAnthropicRoutes(): Hono {
                     ...(signal !== undefined ? { signal } : {}),
                   });
               for await (const chunk of generator) {
-                controller.enqueue(encoder.encode(chunk));
+                const encoded = encoder.encode(chunk);
+                controller.enqueue(encoded);
+                recordRequestProgress({
+                  requestId,
+                  streamBytes: encoded.byteLength,
+                  streamChunkCount: 1,
+                });
               }
               controller.close();
               const totalMs = Math.round(performance.now() - startedAt);
@@ -211,12 +221,25 @@ export function createAnthropicRoutes(): Hono {
           ...response,
           model: request.model,
         };
+        const usage = responseObj["usage"];
+        const usageObj =
+          typeof usage === "object" && usage !== null
+            ? (usage as Record<string, unknown>)
+            : {};
         const totalMs = Math.round(performance.now() - startedAt);
-        recordRequestFinish({
+        const finish: Parameters<typeof recordRequestFinish>[0] = {
           requestId,
           responseStatus: 200,
           responseTimeMs: totalMs,
-        });
+        };
+        const input = usageObj["input_tokens"];
+        const output = usageObj["output_tokens"];
+        if (typeof input === "number") finish.promptTokens = input;
+        if (typeof output === "number") finish.completionTokens = output;
+        if (typeof input === "number" && typeof output === "number") {
+          finish.totalTokens = input + output;
+        }
+        recordRequestFinish(finish);
         emit({ type: "request.finished", at: nowIso(), status: 200, totalMs });
         return c.json(responseObj);
       } catch (err) {

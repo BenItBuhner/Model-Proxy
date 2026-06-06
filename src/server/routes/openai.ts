@@ -30,7 +30,9 @@ import { FallbackRouter } from "../../routing/fallback.ts";
 import { requireAuth } from "../auth.ts";
 import { formatOpenAIError } from "../error-formatters.ts";
 import {
+  estimateRequestTokens,
   recordRequestFinish,
+  recordRequestProgress,
   recordRequestStart,
 } from "../request-log.ts";
 
@@ -169,6 +171,8 @@ async function handleChatCompletions(
     wireProtocol: "openai",
     isStreaming: isStream,
     enforceMode: enforceConfig.enabled,
+    promptTokens: estimateRequestTokens(requestDict),
+    promptTokensEstimated: true,
   });
 
   const signal = c.req.raw.signal;
@@ -209,7 +213,13 @@ async function handleChatCompletions(
                   ...(signal !== undefined ? { signal } : {}),
                 });
             for await (const chunk of generator) {
-              controller.enqueue(encoder.encode(chunk));
+              const encoded = encoder.encode(chunk);
+              controller.enqueue(encoded);
+              recordRequestProgress({
+                requestId,
+                streamBytes: encoded.byteLength,
+                streamChunkCount: 1,
+              });
             }
             controller.close();
             const totalMs = Math.round(performance.now() - startedAt);

@@ -19,6 +19,7 @@ import { resetProxyState } from "../src/providers/egress-proxy-manager.ts";
 import { ProviderAPIError } from "../src/providers/errors.ts";
 import { providerRegistry } from "../src/providers/registry.ts";
 import { createApp } from "../src/server/app.ts";
+import { resetRequestLogForTests } from "../src/server/request-log.ts";
 
 const tmpRoot = join(tmpdir(), `mp-events-${process.pid}-${Date.now()}`);
 
@@ -35,7 +36,7 @@ class FakeProvider implements BaseProvider {
   readonly wireProtocol = "openai" as const;
   readonly config = {} as BaseProvider["config"];
 
-  static responses: Array<Record<string, unknown> | Error> = [];
+  static responses: Array<Record<string, unknown> | Promise<Record<string, unknown>> | Error> = [];
   static calls: Array<{ args: OpenAICallArgs; ctx: ProviderCallContext }> = [];
 
   async callOpenAI(
@@ -46,7 +47,7 @@ class FakeProvider implements BaseProvider {
     const next = FakeProvider.responses.shift();
     if (next === undefined) throw new Error("no response queued");
     if (next instanceof Error) throw next;
-    return next;
+    return await next;
   }
 
   async callAnthropic(
@@ -160,6 +161,7 @@ afterEach(() => {
   FakeProvider.responses = [];
   FakeProvider.calls = [];
   eventSink._resetForTests();
+  resetRequestLogForTests();
 });
 
 const app = createApp();
@@ -224,6 +226,81 @@ describe("request-scoped event tracing", () => {
       headers: auth,
     });
     expect(res.status).toBe(404);
+  });
+
+  test("admin logs include a running request before it finishes", async () => {
+    let resolveResponse: (value: Record<string, unknown>) => void = () => {};
+    const responsePromise = new Promise<Record<string, unknown>>((resolve) => {
+      resolveResponse = resolve;
+    });
+    FakeProvider.responses = [responsePromise];
+
+    const id = "test-req-running";
+    const inferPromise = app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json", "x-request-id": id },
+      body: JSON.stringify({
+        model: "fakee-model",
+        messages: [{ role: "user", content: "please take your time" }],
+      }),
+    });
+
+    await waitFor(() => FakeProvider.calls.length === 1);
+
+    const logsRes = await app.request("/v1/admin/logs", { headers: auth });
+    expect(logsRes.status).toBe(200);
+    const logs = (await logsRes.json()) as {
+      active_count: number;
+      records: Array<{
+        requestId: string;
+        state: string;
+        responseStatus?: number;
+        elapsedMs: number;
+        requestedModel: string;
+        resolvedProvider?: string;
+        resolvedModel?: string;
+        promptTokens?: number;
+        promptTokensEstimated?: boolean;
+      }>;
+    };
+    const running = logs.records.find((record) => record.requestId === id);
+    expect(logs.active_count).toBe(1);
+    expect(running).toBeDefined();
+    expect(running?.state).toBe("running");
+    expect(running?.responseStatus).toBeUndefined();
+    expect(running?.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(running?.requestedModel).toBe("fakee-model");
+    expect(running?.resolvedProvider).toBe("fakee");
+    expect(running?.resolvedModel).toBe("fakee-backend");
+    expect(running?.promptTokens).toBeGreaterThan(0);
+    expect(running?.promptTokensEstimated).toBe(true);
+
+    resolveResponse({
+      id: "c-running",
+      object: "chat.completion",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "done" },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+    });
+
+    const inferRes = await inferPromise;
+    expect(inferRes.status).toBe(200);
+
+    const finalLogsRes = await app.request("/v1/admin/logs", { headers: auth });
+    const finalLogs = (await finalLogsRes.json()) as {
+      active_count: number;
+      records: Array<{ requestId: string; state: string; responseStatus?: number; promptTokens?: number }>;
+    };
+    const completed = finalLogs.records.find((record) => record.requestId === id);
+    expect(finalLogs.active_count).toBe(0);
+    expect(completed?.state).toBe("completed");
+    expect(completed?.responseStatus).toBe(200);
+    expect(completed?.promptTokens).toBe(4);
   });
 
   test("snapshot requires auth", async () => {
@@ -292,3 +369,12 @@ describe("request-scoped event tracing", () => {
     });
   });
 });
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("condition was not met before timeout");
+}

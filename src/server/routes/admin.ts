@@ -26,6 +26,7 @@ import type { ImportOptions } from "../../../shared/schemas/config-bundle.ts";
 import { eventSink } from "../../observability/event-sink.ts";
 import { createLogger } from "../../observability/logger.ts";
 import { requestLogRingBuffer } from "../../observability/ring-buffer.ts";
+import { activeRequestCount, recentRequestLogs } from "../request-log.ts";
 import {
   isAuthConfigured,
   isSessionValid,
@@ -127,12 +128,12 @@ export function createAdminRoutes(): Hono {
   protectedApp.get("/v1/admin/logs", (c) => {
     const limitParam = c.req.query("limit");
     const limit = limitParam !== undefined ? Number.parseInt(limitParam, 10) : undefined;
-    const records = requestLogRingBuffer.recent(
-      Number.isFinite(limit) && limit !== undefined && limit > 0 ? limit : 100,
-    );
+    const effectiveLimit = Number.isFinite(limit) && limit !== undefined && limit > 0 ? limit : 100;
+    const records = recentRequestLogs(effectiveLimit);
     return c.json({
       count: records.length,
       total_in_buffer: requestLogRingBuffer.size,
+      active_count: activeRequestCount(),
       records,
     });
   });
