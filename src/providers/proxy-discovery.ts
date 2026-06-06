@@ -105,10 +105,12 @@ export async function discoverProxies(
     if (!("url" in profile)) skippedProviders[profile.provider] = profile.reason;
   }
 
+  const sourceUrls = options.sources ?? (options.candidates === undefined ? DEFAULT_SOURCES : []);
+  const includeSharedPool = options.sources === undefined && options.candidates === undefined;
   const candidates = normalizeCandidates([
     ...(options.candidates ?? []),
-    ...await fetchCandidates(options.sources ?? DEFAULT_SOURCES, fetcher),
-    ...sharedProxyEntriesFromEnv(),
+    ...await fetchCandidates(sourceUrls, fetcher),
+    ...(includeSharedPool ? sharedProxyEntriesFromEnv() : []),
   ]).slice(0, sourceLimit);
 
   const accepted: AcceptedProxy[] = [];
