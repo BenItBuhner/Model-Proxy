@@ -23,6 +23,9 @@ export type RequestEvent =
       wireProtocol: "openai" | "anthropic" | "audio";
       isFallback: boolean;
       keyHint: string;
+      apiKeyEnvVar?: string;
+      egressProxyEnvVar?: string;
+      egressProxyHint?: string;
     }
   | {
       type: "route.succeeded";
@@ -49,6 +52,15 @@ export type RequestEvent =
       provider: string;
       model: string;
       action: string;
+      cooldownSeconds?: number;
+    }
+  | {
+      type: "proxy.cooldown";
+      at: string;
+      provider: string;
+      model: string;
+      egressProxyEnvVar?: string;
+      egressProxyHint?: string;
       cooldownSeconds?: number;
     }
   | {
