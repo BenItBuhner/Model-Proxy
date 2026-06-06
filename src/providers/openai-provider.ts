@@ -139,7 +139,7 @@ export class OpenAIProvider extends AbstractProvider {
         if (trimmed === "" || trimmed === "data:") continue;
         if (trimmed === "data: [DONE]") {
           yield "data: [DONE]\n\n";
-          continue;
+          return;
         }
         if (!trimmed.startsWith("data:")) {
           if (/error|ResponseStreamResult/i.test(trimmed)) {
@@ -153,7 +153,11 @@ export class OpenAIProvider extends AbstractProvider {
           continue;
         }
         const jsonStr = trimmed.slice(5).trim();
-        if (jsonStr.length === 0 || jsonStr === "[DONE]") continue;
+        if (jsonStr.length === 0) continue;
+        if (jsonStr === "[DONE]") {
+          yield "data: [DONE]\n\n";
+          return;
+        }
         try {
           const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
           if (
