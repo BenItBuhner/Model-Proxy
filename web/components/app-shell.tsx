@@ -50,6 +50,7 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
   const router = useRouter();
   const [health, setHealth] = useState<HealthDetailed | undefined>(undefined);
   const [healthErr, setHealthErr] = useState<string | undefined>(undefined);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -70,6 +71,27 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
     };
   }, []);
 
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") setMobileNavOpen(false);
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [mobileNavOpen]);
+
   const handleLogout = async (): Promise<void> => {
     try {
       await logoutRequest();
@@ -82,50 +104,40 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
 
   return (
     <div className="min-h-screen">
-      <div className="mx-auto flex min-h-screen max-w-[1400px] px-6 py-8">
-        <aside className="hidden w-[240px] shrink-0 lg:flex flex-col gap-8 pr-8">
+      <MobileSiderail
+        health={health}
+        healthErr={healthErr}
+        isOpen={mobileNavOpen}
+        onClose={() => setMobileNavOpen(false)}
+        onLogout={handleLogout}
+        pathname={pathname}
+      />
+      <div className="mx-auto flex min-h-screen max-w-[1400px] flex-col px-4 py-4 lg:flex-row lg:px-6 lg:py-8">
+        <header className="sticky top-0 z-40 -mx-4 mb-5 flex items-center justify-between border-b border-ink-500 bg-ink-900/95 px-4 py-3 backdrop-blur lg:hidden">
           <BrandMark />
-          <nav className="flex flex-col gap-1">
-            {NAV.map((item) => {
-              const active = isNavActive(pathname, item);
-              return (
-                <Link
-                  key={item.code}
-                  href={item.href}
-                  className={cn(
-                    "group flex items-center justify-between border-l-2 border-transparent px-3 py-2 font-mono text-[11px] uppercase tracking-[0.2em] transition-colors",
-                    active
-                      ? "border-phosphor-500 bg-phosphor-50 text-bone-900"
-                      : "text-bone-500 hover:border-ink-200 hover:bg-ink-700 hover:text-bone-900",
-                  )}
-                >
-                  <span className="flex items-center gap-3">
-                    <span
-                      className={cn(
-                        "text-bone-300 group-hover:text-phosphor-500",
-                        active && "text-phosphor-500",
-                      )}
-                    >
-                      {item.code}
-                    </span>
-                    {item.label}
-                  </span>
-                  {active ? (
-                    <span className="text-phosphor-500">›</span>
-                  ) : null}
-                </Link>
-              );
-            })}
-          </nav>
-          <div className="mt-auto flex flex-col gap-3 border-t border-ink-500 pt-4">
-            <SystemStatus health={health} error={healthErr} />
-            <button
-              onClick={handleLogout}
-              className="text-left font-mono text-[10px] uppercase tracking-[0.2em] text-bone-300 transition-colors hover:text-alert-500"
-            >
-              ← Sign out
-            </button>
-          </div>
+          <button
+            type="button"
+            aria-controls="mobile-siderail"
+            aria-expanded={mobileNavOpen}
+            aria-label="Open navigation"
+            onClick={() => setMobileNavOpen(true)}
+            className="group inline-flex h-10 w-10 items-center justify-center border border-ink-300 bg-ink-700 text-bone-900 shadow-edge transition-colors hover:border-phosphor-500 hover:text-phosphor-500 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-phosphor-500"
+          >
+            <span className="sr-only">Open navigation</span>
+            <span className="flex w-4 flex-col gap-1">
+              <span className="h-px w-full bg-current transition-transform group-hover:translate-x-0.5" />
+              <span className="h-px w-full bg-current" />
+              <span className="h-px w-full bg-current transition-transform group-hover:-translate-x-0.5" />
+            </span>
+          </button>
+        </header>
+        <aside className="hidden w-[240px] shrink-0 lg:flex flex-col gap-8 pr-8">
+          <SideRailContent
+            health={health}
+            healthErr={healthErr}
+            onLogout={handleLogout}
+            pathname={pathname}
+          />
         </aside>
 
         <main className="flex-1 min-w-0 animate-flicker-in">
@@ -133,6 +145,143 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
         </main>
       </div>
     </div>
+  );
+}
+
+function MobileSiderail({
+  health,
+  healthErr,
+  isOpen,
+  onClose,
+  onLogout,
+  pathname,
+}: {
+  health: HealthDetailed | undefined;
+  healthErr: string | undefined;
+  isOpen: boolean;
+  onClose: () => void;
+  onLogout: () => void;
+  pathname: string;
+}): React.ReactElement {
+  return (
+    <div
+      className={cn(
+        "fixed inset-0 z-50 lg:hidden",
+        isOpen ? "pointer-events-auto" : "pointer-events-none",
+      )}
+      aria-hidden={!isOpen}
+      inert={isOpen ? undefined : true}
+    >
+      <button
+        type="button"
+        aria-label="Close navigation"
+        onClick={onClose}
+        className={cn(
+          "absolute inset-0 bg-ink-900/75 transition-opacity duration-200",
+          isOpen ? "opacity-100" : "opacity-0",
+        )}
+      />
+      <aside
+        id="mobile-siderail"
+        role="dialog"
+        aria-label="Navigation menu"
+        aria-modal="true"
+        className={cn(
+          "absolute left-0 top-0 flex h-dvh w-[min(20rem,calc(100vw-2rem))] flex-col gap-8 border-r border-ink-300 bg-ink-850 px-6 py-6 shadow-[0_0_40px_rgba(0,0,0,0.55)] transition-transform duration-200 ease-out",
+          isOpen ? "translate-x-0" : "-translate-x-full",
+        )}
+      >
+        <SideRailContent
+          action={
+            <button
+              type="button"
+              aria-label="Close navigation"
+              onClick={onClose}
+              className="relative h-9 w-9 shrink-0 border border-ink-300 bg-ink-700 text-bone-900 shadow-edge transition-colors hover:border-phosphor-500 hover:text-phosphor-500 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-phosphor-500"
+            >
+              <span className="absolute left-1/2 top-1/2 h-px w-4 -translate-x-1/2 -translate-y-1/2 rotate-45 bg-current" />
+              <span className="absolute left-1/2 top-1/2 h-px w-4 -translate-x-1/2 -translate-y-1/2 -rotate-45 bg-current" />
+            </button>
+          }
+          health={health}
+          healthErr={healthErr}
+          onLogout={onLogout}
+          onNavigate={onClose}
+          pathname={pathname}
+        />
+      </aside>
+    </div>
+  );
+}
+
+function SideRailContent({
+  action,
+  health,
+  healthErr,
+  onLogout,
+  onNavigate,
+  pathname,
+}: {
+  action?: React.ReactNode;
+  health: HealthDetailed | undefined;
+  healthErr: string | undefined;
+  onLogout: () => Promise<void> | void;
+  onNavigate?: () => void;
+  pathname: string;
+}): React.ReactElement {
+  const handleLogoutClick = (): void => {
+    onNavigate?.();
+    void onLogout();
+  };
+
+  return (
+    <>
+      <div className="flex items-start justify-between gap-4">
+        <BrandMark />
+        {action}
+      </div>
+      <nav className="flex flex-col gap-1">
+        {NAV.map((item) => {
+          const active = isNavActive(pathname, item);
+          return (
+            <Link
+              key={item.code}
+              href={item.href}
+              onClick={onNavigate}
+              className={cn(
+                "group flex items-center justify-between border-l-2 border-transparent px-3 py-2 font-mono text-[11px] uppercase tracking-[0.2em] transition-colors",
+                active
+                  ? "border-phosphor-500 bg-phosphor-50 text-bone-900"
+                  : "text-bone-500 hover:border-ink-200 hover:bg-ink-700 hover:text-bone-900",
+              )}
+            >
+              <span className="flex items-center gap-3">
+                <span
+                  className={cn(
+                    "text-bone-300 group-hover:text-phosphor-500",
+                    active && "text-phosphor-500",
+                  )}
+                >
+                  {item.code}
+                </span>
+                {item.label}
+              </span>
+              {active ? <span className="text-phosphor-500">›</span> : null}
+            </Link>
+          );
+        })}
+      </nav>
+      <div className="mt-auto flex flex-col gap-3 border-t border-ink-500 pt-4">
+        <SystemStatus health={health} error={healthErr} />
+        <button
+          type="button"
+          onClick={handleLogoutClick}
+          className="text-left font-mono text-[10px] uppercase tracking-[0.2em] text-bone-300 transition-colors hover:text-alert-500"
+        >
+          ← Sign out
+        </button>
+      </div>
+    </>
   );
 }
 

@@ -33,11 +33,21 @@ import {
 } from "./tool-response-fixer.ts";
 
 function keyHintOf(apiKey: string): string {
+  if (usesPublicAuth(apiKey)) return "(public)";
   return apiKey.length >= 4 ? `...${apiKey.slice(-4)}` : "****";
 }
 
 function usesPublicAuth(apiKey: string): boolean {
   return apiKey === "public";
+}
+
+function proxyHintOf(proxyUrl: string): string {
+  try {
+    const parsed = new URL(proxyUrl);
+    return parsed.host;
+  } catch {
+    return proxyUrl.replace(/\/\/[^@/]+@/, "//***@");
+  }
 }
 
 // Unused-declaration helpers to keep imports stable across callers.
@@ -397,11 +407,14 @@ export class FallbackRouter {
         ...(cooldown !== undefined ? { cooldownSeconds: cooldown } : {}),
       });
       emit({
-        type: "key.cooldown",
+        type: "proxy.cooldown",
         at: nowIso(),
         provider: route.provider,
         model: route.model,
-        action: "provider_cooldown",
+        ...(route.egressProxyEnvVar !== undefined
+          ? { egressProxyEnvVar: route.egressProxyEnvVar }
+          : {}),
+        egressProxyHint: proxyHintOf(route.egressProxyUrl),
         ...(cooldown !== undefined ? { cooldownSeconds: cooldown } : {}),
       });
       if (!proxyTracker.exhausted()) return "continue_proxy";
@@ -560,6 +573,13 @@ export class FallbackRouter {
             wireProtocol: route.wireProtocol,
             isFallback,
             keyHint: keyHintOf(resolved.apiKey),
+            apiKeyEnvVar: resolved.envVar,
+            ...(proxyEntry !== undefined
+              ? {
+                  egressProxyEnvVar: proxyEntry.envVar,
+                  egressProxyHint: proxyHintOf(proxyEntry.url),
+                }
+              : {}),
           });
 
           const routeStartMs = performance.now();
@@ -762,6 +782,13 @@ export class FallbackRouter {
             wireProtocol: route.wireProtocol,
             isFallback,
             keyHint: keyHintOf(resolved.apiKey),
+            apiKeyEnvVar: resolved.envVar,
+            ...(proxyEntry !== undefined
+              ? {
+                  egressProxyEnvVar: proxyEntry.envVar,
+                  egressProxyHint: proxyHintOf(proxyEntry.url),
+                }
+              : {}),
           });
 
           const streamStartMs = performance.now();

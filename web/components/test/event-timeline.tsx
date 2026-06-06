@@ -137,6 +137,8 @@ function classify(type: RequestEventType): {
       return { label: "fail", tone: "danger" };
     case "key.cooldown":
       return { label: "cooldown", tone: "warning" };
+    case "proxy.cooldown":
+      return { label: "proxy", tone: "warning" };
     case "autofix.applied":
       return { label: "autofix", tone: "warning" };
     case "enforce.injected":
@@ -165,13 +167,15 @@ function summarize(event: RequestEvent): string {
     case "request.finished":
       return `HTTP ${event.status} in ${event.totalMs}ms${event.errorType !== undefined ? " · " + event.errorType : ""}`;
     case "route.attempted":
-      return `attempt ${event.attempt} → ${event.provider}/${event.model}${event.isFallback ? " [fallback]" : ""} · key ${event.keyHint}`;
+      return `attempt ${event.attempt} → ${event.provider}/${event.model}${event.isFallback ? " [fallback]" : ""} · key ${event.keyHint}${event.apiKeyEnvVar !== undefined ? " via " + event.apiKeyEnvVar : ""}${event.egressProxyHint !== undefined ? " · proxy " + event.egressProxyHint : ""}${event.egressProxyEnvVar !== undefined ? " via " + event.egressProxyEnvVar : ""}`;
     case "route.succeeded":
       return `${event.provider}/${event.model} ok in ${event.latencyMs}ms`;
     case "route.failed":
       return `${event.provider}/${event.model} ${event.status ?? "?"} · ${event.errorType}${event.willFallback ? " → fallback" : ""}`;
     case "key.cooldown":
       return `${event.provider}/${event.model} · ${event.action}${event.cooldownSeconds !== undefined ? " (" + event.cooldownSeconds + "s)" : ""}`;
+    case "proxy.cooldown":
+      return `${event.provider}/${event.model} · proxy ${event.egressProxyHint ?? event.egressProxyEnvVar ?? "unknown"} cooldown${event.cooldownSeconds !== undefined ? " (" + event.cooldownSeconds + "s)" : ""}`;
     case "autofix.applied":
       return `${event.protocol} tool-response autofix on ${event.provider}/${event.model}`;
     case "enforce.injected":
