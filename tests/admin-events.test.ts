@@ -232,6 +232,10 @@ describe("request-scoped event tracing", () => {
   });
 
   test("route traces expose masked proxy rotation metadata", async () => {
+    const savedSharedProxyEnv = Object.entries(process.env).filter(([key]) =>
+      key.startsWith("MODEL_PROXY_EGRESS_PROXY"),
+    );
+    for (const [key] of savedSharedProxyEnv) delete process.env[key];
     FakeProvider.responses = [
       new ProviderAPIError("429 first", 429, {
         provider: "fakee-proxy",
@@ -252,43 +256,50 @@ describe("request-scoped event tracing", () => {
     resetKeyState("fakee-proxy");
     resetProxyState("fakee-proxy");
 
-    const id = "test-req-proxy";
-    const inferRes = await app.request("/v1/chat/completions", {
-      method: "POST",
-      headers: { ...auth, "content-type": "application/json", "x-request-id": id },
-      body: JSON.stringify({
-        model: "fakee-proxy-model",
-        messages: [{ role: "user", content: "hi" }],
-      }),
-    });
-    expect(inferRes.status).toBe(200);
+    try {
+      const id = "test-req-proxy";
+      const inferRes = await app.request("/v1/chat/completions", {
+        method: "POST",
+        headers: { ...auth, "content-type": "application/json", "x-request-id": id },
+        body: JSON.stringify({
+          model: "fakee-proxy-model",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      expect(inferRes.status).toBe(200);
 
-    const snapRes = await app.request(
-      `/v1/admin/events/${encodeURIComponent(id)}`,
-      { headers: auth },
-    );
-    expect(snapRes.status).toBe(200);
-    const snap = (await snapRes.json()) as {
-      events: Array<{
-        type: string;
-        egressProxyEnvVar?: string;
-        egressProxyHint?: string;
-      }>;
-    };
-    const attempts = snap.events.filter((event) => event.type === "route.attempted");
-    expect(attempts).toMatchObject([
-      {
+      const snapRes = await app.request(
+        `/v1/admin/events/${encodeURIComponent(id)}`,
+        { headers: auth },
+      );
+      expect(snapRes.status).toBe(200);
+      const snap = (await snapRes.json()) as {
+        events: Array<{
+          type: string;
+          egressProxyEnvVar?: string;
+          egressProxyHint?: string;
+        }>;
+      };
+      const attempts = snap.events.filter((event) => event.type === "route.attempted");
+      expect(attempts).toMatchObject([
+        {
+          egressProxyEnvVar: "FAKEE_PROXY_EGRESS_PROXY_1",
+          egressProxyHint: "proxy-one:8080",
+        },
+        {
+          egressProxyEnvVar: "FAKEE_PROXY_EGRESS_PROXY_2",
+          egressProxyHint: "proxy-two:8080",
+        },
+      ]);
+      expect(snap.events.find((event) => event.type === "proxy.cooldown")).toMatchObject({
         egressProxyEnvVar: "FAKEE_PROXY_EGRESS_PROXY_1",
         egressProxyHint: "proxy-one:8080",
-      },
-      {
-        egressProxyEnvVar: "FAKEE_PROXY_EGRESS_PROXY_2",
-        egressProxyHint: "proxy-two:8080",
-      },
-    ]);
-    expect(snap.events.find((event) => event.type === "proxy.cooldown")).toMatchObject({
-      egressProxyEnvVar: "FAKEE_PROXY_EGRESS_PROXY_1",
-      egressProxyHint: "proxy-one:8080",
-    });
+      });
+    } finally {
+      for (const [key] of Object.entries(process.env)) {
+        if (key.startsWith("MODEL_PROXY_EGRESS_PROXY")) delete process.env[key];
+      }
+      for (const [key, value] of savedSharedProxyEnv) process.env[key] = value;
+    }
   });
 });
