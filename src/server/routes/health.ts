@@ -3,6 +3,8 @@ import { Hono } from "hono";
 import { modelConfigLoader } from "../../config/model-loader.ts";
 import { providerConfigLoader } from "../../config/provider-loader.ts";
 import { isAuthConfigured } from "../auth.ts";
+import { getRequestLifetimeStats } from "../request-log.ts";
+import { requestLogRingBuffer } from "../../observability/ring-buffer.ts";
 
 const startedAt = Date.now();
 
@@ -27,6 +29,8 @@ export function createHealthRoutes(): Hono {
       providers_count: providers.length,
       models,
       providers,
+      request_stats: getRequestLifetimeStats(),
+      request_log_buffer_size: requestLogRingBuffer.size,
       runtime: {
         bun: typeof Bun !== "undefined" ? Bun.version : undefined,
         platform: process.platform,

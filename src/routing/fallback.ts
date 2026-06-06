@@ -64,6 +64,18 @@ export interface CallWithFallbackArgs {
   signal?: AbortSignal;
   /** Extra headers forwarded to upstream providers (e.g. x-opencode-*). */
   extraHeaders?: Record<string, string>;
+  /** Populated with the winning upstream route after a successful call. */
+  resolvedRoute?: { provider?: string; model?: string };
+}
+
+function recordResolvedRoute(
+  resolvedRoute: { provider?: string; model?: string } | undefined,
+  provider: string,
+  model: string,
+): void {
+  if (resolvedRoute === undefined) return;
+  resolvedRoute.provider = provider;
+  resolvedRoute.model = model;
 }
 
 interface ErrorActionResult {
@@ -474,8 +486,15 @@ export class FallbackRouter {
   }
 
   async callWithFallback(args: CallWithFallbackArgs): Promise<Record<string, unknown>> {
-    const { logicalModel, requestData, targetProtocol, maxKeyCycles, signal, extraHeaders } =
-      args;
+    const {
+      logicalModel,
+      requestData,
+      targetProtocol,
+      maxKeyCycles,
+      signal,
+      extraHeaders,
+      resolvedRoute,
+    } = args;
     const routeTuples = this.collectRouteConfigs(logicalModel);
     if (routeTuples.length === 0) {
       throw new RoutingError(
@@ -582,6 +601,7 @@ export class FallbackRouter {
               model: route.model,
               latencyMs: Math.round(performance.now() - routeStartMs),
             });
+            recordResolvedRoute(resolvedRoute, route.provider, route.model);
             return result;
           } catch (err) {
             const actionInfo = resolveErrorAction(route.provider, err);
@@ -617,6 +637,7 @@ export class FallbackRouter {
                   model: route.model,
                   latencyMs: Math.round(performance.now() - fixStartMs),
                 });
+                recordResolvedRoute(resolvedRoute, route.provider, route.model);
                 return result;
               } catch (retryErr) {
                 const disposition = this.handleAttemptError(
@@ -676,8 +697,15 @@ export class FallbackRouter {
   async *streamWithFallback(
     args: CallWithFallbackArgs,
   ): AsyncGenerator<string, void, unknown> {
-    const { logicalModel, requestData, targetProtocol, maxKeyCycles, signal, extraHeaders } =
-      args;
+    const {
+      logicalModel,
+      requestData,
+      targetProtocol,
+      maxKeyCycles,
+      signal,
+      extraHeaders,
+      resolvedRoute,
+    } = args;
     const routeTuples = this.collectRouteConfigs(logicalModel);
     if (routeTuples.length === 0) {
       throw new RoutingError(
@@ -782,6 +810,7 @@ export class FallbackRouter {
               model: route.model,
               latencyMs: Math.round(performance.now() - streamStartMs),
             });
+            recordResolvedRoute(resolvedRoute, route.provider, route.model);
             return;
           } catch (err) {
             const actionInfo = resolveErrorAction(route.provider, err);
@@ -807,6 +836,7 @@ export class FallbackRouter {
                   model: route.model,
                   latencyMs: Math.round(performance.now() - streamStartMs),
                 });
+                recordResolvedRoute(resolvedRoute, route.provider, route.model);
                 return;
               } catch (retryErr) {
                 const disposition = this.handleAttemptError(

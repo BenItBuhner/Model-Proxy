@@ -32,29 +32,12 @@ import { formatOpenAIError } from "../error-formatters.ts";
 import {
   recordRequestFinish,
   recordRequestStart,
+  routeFinishFields,
+  type FinishEntry,
 } from "../request-log.ts";
+import { buildUpstreamExtraHeaders } from "../upstream-headers.ts";
 
 const log = createLogger("routes.openai");
-
-function buildUpstreamExtraHeaders(c: Context, requestId: string): Record<string, string> {
-  const headers: Record<string, string> = {};
-  const session =
-    c.req.header("x-opencode-session") ??
-    c.req.header("x-session-affinity") ??
-    requestId;
-  headers["x-opencode-session"] = session;
-  headers["x-opencode-request"] = c.req.header("x-opencode-request") ?? requestId;
-  headers["x-opencode-client"] = c.req.header("x-opencode-client") ?? "model-proxy";
-  const project = c.req.header("x-opencode-project");
-  if (project !== undefined && project.length > 0) {
-    headers["x-opencode-project"] = project;
-  }
-  const userAgent = c.req.header("user-agent");
-  if (userAgent !== undefined && userAgent.length > 0) {
-    headers["User-Agent"] = userAgent;
-  }
-  return headers;
-}
 
 export function createOpenAIRoutes(): Hono {
   const app = new Hono();
@@ -173,11 +156,26 @@ async function handleChatCompletions(
 
   const signal = c.req.raw.signal;
   const extraHeaders = buildUpstreamExtraHeaders(c, requestId);
+  const resolvedRoute: { provider?: string; model?: string } = {};
 
   if (isStream) {
+    let finished = false;
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         const encoder = new TextEncoder();
+        const finishOnce = (entry: FinishEntry, eventStatus: number): void => {
+          if (finished) return;
+          finished = true;
+          recordRequestFinish(entry);
+          emit({
+            type: "request.finished",
+            at: nowIso(),
+            status: eventStatus,
+            totalMs: entry.responseTimeMs,
+            ...(entry.errorType !== undefined ? { errorType: entry.errorType } : {}),
+            ...(entry.errorMessage !== undefined ? { errorMessage: entry.errorMessage } : {}),
+          });
+        };
         // Nested run() so async generator iteration (which happens lazily
         // here, after the outer request handler returned) still resolves
         // `currentEmitter()` correctly for every emit call deep in the stack.
@@ -199,6 +197,7 @@ async function handleChatCompletions(
                   targetProtocol: "openai",
                   overrides,
                   extraHeaders,
+                  resolvedRoute,
                   ...(signal !== undefined ? { signal } : {}),
                 })
               : fallback.streamWithFallback({
@@ -206,6 +205,7 @@ async function handleChatCompletions(
                   requestData: requestDict,
                   targetProtocol: "openai",
                   extraHeaders,
+                  resolvedRoute,
                   ...(signal !== undefined ? { signal } : {}),
                 });
             for await (const chunk of generator) {
@@ -213,12 +213,15 @@ async function handleChatCompletions(
             }
             controller.close();
             const totalMs = Math.round(performance.now() - startedAt);
-            emit({ type: "request.finished", at: nowIso(), status: 200, totalMs });
-            recordRequestFinish({
-              requestId,
-              responseStatus: 200,
-              responseTimeMs: totalMs,
-            });
+            finishOnce(
+              {
+                requestId,
+                responseStatus: 200,
+                responseTimeMs: totalMs,
+                ...routeFinishFields(resolvedRoute),
+              },
+              200,
+            );
           } catch (err) {
             const status = err instanceof RoutingError ? 503 : 500;
             const type =
@@ -231,22 +234,39 @@ async function handleChatCompletions(
             controller.close();
             const totalMs = Math.round(performance.now() - startedAt);
             const errorType = err instanceof Error ? err.name : "Unknown";
-            emit({
-              type: "request.finished",
-              at: nowIso(),
+            finishOnce(
+              {
+                requestId,
+                responseStatus: status,
+                responseTimeMs: totalMs,
+                errorMessage: message,
+                errorType,
+                ...routeFinishFields(resolvedRoute),
+              },
               status,
-              totalMs,
-              errorType,
-              errorMessage: message,
-            });
-            recordRequestFinish({
-              requestId,
-              responseStatus: status,
-              responseTimeMs: totalMs,
-              errorMessage: message,
-              errorType,
-            });
+            );
           }
+        });
+      },
+      cancel() {
+        const totalMs = Math.round(performance.now() - startedAt);
+        if (finished) return;
+        finished = true;
+        recordRequestFinish({
+          requestId,
+          responseStatus: 499,
+          responseTimeMs: totalMs,
+          errorMessage: "Client disconnected before stream completed",
+          errorType: "ClientAbort",
+          ...routeFinishFields(resolvedRoute),
+        });
+        emit({
+          type: "request.finished",
+          at: nowIso(),
+          status: 499,
+          totalMs,
+          errorType: "ClientAbort",
+          errorMessage: "Client disconnected before stream completed",
         });
       },
     });
@@ -279,6 +299,7 @@ async function handleChatCompletions(
             targetProtocol: "openai",
             overrides,
             extraHeaders,
+            resolvedRoute,
             ...(signal !== undefined ? { signal } : {}),
           })
         : await fallback.callWithFallback({
@@ -286,6 +307,7 @@ async function handleChatCompletions(
             requestData: requestDict,
             targetProtocol: "openai",
             extraHeaders,
+            resolvedRoute,
             ...(signal !== undefined ? { signal } : {}),
           });
       // Preserve the client-visible model name.
@@ -301,6 +323,7 @@ async function handleChatCompletions(
         requestId,
         responseStatus: 200,
         responseTimeMs: totalMs,
+        ...routeFinishFields(resolvedRoute),
       };
       const prompt = usageObj["prompt_tokens"];
       const completion = usageObj["completion_tokens"];
@@ -322,6 +345,7 @@ async function handleChatCompletions(
           responseTimeMs: totalMs,
           errorMessage: message,
           errorType: err.name,
+          ...routeFinishFields(resolvedRoute),
         });
         emit({
           type: "request.finished",
@@ -341,6 +365,7 @@ async function handleChatCompletions(
           responseTimeMs: totalMs,
           errorMessage: err.message,
           errorType: err.name,
+          ...routeFinishFields(resolvedRoute),
         });
         emit({
           type: "request.finished",
@@ -360,6 +385,7 @@ async function handleChatCompletions(
           responseTimeMs: totalMs,
           errorMessage: message,
           errorType: err.name,
+          ...routeFinishFields(resolvedRoute),
         });
         emit({
           type: "request.finished",
@@ -380,6 +406,7 @@ async function handleChatCompletions(
         responseTimeMs: totalMs,
         errorMessage: message,
         errorType: errType,
+        ...routeFinishFields(resolvedRoute),
       });
       emit({
         type: "request.finished",

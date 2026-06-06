@@ -28,7 +28,44 @@ export interface FinishEntry {
 
 const inflight = new Map<string, Partial<RequestLogRecord>>();
 
+let requestsStarted = 0;
+let requestsFinished = 0;
+let responsesOk = 0;
+let responsesError = 0;
+
+export interface RequestLifetimeStats {
+  requests_started: number;
+  requests_finished: number;
+  responses_ok: number;
+  responses_error: number;
+  inflight: number;
+}
+
+export function routeFinishFields(
+  resolvedRoute: { provider?: string; model?: string },
+): Pick<FinishEntry, "resolvedProvider" | "resolvedModel"> {
+  const fields: Pick<FinishEntry, "resolvedProvider" | "resolvedModel"> = {};
+  if (resolvedRoute.provider !== undefined) {
+    fields.resolvedProvider = resolvedRoute.provider;
+  }
+  if (resolvedRoute.model !== undefined) {
+    fields.resolvedModel = resolvedRoute.model;
+  }
+  return fields;
+}
+
+export function getRequestLifetimeStats(): RequestLifetimeStats {
+  return {
+    requests_started: requestsStarted,
+    requests_finished: requestsFinished,
+    responses_ok: responsesOk,
+    responses_error: responsesError,
+    inflight: inflight.size,
+  };
+}
+
 export function recordRequestStart(entry: StartEntry): void {
+  requestsStarted += 1;
   inflight.set(entry.requestId, {
     requestId: entry.requestId,
     timestamp: new Date().toISOString(),
@@ -45,6 +82,10 @@ export function recordRequestStart(entry: StartEntry): void {
 }
 
 export function recordRequestFinish(entry: FinishEntry): void {
+  requestsFinished += 1;
+  if (entry.responseStatus < 400) responsesOk += 1;
+  else responsesError += 1;
+
   const base = inflight.get(entry.requestId);
   inflight.delete(entry.requestId);
 

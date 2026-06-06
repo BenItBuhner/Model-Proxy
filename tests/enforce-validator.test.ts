@@ -184,6 +184,25 @@ describe("isEmptyContentResponse", () => {
     ).toBe(false);
   });
 
+  test("OpenAI: reasoning_content with null content → not empty", () => {
+    expect(
+      isEmptyContentResponse(
+        {
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: null,
+                reasoning_content: "thinking about the answer",
+              },
+            },
+          ],
+        },
+        "openai",
+      ),
+    ).toBe(false);
+  });
+
   test("OpenAI: tool_calls present → not empty", () => {
     expect(
       isEmptyContentResponse(

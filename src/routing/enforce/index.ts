@@ -77,6 +77,10 @@ export interface EnforceCallArgs {
   signal?: AbortSignal;
   /** Optional per-request overrides (header / query). */
   overrides?: PerRequestOverrides;
+  /** Extra headers forwarded to upstream providers (e.g. x-opencode-*). */
+  extraHeaders?: Record<string, string>;
+  /** Populated with the winning upstream route after a successful call. */
+  resolvedRoute?: { provider?: string; model?: string };
 }
 
 /**
@@ -109,6 +113,8 @@ export class EnforceRouter {
         requestData: scrubRetryMarkers(args.requestData),
         targetProtocol: args.targetProtocol,
         ...(args.signal !== undefined ? { signal: args.signal } : {}),
+        ...(args.extraHeaders !== undefined ? { extraHeaders: args.extraHeaders } : {}),
+        ...(args.resolvedRoute !== undefined ? { resolvedRoute: args.resolvedRoute } : {}),
       });
     }
 
@@ -129,6 +135,8 @@ export class EnforceRouter {
       args.targetProtocol,
       args.signal,
       config,
+      args.extraHeaders,
+      args.resolvedRoute,
     );
     const hadFlag = responseContainsFlag(
       validated,
@@ -161,6 +169,8 @@ export class EnforceRouter {
         targetProtocol: args.targetProtocol,
       };
       if (args.signal !== undefined) streamArgs.signal = args.signal;
+      if (args.extraHeaders !== undefined) streamArgs.extraHeaders = args.extraHeaders;
+      if (args.resolvedRoute !== undefined) streamArgs.resolvedRoute = args.resolvedRoute;
       for await (const chunk of this.fallbackRouter.streamWithFallback(streamArgs)) {
         yield chunk;
       }
@@ -184,6 +194,8 @@ export class EnforceRouter {
       args.targetProtocol,
       args.signal,
       config,
+      args.extraHeaders,
+      args.resolvedRoute,
     );
     const hadFlag = responseContainsFlag(
       validated,
@@ -222,6 +234,8 @@ export class EnforceRouter {
     protocol: EnforceProtocol,
     signal: AbortSignal | undefined,
     config: ResolvedEnforceConfig,
+    extraHeaders: Record<string, string> | undefined,
+    resolvedRoute: { provider?: string; model?: string } | undefined,
   ): Promise<Record<string, unknown>> {
     let currentRequest = seedRequest;
     let lastReason = "no attempt completed";
@@ -245,6 +259,8 @@ export class EnforceRouter {
         requestData: scrubRetryMarkers(currentRequest),
         targetProtocol: protocol,
         ...(signal !== undefined ? { signal } : {}),
+        ...(extraHeaders !== undefined ? { extraHeaders } : {}),
+        ...(resolvedRoute !== undefined ? { resolvedRoute } : {}),
       });
 
       // 1. Explicit empty/whitespace guard — catches the null/empty-content bug.

@@ -26,6 +26,7 @@ import type { ImportOptions } from "../../../shared/schemas/config-bundle.ts";
 import { eventSink } from "../../observability/event-sink.ts";
 import { createLogger } from "../../observability/logger.ts";
 import { requestLogRingBuffer } from "../../observability/ring-buffer.ts";
+import { getRequestLifetimeStats } from "../request-log.ts";
 import {
   isAuthConfigured,
   isSessionValid,
@@ -133,6 +134,7 @@ export function createAdminRoutes(): Hono {
     return c.json({
       count: records.length,
       total_in_buffer: requestLogRingBuffer.size,
+      request_stats: getRequestLifetimeStats(),
       records,
     });
   });

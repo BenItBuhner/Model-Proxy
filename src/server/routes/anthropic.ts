@@ -26,7 +26,10 @@ import { formatAnthropicError } from "../error-formatters.ts";
 import {
   recordRequestFinish,
   recordRequestStart,
+  routeFinishFields,
+  type FinishEntry,
 } from "../request-log.ts";
+import { buildUpstreamExtraHeaders } from "../upstream-headers.ts";
 
 const log = createLogger("routes.anthropic");
 
@@ -102,11 +105,27 @@ export function createAnthropicRoutes(): Hono {
     });
 
     const signal = c.req.raw.signal;
+    const extraHeaders = buildUpstreamExtraHeaders(c, requestId);
+    const resolvedRoute: { provider?: string; model?: string } = {};
 
     if (isStream) {
+      let finished = false;
       const stream = new ReadableStream<Uint8Array>({
         async start(controller) {
           const encoder = new TextEncoder();
+          const finishOnce = (entry: FinishEntry, eventStatus: number): void => {
+            if (finished) return;
+            finished = true;
+            recordRequestFinish(entry);
+            emit({
+              type: "request.finished",
+              at: nowIso(),
+              status: eventStatus,
+              totalMs: entry.responseTimeMs,
+              ...(entry.errorType !== undefined ? { errorType: entry.errorType } : {}),
+              ...(entry.errorMessage !== undefined ? { errorMessage: entry.errorMessage } : {}),
+            });
+          };
           await runWithRequestContext(requestId, async () => {
             emit({
               type: "request.started",
@@ -124,12 +143,16 @@ export function createAnthropicRoutes(): Hono {
                     requestData: requestDict,
                     targetProtocol: "anthropic",
                     overrides,
+                    extraHeaders,
+                    resolvedRoute,
                     ...(signal !== undefined ? { signal } : {}),
                   })
                 : fallback.streamWithFallback({
                     logicalModel: request.model,
                     requestData: requestDict,
                     targetProtocol: "anthropic",
+                    extraHeaders,
+                    resolvedRoute,
                     ...(signal !== undefined ? { signal } : {}),
                   });
               for await (const chunk of generator) {
@@ -137,12 +160,15 @@ export function createAnthropicRoutes(): Hono {
               }
               controller.close();
               const totalMs = Math.round(performance.now() - startedAt);
-              emit({ type: "request.finished", at: nowIso(), status: 200, totalMs });
-              recordRequestFinish({
-                requestId,
-                responseStatus: 200,
-                responseTimeMs: totalMs,
-              });
+              finishOnce(
+                {
+                  requestId,
+                  responseStatus: 200,
+                  responseTimeMs: totalMs,
+                  ...routeFinishFields(resolvedRoute),
+                },
+                200,
+              );
             } catch (err) {
               const status = err instanceof RoutingError ? 503 : 500;
               const message =
@@ -152,22 +178,39 @@ export function createAnthropicRoutes(): Hono {
               controller.close();
               const totalMs = Math.round(performance.now() - startedAt);
               const errorType = err instanceof Error ? err.name : "Unknown";
-              emit({
-                type: "request.finished",
-                at: nowIso(),
+              finishOnce(
+                {
+                  requestId,
+                  responseStatus: status,
+                  responseTimeMs: totalMs,
+                  errorMessage: message,
+                  errorType,
+                  ...routeFinishFields(resolvedRoute),
+                },
                 status,
-                totalMs,
-                errorType,
-                errorMessage: message,
-              });
-              recordRequestFinish({
-                requestId,
-                responseStatus: status,
-                responseTimeMs: totalMs,
-                errorMessage: message,
-                errorType,
-              });
+              );
             }
+          });
+        },
+        cancel() {
+          const totalMs = Math.round(performance.now() - startedAt);
+          if (finished) return;
+          finished = true;
+          recordRequestFinish({
+            requestId,
+            responseStatus: 499,
+            responseTimeMs: totalMs,
+            errorMessage: "Client disconnected before stream completed",
+            errorType: "ClientAbort",
+            ...routeFinishFields(resolvedRoute),
+          });
+          emit({
+            type: "request.finished",
+            at: nowIso(),
+            status: 499,
+            totalMs,
+            errorType: "ClientAbort",
+            errorMessage: "Client disconnected before stream completed",
           });
         },
       });
@@ -199,12 +242,16 @@ export function createAnthropicRoutes(): Hono {
               requestData: requestDict,
               targetProtocol: "anthropic",
               overrides,
+              extraHeaders,
+              resolvedRoute,
               ...(signal !== undefined ? { signal } : {}),
             })
           : await fallback.callWithFallback({
               logicalModel: request.model,
               requestData: requestDict,
               targetProtocol: "anthropic",
+              extraHeaders,
+              resolvedRoute,
               ...(signal !== undefined ? { signal } : {}),
             });
         const responseObj: Record<string, unknown> = {
@@ -216,6 +263,7 @@ export function createAnthropicRoutes(): Hono {
           requestId,
           responseStatus: 200,
           responseTimeMs: totalMs,
+          ...routeFinishFields(resolvedRoute),
         });
         emit({ type: "request.finished", at: nowIso(), status: 200, totalMs });
         return c.json(responseObj);
@@ -229,6 +277,7 @@ export function createAnthropicRoutes(): Hono {
             responseTimeMs: totalMs,
             errorMessage: message,
             errorType: err.name,
+            ...routeFinishFields(resolvedRoute),
           });
           emit({
             type: "request.finished",
@@ -248,6 +297,7 @@ export function createAnthropicRoutes(): Hono {
             responseTimeMs: totalMs,
             errorMessage: err.message,
             errorType: err.name,
+            ...routeFinishFields(resolvedRoute),
           });
           emit({
             type: "request.finished",
@@ -267,6 +317,7 @@ export function createAnthropicRoutes(): Hono {
             responseTimeMs: totalMs,
             errorMessage: message,
             errorType: err.name,
+            ...routeFinishFields(resolvedRoute),
           });
           emit({
             type: "request.finished",
@@ -287,6 +338,7 @@ export function createAnthropicRoutes(): Hono {
           responseTimeMs: totalMs,
           errorMessage: message,
           errorType: errType,
+          ...routeFinishFields(resolvedRoute),
         });
         emit({
           type: "request.finished",

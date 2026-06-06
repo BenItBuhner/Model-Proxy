@@ -29,6 +29,7 @@ export default function DashboardPage(): React.ReactElement {
 function DashboardBody(): React.ReactElement {
   const [health, setHealth] = useState<HealthDetailed | undefined>(undefined);
   const [records, setRecords] = useState<RequestLogRecord[]>([]);
+  const [totalInBuffer, setTotalInBuffer] = useState(0);
   const [err, setErr] = useState<string | undefined>(undefined);
 
   useEffect(() => {
@@ -39,6 +40,7 @@ function DashboardBody(): React.ReactElement {
         if (cancelled) return;
         setHealth(h);
         setRecords(logs.records);
+        setTotalInBuffer(logs.total_in_buffer);
         setErr(undefined);
       } catch (e) {
         if (!cancelled) setErr((e as Error).message);
@@ -71,7 +73,15 @@ function DashboardBody(): React.ReactElement {
 
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4 mb-6">
         <MetricCard label="Status" value={health?.status ?? "…"} tone="phosphor" sublabel={health !== undefined ? `uptime ${formatUptime(health.uptime_seconds)}` : undefined} />
-        <MetricCard label="Requests" value={String(records.length)} sublabel={`${metrics.success} ok · ${metrics.failed} err`} />
+        <MetricCard
+          label="Responses"
+          value={String(health?.request_stats?.requests_finished ?? totalInBuffer)}
+          sublabel={
+            health?.request_stats !== undefined
+              ? `${health.request_stats.responses_ok} ok · ${health.request_stats.responses_error} err since start`
+              : `${metrics.success} ok · ${metrics.failed} err in buffer`
+          }
+        />
         <MetricCard label="Avg latency" value={metrics.avgMs !== undefined ? `${metrics.avgMs}ms` : "–"} sublabel={metrics.p95Ms !== undefined ? `p95 ${metrics.p95Ms}ms` : undefined} />
         <MetricCard label="Enforce mode" value={`${metrics.enforcedPercent}%`} sublabel="last 15 requests" />
       </div>

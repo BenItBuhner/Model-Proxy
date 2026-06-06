@@ -14,6 +14,8 @@ const log = createLogger("provider.base");
 export interface ProviderCallContext {
   /** Provider-specific API key injected per request by the router. */
   apiKey: string;
+  /** Upstream model id used for URL templates such as `{model}`. */
+  upstreamModel?: string;
   /** Optional base URL override from the route config. */
   baseUrlOverride: string | undefined;
   /** Timeout in seconds for the upstream request. */
@@ -100,7 +102,12 @@ export abstract class AbstractProvider implements BaseProvider {
     ctx: ProviderCallContext,
     endpointType: "completions" | "streaming" = "completions",
   ): string {
-    return buildEndpointUrl(this.config, ctx.baseUrlOverride, endpointType);
+    return buildEndpointUrl(
+      this.config,
+      ctx.baseUrlOverride,
+      endpointType,
+      ctx.upstreamModel,
+    );
   }
 
   protected authHeaders(ctx: ProviderCallContext): Record<string, string> {

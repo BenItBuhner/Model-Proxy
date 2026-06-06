@@ -24,13 +24,28 @@ function hasStructuredToolCall(toolCalls: unknown): boolean {
   return false;
 }
 
+function openaiSupplementalText(message: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const key of [
+    "reasoning_content",
+    "reasoning",
+    "thinking",
+    "thought",
+  ] as const) {
+    const value = message[key];
+    if (typeof value === "string") parts.push(value);
+  }
+  return parts.join("");
+}
+
 function openaiTextualContent(
   message: Record<string, unknown>,
 ): string {
   const raw = message["content"];
-  if (typeof raw === "string") return raw;
-  if (Array.isArray(raw)) {
-    return raw
+  let content = "";
+  if (typeof raw === "string") content = raw;
+  else if (Array.isArray(raw)) {
+    content = raw
       .map((part) => {
         if (isObject(part) && typeof part["text"] === "string") return part["text"];
         if (typeof part === "string") return part;
@@ -38,7 +53,7 @@ function openaiTextualContent(
       })
       .join("");
   }
-  return "";
+  return content + openaiSupplementalText(message);
 }
 
 export function validateOpenAIResponse(

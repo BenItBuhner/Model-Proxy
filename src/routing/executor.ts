@@ -30,6 +30,7 @@ function buildContext(
 ): ProviderCallContext {
   const ctx: ProviderCallContext = {
     apiKey: route.apiKey,
+    upstreamModel: route.model,
     baseUrlOverride: route.baseUrl,
     timeoutSeconds: route.timeoutSeconds,
     signal,

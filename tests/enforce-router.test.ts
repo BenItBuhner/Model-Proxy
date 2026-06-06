@@ -260,6 +260,33 @@ describe("EnforceRouter", () => {
     expect(retryMessages.length).toBe(1);
   });
 
+  test("forwards extraHeaders to upstream provider", async () => {
+    const router = new EnforceRouter(new FallbackRouter());
+    FakeProvider.responses = [
+      {
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: FLAG },
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ];
+    await router.call({
+      logicalModel: "enforce-model",
+      requestData: { model: "enforce-model", messages: [{ role: "user", content: "hi" }] },
+      targetProtocol: "openai",
+      extraHeaders: {
+        "x-opencode-session": "session-abc",
+        "x-opencode-request": "req-xyz",
+      },
+    });
+    const ctx = FakeProvider.calls[0]?.ctx;
+    expect(ctx?.extraHeaders?.["x-opencode-session"]).toBe("session-abc");
+    expect(ctx?.extraHeaders?.["x-opencode-request"]).toBe("req-xyz");
+  });
+
   test("streaming emulates SSE frames after validated non-streaming response", async () => {
     const router = new EnforceRouter(new FallbackRouter());
     FakeProvider.responses = [

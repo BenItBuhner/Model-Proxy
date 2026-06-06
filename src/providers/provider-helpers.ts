@@ -9,6 +9,11 @@ function substituteEnvVars(text: string): string {
   });
 }
 
+function substituteModelPlaceholders(path: string, model?: string): string {
+  if (model === undefined || model.length === 0) return path;
+  return path.replaceAll("{model}", model).replaceAll("{{model}}", model);
+}
+
 export function buildEndpointUrl(
   config: ProviderConfig,
   override?: string,
@@ -18,6 +23,7 @@ export function buildEndpointUrl(
     | "audio_transcriptions"
     | "audio_translations"
     | "audio_streaming" = "completions",
+  model?: string,
 ): string {
   let base = override ?? config.endpoints.base_url;
   if (config.proxy_support?.enabled === true) {
@@ -40,7 +46,10 @@ export function buildEndpointUrl(
               config.endpoints.audio_transcriptions ??
               "/audio/transcriptions"
             : config.endpoints.completions;
-  const path = rawPath.startsWith("/") ? rawPath.slice(1) : rawPath;
+  const path = substituteModelPlaceholders(
+    rawPath.startsWith("/") ? rawPath.slice(1) : rawPath,
+    model,
+  );
 
   return base.endsWith("/") ? `${base}${path}` : `${base}/${path}`;
 }

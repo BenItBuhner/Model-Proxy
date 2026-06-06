@@ -2,6 +2,14 @@
 
 import { apiFetch } from "./api";
 
+export interface RequestLifetimeStats {
+  requests_started: number;
+  requests_finished: number;
+  responses_ok: number;
+  responses_error: number;
+  inflight: number;
+}
+
 export interface HealthDetailed {
   status: string;
   uptime_seconds: number;
@@ -10,6 +18,8 @@ export interface HealthDetailed {
   providers_count: number;
   models: string[];
   providers: string[];
+  request_stats?: RequestLifetimeStats;
+  request_log_buffer_size?: number;
   runtime: { bun?: string; platform?: string; arch?: string; node_env?: string };
 }
 
@@ -88,7 +98,13 @@ export async function authStatus(): Promise<{
 }
 
 // -------- Logs --------
-export async function getLogs(limit = 100): Promise<{ records: RequestLogRecord[]; total_in_buffer: number }> {
+export async function getLogs(
+  limit = 100,
+): Promise<{
+  records: RequestLogRecord[];
+  total_in_buffer: number;
+  request_stats?: RequestLifetimeStats;
+}> {
   return apiFetch(`/v1/admin/logs?limit=${limit}`);
 }
 
