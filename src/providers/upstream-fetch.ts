@@ -2,9 +2,12 @@
  * Proxy-aware upstream fetch wrapper. Uses Bun's native `proxy` fetch option.
  */
 
+export type UpstreamFetcher = (input: string | URL | Request, init?: RequestInit & { proxy?: string }) => Promise<Response>;
+
 export interface UpstreamFetchOptions extends RequestInit {
   proxy?: string;
   timeoutMs?: number;
+  fetcher?: UpstreamFetcher;
 }
 
 function mergeAbortSignals(
@@ -30,7 +33,7 @@ export async function upstreamFetch(
   url: string,
   options: UpstreamFetchOptions = {},
 ): Promise<Response> {
-  const { proxy, timeoutMs, signal, ...init } = options;
+  const { proxy, timeoutMs, signal, fetcher = fetch, ...init } = options;
 
   let timeoutSignal: AbortSignal | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -53,7 +56,7 @@ export async function upstreamFetch(
     if (proxy !== undefined && proxy.length > 0) {
       fetchInit.proxy = proxy;
     }
-    return await fetch(url, fetchInit);
+    return await fetcher(url, fetchInit);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }

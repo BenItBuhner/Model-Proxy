@@ -177,3 +177,41 @@ export async function saveEnv(entries: Array<{ key: string; value: string }>): P
     body: { entries },
   });
 }
+
+
+// -------- Proxies --------
+export interface ProxyProviderStatus {
+  provider: string;
+  enabled: boolean;
+  proxyCount: number;
+  proxies: string[];
+}
+
+export interface ProxyDiscoveryReport {
+  targetCount: number;
+  providers: string[];
+  candidatesFetched: number;
+  candidatesTested: number;
+  accepted: Array<{ url: string }>;
+  rejectedByProvider: Record<string, number>;
+  skippedProviders: Record<string, string>;
+  persisted?: { path: string; applied: number; removed: string[] };
+}
+
+export async function getProxyStatus(): Promise<{
+  status: { shared: string[]; providers: ProxyProviderStatus[] };
+  last_discovery?: ProxyDiscoveryReport;
+}> {
+  return apiFetch("/v1/admin/proxies");
+}
+
+export async function discoverProxies(options: {
+  target_count?: number;
+  providers?: string[];
+  persist?: boolean;
+  timeout_ms?: number;
+  concurrency?: number;
+  source_limit?: number;
+}): Promise<{ report: ProxyDiscoveryReport }> {
+  return apiFetch("/v1/admin/proxies/discover", { method: "POST", body: options });
+}

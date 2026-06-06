@@ -522,7 +522,7 @@ export class FallbackRouter {
         modelConfig,
         maxKeyCycles,
       );
-      const proxyTracker = this.createProxyTrackerForRoute(routeConfig, maxKeyCycles);
+      const proxyTracker = this.createProxyTrackerForRoute(routeConfig, undefined);
 
       if (this.shouldSkipRoute(routeConfig, tracker, proxyTracker)) {
         continue;
@@ -732,7 +732,7 @@ export class FallbackRouter {
         modelConfig,
         maxKeyCycles,
       );
-      const proxyTracker = this.createProxyTrackerForRoute(routeConfig, maxKeyCycles);
+      const proxyTracker = this.createProxyTrackerForRoute(routeConfig, undefined);
 
       if (this.shouldSkipRoute(routeConfig, tracker, proxyTracker)) {
         continue;

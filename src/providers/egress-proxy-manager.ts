@@ -9,6 +9,7 @@ import { ProviderAPIError } from "./errors.ts";
 const log = createLogger("egress-proxy");
 
 const DEFAULT_PROXY_COOLDOWN_SECONDS = 86400;
+const SHARED_EGRESS_PROXY_PATTERNS = ["MODEL_PROXY_EGRESS_PROXY", "MODEL_PROXY_EGRESS_PROXY_{INDEX}"];
 
 function envNumber(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -48,12 +49,14 @@ function getEgressProxyPatterns(provider: string): string[] {
     const cfg = providerConfigLoader.loadProvider(provider);
     const block = cfg.egress_proxies;
     if (block === undefined || block.enabled === false) return [];
-    if (block.env_var_patterns.length > 0) return block.env_var_patterns;
+    const providerSpecific = block.env_var_patterns.length > 0
+      ? block.env_var_patterns
+      : [`${providerNameToEnvToken(provider)}_EGRESS_PROXY`, `${providerNameToEnvToken(provider)}_EGRESS_PROXY_{INDEX}`];
+    return [...SHARED_EGRESS_PROXY_PATTERNS, ...providerSpecific];
   } catch {
-    // fall through
+    const upper = providerNameToEnvToken(provider);
+    return [...SHARED_EGRESS_PROXY_PATTERNS, `${upper}_EGRESS_PROXY`, `${upper}_EGRESS_PROXY_{INDEX}`];
   }
-  const upper = providerNameToEnvToken(provider);
-  return [`${upper}_EGRESS_PROXY`, `${upper}_EGRESS_PROXY_{INDEX}`];
 }
 
 function getDefaultProxyCooldown(provider: string): number {
@@ -250,4 +253,8 @@ export function resetProxyState(provider?: string): void {
 
 export function getAvailableEgressProxies(provider: string): EgressProxyEntry[] {
   return parseEgressProxies(provider);
+}
+
+export function getSharedEgressProxyPatterns(): string[] {
+  return [...SHARED_EGRESS_PROXY_PATTERNS];
 }

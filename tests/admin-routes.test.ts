@@ -234,4 +234,28 @@ describe("admin routes", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  test("proxy status requires auth", async () => {
+    const res = await app.request("/v1/admin/proxies");
+    expect(res.status).toBe(401);
+  });
+
+  test("proxy discovery endpoint returns a structured report", async () => {
+    const res = await app.request("/v1/admin/proxies/discover", {
+      method: "POST",
+      headers: { ...auth(), "content-type": "application/json" },
+      body: JSON.stringify({
+        providers: [],
+        candidates: ["http://127.0.0.1:8888"],
+        sources: [],
+        target_count: 1,
+        persist: false,
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await json(res)) as { report: { accepted: Array<{ url: string }>; candidatesTested: number } };
+    expect(body.report.accepted[0]?.url).toBe("http://127.0.0.1:8888");
+    expect(body.report.candidatesTested).toBe(1);
+  });
+
 });

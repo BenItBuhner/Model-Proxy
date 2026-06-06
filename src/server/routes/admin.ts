@@ -16,6 +16,7 @@ import {
   writeProviderConfig,
 } from "../../config/provider-writer.ts";
 import { readEnvFile, writeEnvFile } from "../../config/env-writer.ts";
+import { currentProxyStatus, discoverProxies, type ProxyDiscoveryReport } from "../../providers/proxy-discovery.ts";
 import { exportBundle } from "../../config/bundle-exporter.ts";
 import {
   applyBundle,
@@ -124,6 +125,8 @@ export function createAdminRoutes(): Hono {
   protectedApp.use("/v1/admin/logs", gate);
   protectedApp.use("/v1/admin/config/*", gate);
   protectedApp.use("/v1/admin/events/*", gate);
+  protectedApp.use("/v1/admin/proxies", gate);
+  protectedApp.use("/v1/admin/proxies/*", gate);
 
   protectedApp.get("/v1/admin/logs", (c) => {
     const limitParam = c.req.query("limit");
@@ -229,6 +232,52 @@ export function createAdminRoutes(): Hono {
         "X-Accel-Buffering": "no",
       },
     });
+  });
+
+
+  // -- Proxy discovery / status ----------------------------------------------
+
+  let lastProxyDiscovery: ProxyDiscoveryReport | undefined;
+
+  protectedApp.get("/v1/admin/proxies", (c) => {
+    const providersParam = c.req.query("providers");
+    const providers = providersParam !== undefined && providersParam.length > 0
+      ? providersParam.split(",").map((p) => p.trim()).filter((p) => p.length > 0)
+      : undefined;
+    return c.json({
+      status: currentProxyStatus(providers),
+      last_discovery: lastProxyDiscovery,
+    });
+  });
+
+  protectedApp.post("/v1/admin/proxies/discover", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      target_count?: number;
+      providers?: string[];
+      persist?: boolean;
+      timeout_ms?: number;
+      concurrency?: number;
+      source_limit?: number;
+      sources?: string[];
+      candidates?: string[];
+    };
+    try {
+      const report = await discoverProxies({
+        targetCount: body.target_count,
+        providers: body.providers,
+        persist: body.persist,
+        timeoutMs: body.timeout_ms,
+        concurrency: body.concurrency,
+        sourceLimit: body.source_limit,
+        sources: body.sources,
+        candidates: body.candidates,
+      });
+      lastProxyDiscovery = report;
+      return c.json({ report });
+    } catch (err) {
+      log.error("proxy discovery failed", { err: (err as Error).message });
+      return c.json({ error: (err as Error).message }, 500);
+    }
   });
 
   // -- Model config CRUD ------------------------------------------------------

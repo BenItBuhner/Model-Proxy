@@ -18,7 +18,8 @@ import { createOpenAIRoutes } from "../src/server/routes/openai.ts";
 const tmpRoot = join(tmpdir(), `mp-v2-models-list-${process.pid}-${Date.now()}`);
 
 const originalFetch = globalThis.fetch;
-let fetchImpl: typeof fetch = originalFetch;
+type MockFetch = (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => Promise<Response>;
+let fetchImpl: MockFetch = (input, init) => originalFetch(input, init);
 
 beforeAll(() => {
   mkdirSync(join(tmpRoot, "models"), { recursive: true });
@@ -63,7 +64,7 @@ beforeAll(() => {
   process.env.UPSTREAM_MODELS_CACHE_TTL_SECONDS = "3600";
   process.env.UPSTREAM_MODELS_FETCH_TIMEOUT_MS = "3000";
 
-  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+  globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
     fetchImpl(input, init)) as typeof fetch;
 });
 
@@ -71,7 +72,7 @@ afterEach(() => {
   clearUpstreamModelCatalogCache();
   modelConfigLoader.clearCache();
   delete process.env["DEFAULT_CONTEXT_WINDOW"];
-  fetchImpl = originalFetch;
+  fetchImpl = (input, init) => originalFetch(input, init);
 });
 
 afterAll(() => {

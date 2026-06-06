@@ -9,6 +9,14 @@ import { parseRetryAfterFromErrorBody } from "../src/providers/upstream-fetch.ts
 
 const originalEnv = { ...process.env };
 
+function clearProxyEnv(): void {
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("OPENCODE_EGRESS_PROXY") || key.startsWith("MODEL_PROXY_EGRESS_PROXY")) {
+      delete process.env[key];
+    }
+  }
+}
+
 afterEach(() => {
   process.env = { ...originalEnv };
   resetProxyState();
@@ -31,6 +39,7 @@ describe("parseRetryAfterFromErrorBody", () => {
 
 describe("ProxyCycleTracker", () => {
   test("rotates through configured egress proxies", () => {
+    clearProxyEnv();
     process.env.OPENCODE_EGRESS_PROXY_1 = "http://proxy-a:8080";
     process.env.OPENCODE_EGRESS_PROXY_2 = "http://proxy-b:8080";
 
@@ -47,6 +56,7 @@ describe("ProxyCycleTracker", () => {
   });
 
   test("skips cooled-down proxies", () => {
+    clearProxyEnv();
     process.env.OPENCODE_EGRESS_PROXY_1 = "http://proxy-a:8080";
     process.env.OPENCODE_EGRESS_PROXY_2 = "http://proxy-b:8080";
 
@@ -67,8 +77,26 @@ describe("ProxyCycleTracker", () => {
 
 describe("parseEgressProxies", () => {
   test("reads OPENCODE_EGRESS_PROXY env patterns", () => {
+    clearProxyEnv();
     process.env.OPENCODE_EGRESS_PROXY = "http://direct-proxy:3128";
     const proxies = parseEgressProxies("opencode");
     expect(proxies.some((p) => p.url === "http://direct-proxy:3128")).toBe(true);
+  });
+});
+
+describe("shared proxy pool", () => {
+  test("reads shared MODEL_PROXY_EGRESS_PROXY entries before provider-specific entries and dedupes", () => {
+    clearProxyEnv();
+    process.env.MODEL_PROXY_EGRESS_PROXY_1 = "http://shared-a:8080";
+    process.env.MODEL_PROXY_EGRESS_PROXY_2 = "http://shared-b:8080";
+    process.env.OPENCODE_EGRESS_PROXY_1 = "http://shared-a:8080";
+    process.env.OPENCODE_EGRESS_PROXY_2 = "http://specific-c:8080";
+
+    const proxies = parseEgressProxies("opencode").map((p) => p.url);
+    expect(proxies).toEqual([
+      "http://shared-a:8080",
+      "http://shared-b:8080",
+      "http://specific-c:8080",
+    ]);
   });
 });

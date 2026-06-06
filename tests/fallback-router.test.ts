@@ -13,6 +13,8 @@ import type {
 import { ProviderAPIError } from "../src/providers/errors.ts";
 import { providerRegistry } from "../src/providers/registry.ts";
 import { resetKeyState } from "../src/providers/api-key-manager.ts";
+import { resetProxyState } from "../src/providers/egress-proxy-manager.ts";
+import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { FallbackRouter } from "../src/routing/fallback.ts";
 import { modelConfigLoader } from "../src/config/model-loader.ts";
 
@@ -22,6 +24,7 @@ const tmpRoot = join(tmpdir(), `mp-v2-routing-${process.pid}-${Date.now()}`);
 // pointing at our sandbox (via monkey-patched internals).
 (modelConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
 (modelConfigLoader as unknown as { pathsArePlainModelDirs: boolean }).pathsArePlainModelDirs = false;
+(providerConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
 
 class FakeProvider implements BaseProvider {
   readonly providerName = "fake";
@@ -88,8 +91,47 @@ beforeAll(() => {
     }),
   );
 
+  writeFileSync(
+    join(tmpRoot, "providers", "fake-proxy.json"),
+    JSON.stringify({
+      name: "fake-proxy",
+      display_name: "Fake Proxy Provider",
+      enabled: true,
+      api_keys: { env_var_patterns: ["FAKE_PROXY_API_KEY", "FAKE_PROXY_API_KEY_{INDEX}"] },
+      endpoints: {
+        base_url: "https://fake-proxy.local/v1",
+        completions: "/chat/completions",
+        compatible_format: "openai",
+      },
+      authentication: {
+        type: "bearer",
+        header_name: "Authorization",
+        header_format: "Bearer {api_key}",
+      },
+      error_handling: { "429": { action: "provider_cooldown", cooldown_seconds: 0 } },
+      egress_proxies: {
+        enabled: true,
+        env_var_patterns: ["FAKE_PROXY_EGRESS_PROXY", "FAKE_PROXY_EGRESS_PROXY_{INDEX}"],
+        cooldown_seconds: 0,
+      },
+    }),
+  );
+
+  writeFileSync(
+    join(tmpRoot, "models", "fake-proxy-model.json"),
+    JSON.stringify({
+      logical_name: "fake-proxy-model",
+      timeout_seconds: 5,
+      default_cooldown_seconds: 0,
+      model_routings: [
+        { provider: "fake-proxy", model: "fake-backend", wire_protocol: "openai" },
+      ],
+    }),
+  );
+
   // Register FakeProvider for the lifetime of these tests.
   providerRegistry.registerProvider("fake", () => new FakeProvider());
+  providerRegistry.registerProvider("fake-proxy", () => new FakeProvider());
 
   // Ensure env has the key the API key manager will parse.
   process.env.FAKE_API_KEY = "test-key-aaaa";
@@ -97,8 +139,15 @@ beforeAll(() => {
 
 afterAll(() => {
   providerRegistry.unregisterProvider("fake");
+  providerRegistry.unregisterProvider("fake-proxy");
   resetKeyState("fake");
+  resetKeyState("fake-proxy");
+  resetProxyState("fake-proxy");
   delete process.env.FAKE_API_KEY;
+  delete process.env.FAKE_PROXY_API_KEY_1;
+  delete process.env.FAKE_PROXY_API_KEY_2;
+  delete process.env.FAKE_PROXY_EGRESS_PROXY_1;
+  delete process.env.FAKE_PROXY_EGRESS_PROXY_2;
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 
@@ -190,4 +239,38 @@ describe("FallbackRouter", () => {
     expect(args?.temperature).toBe(0.2);
     expect(args?.stop).toEqual(["END"]);
   });
+
+  test("tries every proxy for a key before rotating to the next API key", async () => {
+    FakeProvider.calls = [];
+    FakeProvider.responses = [
+      new ProviderAPIError("429 first", 429, { provider: "fake-proxy", body: "RateLimitError" }),
+      new ProviderAPIError("429 second", 429, { provider: "fake-proxy", body: "RateLimitError" }),
+      { id: "ok", object: "chat.completion", choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] },
+    ];
+    resetKeyState("fake-proxy");
+    resetProxyState("fake-proxy");
+    providerConfigLoader.clearCache();
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith("MODEL_PROXY_EGRESS_PROXY") || key.startsWith("FAKE_PROXY_EGRESS_PROXY")) delete process.env[key];
+    }
+    process.env.FAKE_PROXY_API_KEY_1 = "key-one";
+    process.env.FAKE_PROXY_API_KEY_2 = "key-two";
+    process.env.FAKE_PROXY_EGRESS_PROXY_1 = "http://proxy-one:8080";
+    process.env.FAKE_PROXY_EGRESS_PROXY_2 = "http://proxy-two:8080";
+
+    const router = new FallbackRouter();
+    const result = await router.callWithFallback({
+      logicalModel: "fake-proxy-model",
+      requestData: { model: "fake-proxy-model", messages: [{ role: "user", content: "hi" }] },
+      targetProtocol: "openai",
+    });
+
+    expect(result["id"]).toBe("ok");
+    expect(FakeProvider.calls.slice(0, 2).map((call) => [call.ctx.apiKey, call.ctx.egressProxyUrl])).toEqual([
+      ["key-one", "http://proxy-one:8080"],
+      ["key-one", "http://proxy-two:8080"],
+    ]);
+    expect(FakeProvider.calls[2]?.ctx.egressProxyUrl).toBe("http://proxy-one:8080");
+  });
+
 });

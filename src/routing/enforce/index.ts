@@ -75,6 +75,8 @@ export interface EnforceCallArgs {
   requestData: Record<string, unknown>;
   targetProtocol: EnforceProtocol;
   signal?: AbortSignal;
+  /** Extra headers forwarded to upstream providers (e.g. x-opencode-*). */
+  extraHeaders?: Record<string, string>;
   /** Optional per-request overrides (header / query). */
   overrides?: PerRequestOverrides;
 }
@@ -109,6 +111,7 @@ export class EnforceRouter {
         requestData: scrubRetryMarkers(args.requestData),
         targetProtocol: args.targetProtocol,
         ...(args.signal !== undefined ? { signal: args.signal } : {}),
+        ...(args.extraHeaders !== undefined ? { extraHeaders: args.extraHeaders } : {}),
       });
     }
 
@@ -128,6 +131,7 @@ export class EnforceRouter {
       injected,
       args.targetProtocol,
       args.signal,
+      args.extraHeaders,
       config,
     );
     const hadFlag = responseContainsFlag(
@@ -183,6 +187,7 @@ export class EnforceRouter {
       injected,
       args.targetProtocol,
       args.signal,
+      args.extraHeaders,
       config,
     );
     const hadFlag = responseContainsFlag(
@@ -221,6 +226,7 @@ export class EnforceRouter {
     seedRequest: Record<string, unknown>,
     protocol: EnforceProtocol,
     signal: AbortSignal | undefined,
+    extraHeaders: Record<string, string> | undefined,
     config: ResolvedEnforceConfig,
   ): Promise<Record<string, unknown>> {
     let currentRequest = seedRequest;
@@ -245,6 +251,7 @@ export class EnforceRouter {
         requestData: scrubRetryMarkers(currentRequest),
         targetProtocol: protocol,
         ...(signal !== undefined ? { signal } : {}),
+        ...(extraHeaders !== undefined ? { extraHeaders } : {}),
       });
 
       // 1. Explicit empty/whitespace guard — catches the null/empty-content bug.

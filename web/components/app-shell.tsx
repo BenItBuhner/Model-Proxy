@@ -32,6 +32,7 @@ const NAV: NavItem[] = [
   { code: "04", label: "Config", href: "/config" },
   { code: "05", label: "Test environment", href: "/test-environment" },
   { code: "06", label: "Logs", href: "/logs" },
+  { code: "07", label: "Proxies", href: "/proxies" },
 ];
 
 function isNavActive(pathname: string, item: NavItem): boolean {

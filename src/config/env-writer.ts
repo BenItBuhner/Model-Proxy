@@ -132,3 +132,68 @@ export function writeEnvFile(input: WriteEnvInput): {
 
   return { path, applied: validEntries.length, skipped };
 }
+
+export function upsertEnvValuesPreservingRaw(
+  updates: Record<string, string>,
+  options: { removePrefixes?: string[] } = {},
+): { path: string; applied: number; removed: string[] } {
+  const path = resolveEnvPath();
+  const raw = existsSync(path) ? readFileSync(path, "utf8") : "";
+  const updateKeys = new Set(Object.keys(updates));
+  const removePrefixes = options.removePrefixes ?? [];
+  const removed: string[] = [];
+  const seen = new Set<string>();
+  const lines: string[] = [];
+
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.length === 0) {
+      lines.push(line);
+      continue;
+    }
+    const trimmed = line.trim();
+    if (trimmed.startsWith("#") || !trimmed.includes("=")) {
+      lines.push(line);
+      continue;
+    }
+    const key = trimmed.slice(0, trimmed.indexOf("=")).trim();
+    if (removePrefixes.some((prefix) => key.startsWith(prefix)) && !updateKeys.has(key)) {
+      removed.push(key);
+      continue;
+    }
+    if (updateKeys.has(key)) {
+      lines.push(`${key}=${escapeEnvValue(updates[key] ?? "")}`);
+      seen.add(key);
+      continue;
+    }
+    lines.push(line);
+  }
+
+  if (lines.length > 0 && lines[lines.length - 1] !== "") lines.push("");
+  for (const key of Object.keys(updates).sort(envKeySort)) {
+    if (seen.has(key)) continue;
+    lines.push(`${key}=${escapeEnvValue(updates[key] ?? "")}`);
+  }
+
+  const serialized = lines.join("\n").replace(/\n*$/, "\n");
+  writeFileSync(path, serialized, "utf8");
+  for (const [key, value] of Object.entries(updates)) {
+    if (value.length === 0) delete process.env[key];
+    else process.env[key] = value;
+  }
+  for (const key of removed) delete process.env[key];
+  log.info("env file updated in place", { path, applied: updateKeys.size, removed: removed.length });
+  return { path, applied: updateKeys.size, removed };
+}
+
+function escapeEnvValue(value: string): string {
+  return value.includes("\n") || value.includes(" ") || value.includes('"')
+    ? JSON.stringify(value)
+    : value;
+}
+
+function envKeySort(a: string, b: string): number {
+  const ai = Number.parseInt(a.match(/_(\d+)$/)?.[1] ?? "0", 10);
+  const bi = Number.parseInt(b.match(/_(\d+)$/)?.[1] ?? "0", 10);
+  if (Number.isFinite(ai) && Number.isFinite(bi) && ai !== bi) return ai - bi;
+  return a.localeCompare(b);
+}

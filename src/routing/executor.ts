@@ -59,6 +59,9 @@ function openaiArgsFromRequest(
     tools: request["tools"] as unknown[] | undefined,
     tool_choice: request["tool_choice"],
     response_format: request["response_format"],
+    chat_template_kwargs: request["chat_template_kwargs"] as
+      | Record<string, unknown>
+      | undefined,
   };
 }
 
