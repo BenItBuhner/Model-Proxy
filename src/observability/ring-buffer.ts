@@ -8,22 +8,28 @@
 export interface RequestLogRecord {
   requestId: string;
   timestamp: string;
+  completedAt: string | undefined;
   endpoint: string;
   method: string;
   requestedModel: string;
   resolvedProvider: string | undefined;
   resolvedModel: string | undefined;
   wireProtocol: "openai" | "anthropic" | "audio" | undefined;
+  state: "running" | "completed";
   responseStatus: number | undefined;
   responseTimeMs: number | undefined;
+  elapsedMs: number;
   isStreaming: boolean;
   enforceMode: boolean;
   retryCount: number;
   errorMessage: string | undefined;
   errorType: string | undefined;
   promptTokens: number | undefined;
+  promptTokensEstimated: boolean | undefined;
   completionTokens: number | undefined;
   totalTokens: number | undefined;
+  streamChunkCount: number | undefined;
+  streamBytes: number | undefined;
 }
 
 const DEFAULT_CAPACITY = 1000;

@@ -16,22 +16,28 @@ export interface HealthDetailed {
 export interface RequestLogRecord {
   requestId: string;
   timestamp: string;
+  completedAt?: string;
   endpoint: string;
   method: string;
   requestedModel: string;
   resolvedProvider?: string;
   resolvedModel?: string;
   wireProtocol?: "openai" | "anthropic" | "audio";
+  state: "running" | "completed";
   responseStatus?: number;
   responseTimeMs?: number;
+  elapsedMs: number;
   isStreaming: boolean;
   enforceMode: boolean;
   retryCount: number;
   errorMessage?: string;
   errorType?: string;
   promptTokens?: number;
+  promptTokensEstimated?: boolean;
   completionTokens?: number;
   totalTokens?: number;
+  streamChunkCount?: number;
+  streamBytes?: number;
 }
 
 export interface ModelListItem {
@@ -88,7 +94,11 @@ export async function authStatus(): Promise<{
 }
 
 // -------- Logs --------
-export async function getLogs(limit = 100): Promise<{ records: RequestLogRecord[]; total_in_buffer: number }> {
+export async function getLogs(limit = 100): Promise<{
+  records: RequestLogRecord[];
+  total_in_buffer: number;
+  active_count: number;
+}> {
   return apiFetch(`/v1/admin/logs?limit=${limit}`);
 }
 

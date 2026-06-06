@@ -11,7 +11,7 @@ import {
 import { modelConfigLoader } from "../config/model-loader.ts";
 import { providerConfigLoader } from "../config/provider-loader.ts";
 import { createLogger } from "../observability/logger.ts";
-import { emit, nowIso } from "../observability/request-context.ts";
+import { currentRequestId, emit, nowIso } from "../observability/request-context.ts";
 import {
   KeyCycleTracker,
   getAvailableKeys,
@@ -26,6 +26,7 @@ import {
 } from "../providers/egress-proxy-manager.ts";
 import { ProviderAPIError, RouteExecutionError } from "../providers/errors.ts";
 import { getProviderWireProtocol } from "../providers/provider-helpers.ts";
+import { recordRequestProgress } from "../server/request-log.ts";
 import { execute, executeStream } from "./executor.ts";
 import {
   fixMissingToolResponsesOpenAI,
@@ -48,6 +49,17 @@ function proxyHintOf(proxyUrl: string): string {
   } catch {
     return proxyUrl.replace(/\/\/[^@/]+@/, "//***@");
   }
+}
+
+function recordRouteProgress(route: ResolvedRoute, attemptNumber: number): void {
+  const requestId = currentRequestId();
+  if (requestId === undefined) return;
+  recordRequestProgress({
+    requestId,
+    resolvedProvider: route.provider,
+    resolvedModel: route.model,
+    retryCount: Math.max(0, attemptNumber - 1),
+  });
 }
 
 // Unused-declaration helpers to keep imports stable across callers.
@@ -581,6 +593,7 @@ export class FallbackRouter {
                 }
               : {}),
           });
+          recordRouteProgress(route, attemptNumber);
 
           const routeStartMs = performance.now();
           try {
@@ -790,6 +803,7 @@ export class FallbackRouter {
                 }
               : {}),
           });
+          recordRouteProgress(route, attemptNumber);
 
           const streamStartMs = performance.now();
           try {
