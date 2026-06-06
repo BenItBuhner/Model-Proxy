@@ -233,7 +233,7 @@ function ModelsBody(): React.ReactElement {
                     onClick={() => openModel(m.logical_name)}
                     className={
                       m.logical_name === active
-                        ? "bg-phosphor-50/50 shadow-[inset_2px_0_0_0_#CDFF00]"
+                        ? "bg-phosphor-50/50 shadow-[inset_2px_0_0_0_var(--phosphor-500)]"
                         : undefined
                     }
                   >

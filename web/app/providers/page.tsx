@@ -118,7 +118,7 @@ function ProvidersBody(): React.ReactElement {
                     onClick={() => open(p.name)}
                     className={
                       p.name === active
-                        ? "bg-phosphor-50/50 shadow-[inset_2px_0_0_0_#CDFF00]"
+                        ? "bg-phosphor-50/50 shadow-[inset_2px_0_0_0_var(--phosphor-500)]"
                         : undefined
                     }
                   >

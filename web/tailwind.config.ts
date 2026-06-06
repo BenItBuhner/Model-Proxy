@@ -1,6 +1,7 @@
 import type { Config } from "tailwindcss";
 
 const config: Config = {
+  darkMode: "class",
   content: [
     "./app/**/*.{ts,tsx}",
     "./components/**/*.{ts,tsx}",
@@ -26,38 +27,38 @@ const config: Config = {
       },
       colors: {
         ink: {
-          900: "#060606",
-          850: "#0A0A0A",
-          800: "#0E0E0E",
-          700: "#111111",
-          600: "#161616",
-          500: "#1B1B1B",
-          400: "#242424",
-          300: "#2E2E2E",
-          200: "#3E3E3E",
+          900: "var(--ink-900)",
+          850: "var(--ink-850)",
+          800: "var(--ink-800)",
+          700: "var(--ink-700)",
+          600: "var(--ink-600)",
+          500: "var(--ink-500)",
+          400: "var(--ink-400)",
+          300: "var(--ink-300)",
+          200: "var(--ink-200)",
         },
         bone: {
-          900: "#F3F1EC",
-          700: "#D9D6CF",
-          500: "#A09D97",
-          300: "#64635F",
+          900: "var(--bone-900)",
+          700: "var(--bone-700)",
+          500: "var(--bone-500)",
+          300: "var(--bone-300)",
         },
         phosphor: {
-          500: "#CDFF00",
-          400: "#B9E800",
-          300: "#9ECC00",
-          100: "rgba(205, 255, 0, 0.12)",
-          50: "rgba(205, 255, 0, 0.05)",
+          500: "var(--phosphor-500)",
+          400: "var(--phosphor-400)",
+          300: "var(--phosphor-300)",
+          100: "var(--phosphor-100)",
+          50: "var(--phosphor-50)",
         },
         alert: {
-          500: "#FF3B30",
-          300: "#FF9580",
+          500: "var(--alert-500)",
+          300: "var(--alert-300)",
         },
       },
       boxShadow: {
-        edge: "inset 0 0 0 1px #1F1F1F",
-        "edge-phosphor": "inset 0 0 0 1px rgba(205, 255, 0, 0.4)",
-        "ring-phosphor": "0 0 0 1px rgba(205, 255, 0, 0.6)",
+        edge: "var(--shadow-edge)",
+        "edge-phosphor": "var(--shadow-edge-phosphor)",
+        "ring-phosphor": "var(--shadow-ring-phosphor)",
       },
       backgroundImage: {
         grid:

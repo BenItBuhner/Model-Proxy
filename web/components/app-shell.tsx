@@ -10,6 +10,7 @@ import {
   logout as logoutRequest,
   type HealthDetailed,
 } from "@/lib/endpoints";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { StatusDot } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
@@ -118,6 +119,7 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
             })}
           </nav>
           <div className="mt-auto flex flex-col gap-3 border-t border-ink-500 pt-4">
+            <ThemeToggle />
             <SystemStatus health={health} error={healthErr} />
             <button
               onClick={handleLogout}

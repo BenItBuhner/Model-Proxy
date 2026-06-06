@@ -10,6 +10,7 @@ import {
   clearStoredApiKey,
 } from "@/lib/api";
 import { authStatus, login } from "@/lib/endpoints";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { StatusDot } from "@/components/ui/badge";
@@ -69,7 +70,10 @@ export default function LoginPage(): React.ReactElement {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center px-6 py-12">
+    <main className="relative flex min-h-screen items-center justify-center px-6 py-12">
+      <div className="absolute right-6 top-6 w-[200px]">
+        <ThemeToggle />
+      </div>
       <div className="w-full max-w-[440px] animate-flicker-in">
         <div className="mb-10 space-y-3 text-center">
           <div className="mx-auto h-8 w-8 bg-phosphor-500 shadow-[0_0_24px_rgba(205,255,0,0.65)]" />

@@ -21,15 +21,105 @@
 }
 
 :root {
+  color-scheme: light;
+
+  --phosphor: #9ecc00;
+  --grid-line: rgba(0, 0, 0, 0.05);
+  --page-bg: #f7f6f2;
+  --page-fg: #1c1c1a;
+  --selection-bg: rgba(158, 204, 0, 0.22);
+  --selection-fg: #0a0a0a;
+  --scrollbar-thumb: #c9c6bd;
+  --scrollbar-thumb-hover: #a8a59d;
+  --scrollbar-border: #f7f6f2;
+  --hairline-bg: #d5d2ca;
+  --kbd-border: #c9c6bd;
+  --kbd-bg: #eae9e4;
+  --kbd-fg: #5a5955;
+  --corner-accent: rgba(158, 204, 0, 0.55);
+  --glow-radial: rgba(158, 204, 0, 0.07);
+
+  --ink-900: #f7f6f2;
+  --ink-850: #f0efea;
+  --ink-800: #eae9e4;
+  --ink-700: #e3e2dc;
+  --ink-600: #dad9d3;
+  --ink-500: #cfcec8;
+  --ink-400: #b8b7b1;
+  --ink-300: #9c9b95;
+  --ink-200: #7e7d78;
+
+  --bone-900: #0a0a0a;
+  --bone-700: #1c1c1a;
+  --bone-500: #5a5955;
+  --bone-300: #8a8984;
+
+  --phosphor-500: #9ecc00;
+  --phosphor-400: #8cb800;
+  --phosphor-300: #7aa000;
+  --phosphor-100: rgba(158, 204, 0, 0.14);
+  --phosphor-50: rgba(158, 204, 0, 0.07);
+
+  --alert-500: #e03228;
+  --alert-300: #ff6b5c;
+
+  --shadow-edge: inset 0 0 0 1px #cfcec8;
+  --shadow-edge-phosphor: inset 0 0 0 1px rgba(158, 204, 0, 0.45);
+  --shadow-ring-phosphor: 0 0 0 1px rgba(158, 204, 0, 0.55);
+}
+
+.dark {
   color-scheme: dark;
+
   --phosphor: #cdff00;
   --grid-line: rgba(255, 255, 255, 0.04);
+  --page-bg: #060606;
+  --page-fg: #d9d6cf;
+  --selection-bg: rgba(205, 255, 0, 0.25);
+  --selection-fg: #f3f1ec;
+  --scrollbar-thumb: #242424;
+  --scrollbar-thumb-hover: #3e3e3e;
+  --scrollbar-border: #060606;
+  --hairline-bg: #1f1f1f;
+  --kbd-border: #2e2e2e;
+  --kbd-bg: #111111;
+  --kbd-fg: #a09d97;
+  --corner-accent: rgba(205, 255, 0, 0.6);
+  --glow-radial: rgba(205, 255, 0, 0.05);
+
+  --ink-900: #060606;
+  --ink-850: #0a0a0a;
+  --ink-800: #0e0e0e;
+  --ink-700: #111111;
+  --ink-600: #161616;
+  --ink-500: #1b1b1b;
+  --ink-400: #242424;
+  --ink-300: #2e2e2e;
+  --ink-200: #3e3e3e;
+
+  --bone-900: #f3f1ec;
+  --bone-700: #d9d6cf;
+  --bone-500: #a09d97;
+  --bone-300: #64635f;
+
+  --phosphor-500: #cdff00;
+  --phosphor-400: #b9e800;
+  --phosphor-300: #9ecc00;
+  --phosphor-100: rgba(205, 255, 0, 0.12);
+  --phosphor-50: rgba(205, 255, 0, 0.05);
+
+  --alert-500: #ff3b30;
+  --alert-300: #ff9580;
+
+  --shadow-edge: inset 0 0 0 1px #1f1f1f;
+  --shadow-edge-phosphor: inset 0 0 0 1px rgba(205, 255, 0, 0.4);
+  --shadow-ring-phosphor: 0 0 0 1px rgba(205, 255, 0, 0.6);
 }
 
 html,
 body {
-  background: #060606;
-  color: #d9d6cf;
+  background: var(--page-bg);
+  color: var(--page-fg);
   font-family: "Geist Sans", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -40,7 +130,7 @@ body {
   background-image:
     radial-gradient(
       ellipse 90% 70% at 50% -10%,
-      rgba(205, 255, 0, 0.05),
+      var(--glow-radial),
       transparent 70%
     ),
     linear-gradient(var(--grid-line) 1px, transparent 1px),
@@ -56,8 +146,8 @@ body {
 }
 
 ::selection {
-  background: rgba(205, 255, 0, 0.25);
-  color: #f3f1ec;
+  background: var(--selection-bg);
+  color: var(--selection-fg);
 }
 
 /* Scrollbars */
@@ -69,12 +159,12 @@ body {
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background: #242424;
-  border: 2px solid #060606;
+  background: var(--scrollbar-thumb);
+  border: 2px solid var(--scrollbar-border);
   border-radius: 0;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #3e3e3e;
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* Utility: decorative corner ticks for panels (kept inside bounds — no bleed over siblings) */
@@ -88,7 +178,7 @@ body {
   position: absolute;
   width: 10px;
   height: 10px;
-  border-color: rgba(205, 255, 0, 0.6);
+  border-color: var(--corner-accent);
   border-style: solid;
   pointer-events: none;
   z-index: 1;
@@ -108,7 +198,7 @@ body {
 .hairline {
   position: relative;
   height: 1px;
-  background: #1f1f1f;
+  background: var(--hairline-bg);
   overflow: hidden;
 }
 .hairline::before {
@@ -121,7 +211,7 @@ body {
   background: linear-gradient(
     90deg,
     transparent,
-    rgba(205, 255, 0, 0.45),
+    var(--corner-accent),
     transparent
   );
   animation: sweep 6s linear infinite;
@@ -142,8 +232,8 @@ kbd {
   font-size: 11px;
   line-height: 1;
   padding: 3px 5px;
-  border: 1px solid #2e2e2e;
-  background: #111111;
-  color: #a09d97;
+  border: 1px solid var(--kbd-border);
+  background: var(--kbd-bg);
+  color: var(--kbd-fg);
   border-radius: 3px;
 }
