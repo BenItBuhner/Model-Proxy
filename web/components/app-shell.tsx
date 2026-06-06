@@ -19,6 +19,12 @@ interface NavItem {
   code: string;
 }
 
+const THEME_STORAGE_KEY = "model-proxy.theme";
+const THEME_OPTIONS = ["light", "dark", "system"] as const;
+
+type ThemePreference = (typeof THEME_OPTIONS)[number];
+type ResolvedTheme = Exclude<ThemePreference, "system">;
+
 const NAV: NavItem[] = [
   { code: "01", label: "Overview", href: "/" },
   { code: "02", label: "Models", href: "/models" },
@@ -45,11 +51,43 @@ function isNavActive(pathname: string, item: NavItem): boolean {
   return pathname === item.href || pathname.startsWith(`${item.href}/`);
 }
 
+function isThemePreference(value: string | null): value is ThemePreference {
+  return value !== null && (THEME_OPTIONS as readonly string[]).includes(value);
+}
+
+function readStoredThemePreference(): ThemePreference {
+  try {
+    const value = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return isThemePreference(value) ? value : "system";
+  } catch {
+    return "system";
+  }
+}
+
+function storeThemePreference(value: ThemePreference): void {
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, value);
+  } catch {
+    // Ignore storage failures; the active theme still applies for this tab.
+  }
+}
+
+function getSystemTheme(): ResolvedTheme {
+  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+
+function applyThemePreference(preference: ThemePreference): void {
+  const resolved = preference === "system" ? getSystemTheme() : preference;
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.style.colorScheme = resolved;
+}
+
 export function AppShell({ children }: { children: React.ReactNode }): React.ReactElement {
   const pathname = usePathname() ?? "/";
   const router = useRouter();
   const [health, setHealth] = useState<HealthDetailed | undefined>(undefined);
   const [healthErr, setHealthErr] = useState<string | undefined>(undefined);
+  const [themePreference, setThemePreference] = useState<ThemePreference | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
@@ -69,6 +107,25 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
       clearInterval(id);
     };
   }, []);
+
+  useEffect(() => {
+    setThemePreference(readStoredThemePreference());
+  }, []);
+
+  useEffect(() => {
+    if (themePreference === undefined) return;
+
+    applyThemePreference(themePreference);
+    storeThemePreference(themePreference);
+
+    if (themePreference !== "system") return;
+
+    const media = window.matchMedia("(prefers-color-scheme: light)");
+    const handleSystemThemeChange = (): void => applyThemePreference("system");
+
+    media.addEventListener("change", handleSystemThemeChange);
+    return () => media.removeEventListener("change", handleSystemThemeChange);
+  }, [themePreference]);
 
   const handleLogout = async (): Promise<void> => {
     try {
@@ -118,6 +175,10 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
             })}
           </nav>
           <div className="mt-auto flex flex-col gap-3 border-t border-ink-500 pt-4">
+            <ThemeToggle
+              value={themePreference ?? "system"}
+              onChange={setThemePreference}
+            />
             <SystemStatus health={health} error={healthErr} />
             <button
               onClick={handleLogout}
@@ -131,6 +192,48 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
         <main className="flex-1 min-w-0 animate-flicker-in">
           {children}
         </main>
+      </div>
+    </div>
+  );
+}
+
+function ThemeToggle({
+  value,
+  onChange,
+}: {
+  value: ThemePreference;
+  onChange: (next: ThemePreference) => void;
+}): React.ReactElement {
+  return (
+    <div className="space-y-2">
+      <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-bone-300">
+        theme
+      </div>
+      <div
+        className="grid grid-cols-3 gap-1 bg-ink-800 p-1 shadow-edge"
+        role="group"
+        aria-label="Theme"
+      >
+        {THEME_OPTIONS.map((option) => {
+          const active = option === value;
+          return (
+            <button
+              key={option}
+              type="button"
+              aria-pressed={active}
+              onClick={() => onChange(option)}
+              className={cn(
+                "h-7 px-2 font-mono text-[10px] uppercase tracking-[0.12em] transition-colors",
+                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-phosphor-500",
+                active
+                  ? "bg-phosphor-100 text-phosphor-500 shadow-edge-phosphor"
+                  : "text-bone-500 hover:bg-ink-700 hover:text-bone-900",
+              )}
+            >
+              {option}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
