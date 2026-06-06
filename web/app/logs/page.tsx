@@ -65,11 +65,12 @@ function LogsBody(): React.ReactElement {
       return;
     }
 
+    const requestId = selectedId;
     let cancelled = false;
     async function loadTrace(): Promise<void> {
       setLoadingTrace(true);
       try {
-        const next = await getEventTrace(selectedId);
+        const next = await getEventTrace(requestId);
         if (cancelled) return;
         setTrace(next);
         setError(undefined);
