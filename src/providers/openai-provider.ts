@@ -14,6 +14,18 @@ import {
 
 const log = createLogger("provider.openai");
 
+/**
+ * When `true`, the OpenAI provider drops client-supplied `chat_template_kwargs`
+ * instead of forwarding them to the upstream. Set
+ * `DISABLE_CHAT_TEMPLATE_KWARGS_PASSTHROUGH=1` (or `true`/`yes`/`on`) to opt
+ * out of the passthrough; default is to forward.
+ */
+export function isChatTemplateKwargsPassthroughDisabled(): boolean {
+  const raw = process.env["DISABLE_CHAT_TEMPLATE_KWARGS_PASSTHROUGH"];
+  if (raw === undefined) return false;
+  return /^(1|true|yes|on)$/i.test(raw.trim());
+}
+
 interface ProviderQuirks {
   isGemini: boolean;
   isCerebras: boolean;
@@ -254,6 +266,12 @@ export class OpenAIProvider extends AbstractProvider {
     if (args.tool_choice !== undefined) payload["tool_choice"] = args.tool_choice;
     if (args.response_format !== undefined && !isGemini) {
       payload["response_format"] = args.response_format;
+    }
+    if (
+      args.chat_template_kwargs !== undefined &&
+      !isChatTemplateKwargsPassthroughDisabled()
+    ) {
+      payload["chat_template_kwargs"] = args.chat_template_kwargs;
     }
 
     return payload;

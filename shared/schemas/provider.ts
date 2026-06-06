@@ -21,12 +21,24 @@ export const ApiKeyPatternSchema = z
   })
   .passthrough();
 
+export const EgressProxyVerificationSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    url: EnvSubstitutedUrlSchema.optional(),
+    method: z.enum(["GET", "POST", "HEAD"]).default("GET"),
+    success_statuses: z.array(z.number().int().positive()).default([200]),
+    timeout_ms: z.number().int().positive().default(15000),
+    auth: z.enum(["none", "public", "provider_key"]).default("provider_key"),
+  })
+  .passthrough();
+
 export const EgressProxiesSchema = z
   .object({
     enabled: z.boolean().default(true),
     env_var_patterns: z.array(z.string().min(1)).default([]),
     cooldown_seconds: z.number().int().nonnegative().default(86400),
     description: z.string().optional(),
+    verification: EgressProxyVerificationSchema.optional(),
   })
   .passthrough();
 
