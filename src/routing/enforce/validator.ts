@@ -19,9 +19,24 @@ function hasStructuredToolCall(toolCalls: unknown): boolean {
     if (typeof call["id"] !== "string" || call["id"].length === 0) continue;
     const fn = call["function"];
     if (!isObject(fn)) continue;
-    if (typeof fn["name"] === "string" && fn["name"].length > 0) return true;
+    if (typeof fn["name"] !== "string" || fn["name"].length === 0) continue;
+    if (!hasValidArgumentString(fn["arguments"])) continue;
+    return true;
   }
   return false;
+}
+
+function hasValidArgumentString(argumentsValue: unknown): boolean {
+  if (argumentsValue === undefined || argumentsValue === null) return true;
+  if (typeof argumentsValue !== "string") return false;
+  const trimmed = argumentsValue.trim();
+  if (trimmed.length === 0) return true;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return isObject(parsed);
+  } catch {
+    return false;
+  }
 }
 
 function openaiTextualContent(

@@ -165,6 +165,7 @@ export class EnforceRouter {
         targetProtocol: args.targetProtocol,
       };
       if (args.signal !== undefined) streamArgs.signal = args.signal;
+      if (args.extraHeaders !== undefined) streamArgs.extraHeaders = args.extraHeaders;
       for await (const chunk of this.fallbackRouter.streamWithFallback(streamArgs)) {
         yield chunk;
       }
@@ -250,6 +251,7 @@ export class EnforceRouter {
         logicalModel,
         requestData: scrubRetryMarkers(currentRequest),
         targetProtocol: protocol,
+        validateResponse: false,
         ...(signal !== undefined ? { signal } : {}),
         ...(extraHeaders !== undefined ? { extraHeaders } : {}),
       });

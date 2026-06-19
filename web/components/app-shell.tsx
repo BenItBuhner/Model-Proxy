@@ -31,7 +31,7 @@ const NAV: NavItem[] = [
   { code: "03", label: "Providers", href: "/providers" },
   { code: "04", label: "Config", href: "/config" },
   { code: "05", label: "Test environment", href: "/test-environment" },
-  { code: "06", label: "Logs", href: "/logs" },
+  { code: "06", label: "Observability", href: "/observability" },
   { code: "07", label: "Proxies", href: "/proxies" },
 ];
 

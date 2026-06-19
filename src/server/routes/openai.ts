@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 
 import { OpenAIChatCompletionRequest } from "../../../shared/schemas/openai-wire.ts";
-import { RoutingError } from "../../../shared/schemas/routing.ts";
+import { RoutingError, type ModelRoutingConfig } from "../../../shared/schemas/routing.ts";
 import {
   ConfigNotFoundError,
   ConfigParseError,
@@ -27,26 +27,49 @@ import {
   SYSTEM_DEFAULT_CONTEXT_WINDOW,
 } from "../../routing/context-window.ts";
 import { FallbackRouter } from "../../routing/fallback.ts";
+import { FusionRouter } from "../../routing/fusion/fusion-router.ts";
+import type { FusionRequestContext } from "../../routing/fusion/types.ts";
 import { requireAuth } from "../auth.ts";
 import { formatOpenAIError } from "../error-formatters.ts";
 import {
   estimateRequestTokens,
+  recordRequestAbort,
   recordRequestFinish,
   recordRequestProgress,
   recordRequestStart,
 } from "../request-log.ts";
 
 const log = createLogger("routes.openai");
+const MAX_CAPTURED_STREAM_CHARS = parsePositiveInt(process.env.STREAM_CAPTURE_MAX_CHARS) ?? 250_000;
+const STREAM_HEARTBEAT_MS = parsePositiveInt(process.env.STREAM_HEARTBEAT_MS) ?? 5_000;
 
-function buildUpstreamExtraHeaders(c: Context, requestId: string): Record<string, string> {
+function routingErrorStatus(err: RoutingError): {
+  status: ContentfulStatusCode;
+  type: "service_unavailable" | "gateway_timeout";
+} {
+  const statuses = err.errors
+    .map((entry) => entry["status_code"])
+    .filter((status): status is number => typeof status === "number");
+  if (statuses.length > 0 && statuses.every((status) => status === 504)) {
+    return { status: 504, type: "gateway_timeout" };
+  }
+  return { status: 503, type: "service_unavailable" };
+}
+
+function buildUpstreamExtraHeaders(c: Context): Record<string, string> {
   const headers: Record<string, string> = {};
-  const session =
-    c.req.header("x-opencode-session") ??
-    c.req.header("x-session-affinity") ??
-    requestId;
-  headers["x-opencode-session"] = session;
-  headers["x-opencode-request"] = c.req.header("x-opencode-request") ?? requestId;
-  headers["x-opencode-client"] = c.req.header("x-opencode-client") ?? "model-proxy";
+  const session = c.req.header("x-opencode-session") ?? c.req.header("x-session-affinity");
+  if (session !== undefined && session.length > 0) {
+    headers["x-opencode-session"] = session;
+  }
+  const opencodeRequest = c.req.header("x-opencode-request");
+  if (opencodeRequest !== undefined && opencodeRequest.length > 0) {
+    headers["x-opencode-request"] = opencodeRequest;
+  }
+  const opencodeClient = c.req.header("x-opencode-client");
+  if (opencodeClient !== undefined && opencodeClient.length > 0) {
+    headers["x-opencode-client"] = opencodeClient;
+  }
   const project = c.req.header("x-opencode-project");
   if (project !== undefined && project.length > 0) {
     headers["x-opencode-project"] = project;
@@ -56,6 +79,61 @@ function buildUpstreamExtraHeaders(c: Context, requestId: string): Record<string
     headers["User-Agent"] = userAgent;
   }
   return headers;
+}
+
+function extractOpenAIStreamUsage(text: string): Parameters<typeof recordRequestFinish>[0]["usage"] {
+  const usage = findLastStreamUsage(text);
+  if (usage === undefined) return undefined;
+  return {
+    promptTokens: numberField(usage, "prompt_tokens"),
+    completionTokens: numberField(usage, "completion_tokens"),
+    totalTokens: numberField(usage, "total_tokens"),
+  };
+}
+
+function extractOpenAIStreamCompletionTokens(text: string, fallbackCharCount?: number): number | undefined {
+  const usage = extractOpenAIStreamUsage(text);
+  if (usage?.completionTokens !== undefined) return usage.completionTokens;
+  if (fallbackCharCount !== undefined && Number.isFinite(fallbackCharCount)) {
+    return Math.ceil(fallbackCharCount / 4);
+  }
+  return estimateRequestTokens(text);
+}
+
+function findLastStreamUsage(text: string): Record<string, unknown> | undefined {
+  let last: Record<string, unknown> | undefined;
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const payload = trimmed.slice("data:".length).trim();
+    if (payload === "[DONE]" || payload === "") continue;
+    try {
+      const parsed = JSON.parse(payload) as Record<string, unknown>;
+      if (typeof parsed["usage"] === "object" && parsed["usage"] !== null) {
+        last = parsed["usage"] as Record<string, unknown>;
+      }
+    } catch {
+      // Ignore non-JSON stream frames.
+    }
+  }
+  return last;
+}
+
+function numberField(obj: Record<string, unknown>, key: string): number | undefined {
+  const value = obj[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function appendCapturedStream(existing: string, chunk: string): string {
+  const combined = existing + chunk;
+  if (combined.length <= MAX_CAPTURED_STREAM_CHARS) return combined;
+  return combined.slice(-MAX_CAPTURED_STREAM_CHARS);
+}
+
+function parsePositiveInt(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 export function createOpenAIRoutes(): Hono {
@@ -134,8 +212,9 @@ async function handleChatCompletions(
   const isStream = Boolean(requestDict["stream"]);
 
   // Confirm the logical model is known up front.
+  let modelConfig: ModelRoutingConfig;
   try {
-    modelConfigLoader.loadConfig(request.model);
+    modelConfig = modelConfigLoader.loadConfig(request.model);
   } catch (err) {
     if (err instanceof ConfigNotFoundError || err instanceof ConfigParseError || err instanceof ConfigValidationError) {
       const available = modelConfigLoader.getAvailableModels().join(", ") || "(none)";
@@ -149,6 +228,11 @@ async function handleChatCompletions(
       );
     }
     throw err;
+  }
+
+  // ── Fusion dispatch ───────────────────────────────────────────────
+  if (modelConfig.fusion?.enabled === true) {
+    return handleFusionRequest(c, requestDict, request.model, modelConfig, isStream, endpointPath);
   }
 
   const fallback = new FallbackRouter();
@@ -173,98 +257,135 @@ async function handleChatCompletions(
     enforceMode: enforceConfig.enabled,
     promptTokens: estimateRequestTokens(requestDict),
     promptTokensEstimated: true,
+    requestBody: requestDict,
+    persistCompletions: modelConfig.persist_completions,
   });
 
   const signal = c.req.raw.signal;
-  const extraHeaders = buildUpstreamExtraHeaders(c, requestId);
+  const recordAbort = () => {
+    recordRequestAbort({
+      requestId,
+      responseTimeMs: Math.round(performance.now() - startedAt),
+    });
+  };
+  if (signal.aborted) {
+    recordAbort();
+  } else {
+    signal.addEventListener("abort", recordAbort, { once: true });
+  }
+  const extraHeaders = buildUpstreamExtraHeaders(c);
 
   if (isStream) {
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         const encoder = new TextEncoder();
+        const enqueueHeartbeat = () => {
+          try {
+            controller.enqueue(encoder.encode(`: keep-alive ${Date.now()}\n\n`));
+          } catch {
+            // The stream may already be closed or cancelled.
+          }
+        };
+        // Flush immediately so Cloudflare sees response bytes while slow
+        // upstreams are still processing the prompt or cycling fallbacks.
+        enqueueHeartbeat();
+        const heartbeat = setInterval(enqueueHeartbeat, STREAM_HEARTBEAT_MS);
         // Nested run() so async generator iteration (which happens lazily
         // here, after the outer request handler returned) still resolves
         // `currentEmitter()` correctly for every emit call deep in the stack.
-        await runWithRequestContext(requestId, async () => {
-          emit({
-            type: "request.started",
-            at: nowIso(),
-            protocol: "openai",
-            endpoint: endpointPath,
-            model: request.model,
-            stream: true,
-            enforceEnabled: enforceConfig.enabled,
-          });
-          try {
-            const generator = enforceConfig.enabled
-              ? enforce.stream({
-                  logicalModel: request.model,
-                  requestData: requestDict,
-                  targetProtocol: "openai",
-                  overrides,
-                  extraHeaders,
-                  ...(signal !== undefined ? { signal } : {}),
-                })
-              : fallback.streamWithFallback({
-                  logicalModel: request.model,
-                  requestData: requestDict,
-                  targetProtocol: "openai",
-                  extraHeaders,
-                  ...(signal !== undefined ? { signal } : {}),
+        try {
+          await runWithRequestContext(requestId, async () => {
+            emit({
+              type: "request.started",
+              at: nowIso(),
+              protocol: "openai",
+              endpoint: endpointPath,
+              model: request.model,
+              stream: true,
+              enforceEnabled: enforceConfig.enabled,
+            });
+            try {
+              let responseText = "";
+              let responseChars = 0;
+              const generator = enforceConfig.enabled
+                ? enforce.stream({
+                    logicalModel: request.model,
+                    requestData: requestDict,
+                    targetProtocol: "openai",
+                    overrides,
+                    extraHeaders,
+                    ...(signal !== undefined ? { signal } : {}),
+                  })
+                : fallback.streamWithFallback({
+                    logicalModel: request.model,
+                    requestData: requestDict,
+                    targetProtocol: "openai",
+                    extraHeaders,
+                    ...(signal !== undefined ? { signal } : {}),
+                  });
+              for await (const chunk of generator) {
+                responseChars += chunk.length;
+                responseText = appendCapturedStream(responseText, chunk);
+                const encoded = encoder.encode(chunk);
+                controller.enqueue(encoded);
+                recordRequestProgress({
+                  requestId,
+                  streamBytes: encoded.byteLength,
+                  streamChunkCount: 1,
                 });
-            for await (const chunk of generator) {
-              const encoded = encoder.encode(chunk);
-              controller.enqueue(encoded);
-              recordRequestProgress({
+              }
+              controller.close();
+              const totalMs = Math.round(performance.now() - startedAt);
+              emit({ type: "request.finished", at: nowIso(), status: 200, totalMs });
+              recordRequestFinish({
                 requestId,
-                streamBytes: encoded.byteLength,
-                streamChunkCount: 1,
+                responseStatus: 200,
+                responseTimeMs: totalMs,
+                responseBody: responseText,
+                completionTokens: extractOpenAIStreamCompletionTokens(responseText, responseChars),
+                completionTokensEstimated: findLastStreamUsage(responseText) === undefined,
+                usage: extractOpenAIStreamUsage(responseText),
+              });
+            } catch (err) {
+              const routingStatus = err instanceof RoutingError ? routingErrorStatus(err) : undefined;
+              const status = routingStatus?.status ?? 500;
+              const type = routingStatus?.type ?? "internal_server_error";
+              const message =
+                err instanceof Error ? err.message : `Streaming error: ${String(err)}`;
+              const errorPayload = formatOpenAIError(status, message, type);
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorPayload)}\n\n`));
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+              const totalMs = Math.round(performance.now() - startedAt);
+              const errorType = err instanceof Error ? err.name : "Unknown";
+              emit({
+                type: "request.finished",
+                at: nowIso(),
+                status,
+                totalMs,
+                errorType,
+                errorMessage: message,
+              });
+              recordRequestFinish({
+                requestId,
+                responseStatus: status,
+                responseTimeMs: totalMs,
+                errorMessage: message,
+                errorType,
+                responseBody: errorPayload,
               });
             }
-            controller.close();
-            const totalMs = Math.round(performance.now() - startedAt);
-            emit({ type: "request.finished", at: nowIso(), status: 200, totalMs });
-            recordRequestFinish({
-              requestId,
-              responseStatus: 200,
-              responseTimeMs: totalMs,
-            });
-          } catch (err) {
-            const status = err instanceof RoutingError ? 503 : 500;
-            const type =
-              err instanceof RoutingError ? "service_unavailable" : "internal_server_error";
-            const message =
-              err instanceof Error ? err.message : `Streaming error: ${String(err)}`;
-            const errorPayload = formatOpenAIError(status, message, type);
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorPayload)}\n\n`));
-            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-            controller.close();
-            const totalMs = Math.round(performance.now() - startedAt);
-            const errorType = err instanceof Error ? err.name : "Unknown";
-            emit({
-              type: "request.finished",
-              at: nowIso(),
-              status,
-              totalMs,
-              errorType,
-              errorMessage: message,
-            });
-            recordRequestFinish({
-              requestId,
-              responseStatus: status,
-              responseTimeMs: totalMs,
-              errorMessage: message,
-              errorType,
-            });
-          }
-        });
+          });
+        } finally {
+          if (heartbeat !== undefined) clearInterval(heartbeat);
+        }
       },
     });
 
     return new Response(stream, {
       headers: {
         "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-cache",
+        "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
         "X-Accel-Buffering": "no",
       },
@@ -311,6 +432,7 @@ async function handleChatCompletions(
         requestId,
         responseStatus: 200,
         responseTimeMs: totalMs,
+        responseBody: responseObj,
       };
       const prompt = usageObj["prompt_tokens"];
       const completion = usageObj["completion_tokens"];
@@ -326,22 +448,24 @@ async function handleChatCompletions(
       const totalMs = Math.round(performance.now() - startedAt);
       if (err instanceof RoutingError) {
         const message = `All routes failed for model '${request.model}': ${err.summary()}`;
+        const { status, type } = routingErrorStatus(err);
         recordRequestFinish({
           requestId,
-          responseStatus: 503,
+          responseStatus: status,
           responseTimeMs: totalMs,
           errorMessage: message,
           errorType: err.name,
+          responseBody: formatOpenAIError(status, message, type),
         });
         emit({
           type: "request.finished",
           at: nowIso(),
-          status: 503,
+          status,
           totalMs,
           errorType: err.name,
           errorMessage: message,
         });
-        return c.json(formatOpenAIError(503, message, "service_unavailable"), 503);
+        return c.json(formatOpenAIError(status, message, type), status);
       }
       if (err instanceof RouteExecutionError) {
         const status = (err.statusCode ?? 502) as ContentfulStatusCode;
@@ -351,6 +475,7 @@ async function handleChatCompletions(
           responseTimeMs: totalMs,
           errorMessage: err.message,
           errorType: err.name,
+          responseBody: formatOpenAIError(status, err.message),
         });
         emit({
           type: "request.finished",
@@ -370,6 +495,7 @@ async function handleChatCompletions(
           responseTimeMs: totalMs,
           errorMessage: message,
           errorType: err.name,
+          responseBody: formatOpenAIError(502, message, "api_error"),
         });
         emit({
           type: "request.finished",
@@ -390,6 +516,7 @@ async function handleChatCompletions(
         responseTimeMs: totalMs,
         errorMessage: message,
         errorType: errType,
+        responseBody: formatOpenAIError(500, `Error processing request: ${message}`, "internal_server_error"),
       });
       emit({
         type: "request.finished",
@@ -404,5 +531,173 @@ async function handleChatCompletions(
         500,
       );
     }
+  });
+}
+
+// ── Fusion dispatch handler ──────────────────────────────────────────
+
+/**
+ * Handle a chat completion request routed through the Model Fusion (Beta) system.
+ */
+async function handleFusionRequest(
+  c: Context,
+  requestDict: Record<string, unknown>,
+  logicalModel: string,
+  modelConfig: ModelRoutingConfig,
+  isStream: boolean,
+  _endpointPath: string,
+): Promise<Response> {
+  const requestId: string = c.get("requestId");
+  const fusionConfig = modelConfig.fusion;
+  if (!fusionConfig?.enabled) {
+    // Should not happen — guard from caller
+    return c.json(
+      formatOpenAIError(400, "Fusion not enabled for this model", "invalid_request_error"),
+      400,
+    );
+  }
+
+  const fusionRouter = new FusionRouter();
+  const messages = (requestDict["messages"] as unknown[]) ?? [];
+
+  const fusionCtx: FusionRequestContext = {
+    logicalModel,
+    fusionConfig,
+    requestData: requestDict,
+    clientProtocol: "openai",
+    messages,
+    signal: c.req.raw.signal,
+  };
+
+  // Record the fusion-specific request start
+  recordRequestStart({
+    requestId,
+    endpoint: "/v1/chat/completions",
+    method: "POST",
+    requestedModel: logicalModel,
+    resolvedModel: logicalModel,
+    wireProtocol: "openai",
+    isStreaming: isStream,
+    enforceMode: false,
+    promptTokens: estimateRequestTokens(requestDict),
+    promptTokensEstimated: true,
+    requestBody: requestDict,
+    persistCompletions: false,
+  });
+
+  if (isStream) {
+    return handleFusionStream(c, fusionRouter, fusionCtx, requestId);
+  }
+
+  // Non-streaming path
+  try {
+    const startedAt = c.get("startedAt") as number;
+    const result = await fusionRouter.route(fusionCtx);
+    const responseTimeMs = Math.round(performance.now() - startedAt);
+
+    // Build an OpenAI-compatible response
+    const openaiResponse = {
+      id: `chatcmpl-${requestId}`,
+      object: "chat.completion",
+      created: Math.floor(Date.now() / 1000),
+      model: logicalModel,
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: result.content,
+          },
+          finish_reason: "stop",
+        },
+      ],
+      usage: result.usage ?? {
+        prompt_tokens: estimateRequestTokens(requestDict) ?? 0,
+        completion_tokens: Math.ceil(result.content.length / 4),
+        total_tokens: (estimateRequestTokens(requestDict) ?? 0) + Math.ceil(result.content.length / 4),
+      },
+    };
+
+    recordRequestFinish({
+      requestId,
+      responseStatus: 200,
+      responseTimeMs,
+      responseBody: openaiResponse,
+    });
+
+    emit({
+      type: "request.finished",
+      at: nowIso(),
+      status: 200,
+      totalMs: responseTimeMs,
+    });
+
+    return c.json(openaiResponse);
+  } catch (err) {
+    const startedAt = c.get("startedAt") as number;
+    const responseTimeMs = Math.round(performance.now() - startedAt);
+    const message = err instanceof Error ? err.message : String(err);
+
+    recordRequestFinish({
+      requestId,
+      responseStatus: 500,
+      responseTimeMs,
+      errorMessage: message,
+      responseBody: formatOpenAIError(500, `Fusion error: ${message}`, "internal_server_error"),
+    });
+
+    return c.json(
+      formatOpenAIError(500, `Fusion error: ${message}`, "internal_server_error"),
+      500,
+    );
+  }
+}
+
+/**
+ * Handle a streaming fusion request — streams SSE events for reasoning
+ * summaries and the final fusion model output.
+ */
+async function handleFusionStream(
+  c: Context,
+  fusionRouter: FusionRouter,
+  fusionCtx: FusionRequestContext,
+  requestId: string,
+): Promise<Response> {
+  const startedAt: number = c.get("startedAt");
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const encoder = new TextEncoder();
+
+      try {
+        const generator = fusionRouter.stream(fusionCtx);
+        for await (const event of generator) {
+          controller.enqueue(encoder.encode(event));
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`),
+        );
+      } finally {
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      }
+
+      const responseTimeMs = Math.round(performance.now() - startedAt);
+      recordRequestFinish({
+        requestId,
+        responseStatus: 200,
+        responseTimeMs,
+      });
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
   });
 }

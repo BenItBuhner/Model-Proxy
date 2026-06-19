@@ -10,6 +10,7 @@ const defaultFactories: Record<string, ProviderFactory> = {
   openai: () => new OpenAIProvider("openai"),
   openrouter: () => new OpenAIProvider("openrouter"),
   nahcrof: () => new OpenAIProvider("nahcrof"),
+  "nahcrof-alt": () => new OpenAIProvider("nahcrof-alt"),
   groq: () => new OpenAIProvider("groq"),
   cerebras: () => new OpenAIProvider("cerebras"),
   llama: () => new OpenAIProvider("llama"),
@@ -22,6 +23,8 @@ const defaultFactories: Record<string, ProviderFactory> = {
   "local-llama": () => new OpenAIProvider("local-llama"),
   github: () => new OpenAIProvider("github"),
   opencode: () => new OpenCodeProvider(),
+  tokenrouter: () => new OpenAIProvider("tokenrouter"),
+  codebuff: () => new OpenAIProvider("codebuff"),
 
   gemini: () => new GeminiOpenAIProvider(),
   anthropic: () => new AnthropicProvider(),

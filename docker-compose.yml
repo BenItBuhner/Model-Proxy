@@ -13,6 +13,8 @@ services:
       - ./config:/app/config
       # .env is read-write so the UI's env editor persists to disk.
       - ./.env:/app/.env
+      # Durable completion archive + analytics indexes.
+      - ./.storage:/app/.storage
     # Load ALL keys (provider creds, client key, log level, etc.) from the
     # mounted .env into the container's process env. This ensures Bun sees
     # them on boot without relying on its auto-dotenv behavior (which only

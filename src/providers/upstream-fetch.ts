@@ -2,6 +2,8 @@
  * Proxy-aware upstream fetch wrapper. Uses Bun's native `proxy` fetch option.
  */
 
+import { ProviderTimeoutError } from "./errors.ts";
+
 export type UpstreamFetcher = (input: string | URL | Request, init?: RequestInit & { proxy?: string }) => Promise<Response>;
 
 export interface UpstreamFetchOptions extends RequestInit {
@@ -37,9 +39,13 @@ export async function upstreamFetch(
 
   let timeoutSignal: AbortSignal | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
   if (timeoutMs !== undefined && timeoutMs > 0) {
     const controller = new AbortController();
-    timer = setTimeout(() => controller.abort(), timeoutMs);
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
     timeoutSignal = controller.signal;
   }
 
@@ -57,6 +63,15 @@ export async function upstreamFetch(
       fetchInit.proxy = proxy;
     }
     return await fetcher(url, fetchInit);
+  } catch (err) {
+    if (timedOut && signal?.aborted !== true) {
+      throw new ProviderTimeoutError(
+        `Upstream request timed out after ${timeoutMs}ms`,
+        timeoutMs ?? 0,
+        { cause: err },
+      );
+    }
+    throw err;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }

@@ -33,6 +33,7 @@ class FakeProvider implements BaseProvider {
 
   static calls: Array<{ args: OpenAICallArgs; ctx: ProviderCallContext }> = [];
   static responses: Array<Record<string, unknown> | Error> = [];
+  static streamResponses: Array<string[] | Error> = [];
 
   async callOpenAI(
     args: OpenAICallArgs,
@@ -43,6 +44,17 @@ class FakeProvider implements BaseProvider {
     if (next === undefined) throw new Error("no response queued");
     if (next instanceof Error) throw next;
     return next;
+  }
+
+  async *streamOpenAI(
+    args: OpenAICallArgs,
+    ctx: ProviderCallContext,
+  ): AsyncGenerator<string, void, unknown> {
+    FakeProvider.calls.push({ args, ctx });
+    const next = FakeProvider.streamResponses.shift();
+    if (next === undefined) throw new Error("no stream response queued");
+    if (next instanceof Error) throw next;
+    for (const chunk of next) yield chunk;
   }
 
   async callAnthropic(
@@ -104,6 +116,7 @@ afterAll(() => {
 afterEach(() => {
   FakeProvider.calls = [];
   FakeProvider.responses = [];
+  FakeProvider.streamResponses = [];
 });
 
 describe("EnforceRouter", () => {
@@ -131,6 +144,36 @@ describe("EnforceRouter", () => {
       (choices[0]?.["message"] as Record<string, unknown>)["content"],
     ).toBe("free text");
     expect(FakeProvider.calls.length).toBe(1);
+  });
+
+  test("bypass streaming preserves extra headers when enabled=false", async () => {
+    const router = new EnforceRouter(new FallbackRouter());
+    FakeProvider.streamResponses = [
+      [
+        'data: {"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok"}}]}\n\n',
+        "data: [DONE]\n\n",
+      ],
+    ];
+
+    const chunks: string[] = [];
+    for await (const chunk of router.stream({
+      logicalModel: "enforce-model",
+      requestData: {
+        model: "enforce-model",
+        messages: [{ role: "user", content: "hi" }],
+        stream: true,
+      },
+      targetProtocol: "openai",
+      overrides: { header: "false" },
+      extraHeaders: { "x-opencode-session": "sess-1" },
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.join("")).toContain("ok");
+    expect(FakeProvider.calls[0]?.ctx.extraHeaders).toEqual({
+      "x-opencode-session": "sess-1",
+    });
   });
 
   test("validates and strips termination flag; sets content=null for flag-only", async () => {

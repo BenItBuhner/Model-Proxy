@@ -42,6 +42,7 @@ config/providers/
 # Logs
 *.log
 logs/
+.storage/
 
 # Editor / OS
 .vscode/

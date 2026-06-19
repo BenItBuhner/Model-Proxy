@@ -135,6 +135,16 @@ function classify(type: RequestEventType): {
       return { label: "ok", tone: "phosphor" };
     case "route.failed":
       return { label: "fail", tone: "danger" };
+    case "route.hedge.started":
+      return { label: "hedge", tone: "warning" };
+    case "route.hedge.candidate_started":
+      return { label: "race", tone: "bone" };
+    case "route.hedge.candidate_won":
+      return { label: "winner", tone: "phosphor" };
+    case "route.hedge.candidate_cancelled":
+      return { label: "cancel", tone: "muted" };
+    case "route.hedge.candidate_failed":
+      return { label: "fail", tone: "danger" };
     case "key.cooldown":
       return { label: "cooldown", tone: "warning" };
     case "proxy.cooldown":
@@ -172,6 +182,16 @@ function summarize(event: RequestEvent): string {
       return `${event.provider}/${event.model} ok in ${event.latencyMs}ms`;
     case "route.failed":
       return `${event.provider}/${event.model} ${event.status ?? "?"} · ${event.errorType}${event.willFallback ? " → fallback" : ""}`;
+    case "route.hedge.started":
+      return `hedged ${event.stream ? "stream" : "call"} with ${event.candidates} candidate(s), max ${event.maxParallel}`;
+    case "route.hedge.candidate_started":
+      return `hedge attempt ${event.attempt} → ${event.provider}/${event.model} · route #${event.routeIndex + 1}`;
+    case "route.hedge.candidate_won":
+      return `${event.provider}/${event.model} won in ${event.latencyMs}ms · cancelled ${event.cancelledCandidates}, failed ${event.failedCandidates}`;
+    case "route.hedge.candidate_cancelled":
+      return `${event.provider}/${event.model} cancelled · ${event.reason}`;
+    case "route.hedge.candidate_failed":
+      return `${event.provider}/${event.model} failed · ${event.errorType}`;
     case "key.cooldown":
       return `${event.provider}/${event.model} · ${event.action}${event.cooldownSeconds !== undefined ? " (" + event.cooldownSeconds + "s)" : ""}`;
     case "proxy.cooldown":

@@ -30,6 +30,24 @@ export class ProviderAPIError extends Error {
   }
 }
 
+/** Raised when the proxy's own upstream timeout aborts a provider request. */
+export class ProviderTimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(
+    message: string,
+    timeoutMs: number,
+    options: { cause?: unknown } = {},
+  ) {
+    super(message);
+    this.name = "ProviderTimeoutError";
+    this.timeoutMs = timeoutMs;
+    if (options.cause !== undefined) {
+      (this as { cause?: unknown }).cause = options.cause;
+    }
+  }
+}
+
 /** Thrown when no API keys are available for a provider. */
 export class NoApiKeysError extends Error {
   constructor(provider: string) {

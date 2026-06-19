@@ -6,6 +6,7 @@ import {
   type ProviderCallContext,
 } from "./base.ts";
 import { ProviderAPIError } from "./errors.ts";
+import { upstreamFetch } from "./upstream-fetch.ts";
 import { readSSELines } from "./openai-provider.ts";
 
 const log = createLogger("provider.anthropic");
@@ -46,57 +47,41 @@ export class AnthropicProvider extends AbstractProvider {
   ): AsyncGenerator<string, void, unknown> {
     const payload = this.buildPayload({ ...args, stream: true });
     const url = this.endpointUrl(ctx, "streaming");
+    const timeoutMs = Math.max(1, ctx.timeoutSeconds * 1000);
 
-    const controller = new AbortController();
-    const timer = setTimeout(
-      () => controller.abort(),
-      Math.max(1, ctx.timeoutSeconds * 1000),
-    );
-    const externalSignal = ctx.signal;
-    const onExternalAbort = () => controller.abort();
-    if (externalSignal !== undefined) {
-      if (externalSignal.aborted) controller.abort();
-      else externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+    const response = await upstreamFetch(url, {
+      method: "POST",
+      headers: {
+        ...this.authHeaders(ctx),
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      },
+      body: JSON.stringify(payload),
+      proxy: ctx.egressProxyUrl,
+      timeoutMs,
+      signal: ctx.signal,
+    });
+
+    if (response.status >= 400) {
+      const body = await this.readErrorBody(response);
+      throw new ProviderAPIError(
+        `anthropic API error ${response.status}: ${body.slice(0, 500)}`,
+        response.status,
+        { body, provider: "anthropic" },
+      );
     }
 
-    try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          ...this.authHeaders(ctx),
-          "Content-Type": "application/json",
-          Accept: "text/event-stream",
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
+    if (response.body === null) {
+      throw new ProviderAPIError(
+        "anthropic streaming response body was empty",
+        502,
+        { provider: "anthropic" },
+      );
+    }
 
-      if (response.status >= 400) {
-        const body = await this.readErrorBody(response);
-        throw new ProviderAPIError(
-          `anthropic API error ${response.status}: ${body.slice(0, 500)}`,
-          response.status,
-          { body, provider: "anthropic" },
-        );
-      }
-
-      if (response.body === null) {
-        throw new ProviderAPIError(
-          "anthropic streaming response body was empty",
-          502,
-          { provider: "anthropic" },
-        );
-      }
-
-      for await (const line of readSSELines(response.body)) {
-        if (line.length === 0) continue;
-        yield `${line}\n\n`;
-      }
-    } finally {
-      clearTimeout(timer);
-      if (externalSignal !== undefined) {
-        externalSignal.removeEventListener("abort", onExternalAbort);
-      }
+    for await (const line of readSSELines(response.body)) {
+      if (line.length === 0) continue;
+      yield `${line}\n\n`;
     }
   }
 

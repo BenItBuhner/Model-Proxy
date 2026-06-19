@@ -9,8 +9,10 @@ import { Panel, PanelBody } from "@/components/ui/panel";
 import { Badge, StatusDot } from "@/components/ui/badge";
 import { Table, Thead, Tr, Th, Td, EmptyRow } from "@/components/ui/table";
 import {
+  getAnalytics,
   getHealth,
   getLogs,
+  type AnalyticsSummary,
   type HealthDetailed,
   type RequestLogRecord,
 } from "@/lib/endpoints";
@@ -29,16 +31,28 @@ export default function DashboardPage(): React.ReactElement {
 function DashboardBody(): React.ReactElement {
   const [health, setHealth] = useState<HealthDetailed | undefined>(undefined);
   const [records, setRecords] = useState<RequestLogRecord[]>([]);
+  const [logStats, setLogStats] = useState<{
+    total: number;
+    active: number;
+    completed: number;
+  } | undefined>(undefined);
+  const [analytics, setAnalytics] = useState<AnalyticsSummary | undefined>(undefined);
   const [err, setErr] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
-        const [h, logs] = await Promise.all([getHealth(), getLogs(15)]);
+        const [h, logs, analyticsResult] = await Promise.all([getHealth(), getLogs(15), getAnalytics()]);
         if (cancelled) return;
         setHealth(h);
         setRecords(logs.records);
+        setAnalytics(analyticsResult.summary);
+        setLogStats({
+          total: analyticsResult.summary.totalRequests,
+          active: analyticsResult.summary.activeRequests,
+          completed: analyticsResult.summary.completedRequests,
+        });
         setErr(undefined);
       } catch (e) {
         if (!cancelled) setErr((e as Error).message);
@@ -51,8 +65,6 @@ function DashboardBody(): React.ReactElement {
       clearInterval(id);
     };
   }, []);
-
-  const metrics = computeMetrics(records);
 
   return (
     <>
@@ -71,13 +83,13 @@ function DashboardBody(): React.ReactElement {
 
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4 mb-6">
         <MetricCard label="Status" value={health?.status ?? "…"} tone="phosphor" sublabel={health !== undefined ? `uptime ${formatUptime(health.uptime_seconds)}` : undefined} />
-        <MetricCard label="Requests" value={String(records.length)} sublabel={`${metrics.active} running · ${metrics.success} ok · ${metrics.failed} err`} />
-        <MetricCard label="Avg duration" value={metrics.avgMs !== undefined ? formatDurationMs(metrics.avgMs) : "–"} sublabel={metrics.p95Ms !== undefined ? `p95 ${formatDurationMs(metrics.p95Ms)}` : "completed only"} />
-        <MetricCard label="Avg speed" value={metrics.avgTokensPerSecond !== undefined ? `${metrics.avgTokensPerSecond.toFixed(1)} tok/s` : "–"} sublabel={`${metrics.enforcedPercent}% enforce · completed`} />
+        <MetricCard label="Requests" value={logStats !== undefined ? formatCount(logStats.total) : "…"} sublabel={logStats !== undefined ? `${logStats.active} running · ${formatCount(logStats.completed)} completed` : undefined} />
+        <MetricCard label="Saved cost" value={analytics !== undefined ? formatUsd(analytics.savedCostUsd) : "–"} sublabel={analytics !== undefined ? `${formatCount(analytics.totalTokens)} tokens` : "persistent analytics"} />
+        <MetricCard label="Avg speed" value={analytics?.avgTokensPerSecond !== undefined ? `${analytics.avgTokensPerSecond.toFixed(1)} tok/s` : "–"} sublabel={analytics?.p95LatencyMs !== undefined ? `p95 ${formatDurationMs(analytics.p95LatencyMs)}` : "completed only"} />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-3">
-        <Panel title="recent activity" className="xl:col-span-2" accent toolbar={<Link href="/logs" className="font-mono text-[10px] uppercase tracking-[0.18em] text-bone-500 hover:text-phosphor-500">full log →</Link>}>
+        <Panel title="recent activity" className="xl:col-span-2" accent toolbar={<Link href="/observability" className="font-mono text-[10px] uppercase tracking-[0.18em] text-bone-500 hover:text-phosphor-500">observability →</Link>}>
           <Table>
             <Thead>
               <Tr>
@@ -151,61 +163,6 @@ function DashboardBody(): React.ReactElement {
       </div>
     </>
   );
-}
-
-function computeMetrics(records: RequestLogRecord[]): {
-  active: number;
-  success: number;
-  failed: number;
-  avgMs: number | undefined;
-  p95Ms: number | undefined;
-  enforcedPercent: number;
-  avgTokensPerSecond: number | undefined;
-} {
-  if (records.length === 0) {
-    return {
-      active: 0,
-      success: 0,
-      failed: 0,
-      avgMs: undefined,
-      p95Ms: undefined,
-      enforcedPercent: 0,
-      avgTokensPerSecond: undefined,
-    };
-  }
-  let active = 0;
-  let success = 0;
-  let failed = 0;
-  let enforced = 0;
-  const latencies: number[] = [];
-  const tokenSpeeds: number[] = [];
-  for (const r of records) {
-    if (r.state === "running") active += 1;
-    else if (r.responseStatus !== undefined && r.responseStatus < 400) success += 1;
-    else failed += 1;
-    if (r.responseTimeMs !== undefined) latencies.push(r.responseTimeMs);
-    if (
-      r.completionTokens !== undefined &&
-      r.responseTimeMs !== undefined &&
-      r.responseTimeMs > 0
-    ) {
-      tokenSpeeds.push(r.completionTokens / (r.responseTimeMs / 1000));
-    }
-    if (r.enforceMode) enforced += 1;
-  }
-  const avgMs =
-    latencies.length > 0
-      ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
-      : undefined;
-  const sorted = [...latencies].sort((a, b) => a - b);
-  const p95Ms =
-    sorted.length > 0 ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] : undefined;
-  const enforcedPercent = Math.round((enforced / records.length) * 100);
-  const avgTokensPerSecond =
-    tokenSpeeds.length > 0
-      ? tokenSpeeds.reduce((a, b) => a + b, 0) / tokenSpeeds.length
-      : undefined;
-  return { active, success, failed, avgMs, p95Ms, enforcedPercent, avgTokensPerSecond };
 }
 
 function MetricCard({
@@ -300,6 +257,14 @@ function formatDurationMs(ms: number): string {
 function formatTokenCount(value: number | undefined, estimated: boolean | undefined): string {
   if (value === undefined) return "–";
   return `${value}${estimated === true ? "~" : ""}`;
+}
+
+function formatCount(value: number): string {
+  return new Intl.NumberFormat("en-US").format(value);
+}
+
+function formatUsd(value: number): string {
+  return `$${value.toFixed(6)}`;
 }
 
 function formatSpeed(record: RequestLogRecord): string {

@@ -4,22 +4,41 @@ import { listProviderConfigs } from "../config/provider-writer.ts";
 import { upsertEnvValuesPreservingRaw } from "../config/env-writer.ts";
 import { parseProviderKeys } from "./api-key-manager.ts";
 import { getAvailableEgressProxies } from "./egress-proxy-manager.ts";
+import { buildAuthHeaders } from "./provider-helpers.ts";
 import { upstreamFetch, type UpstreamFetcher } from "./upstream-fetch.ts";
 
 const log = createLogger("proxy-discovery");
 
-const DEFAULT_TARGET_COUNT = 50;
-const DEFAULT_CONCURRENCY = 20;
-const DEFAULT_SOURCE_LIMIT = 5000;
+const DEFAULT_TARGET_COUNT = 1000;
+const DEFAULT_CONCURRENCY = 500;
+const DEFAULT_SOURCE_LIMIT = 50000;
 const SHARED_PROXY_PREFIX = "MODEL_PROXY_EGRESS_PROXY_";
 
 const DEFAULT_SOURCES = [
   "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
   "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
   "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
+  "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies_anonymous/http.txt",
+  "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/https.txt",
+  "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies_anonymous/https.txt",
   "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
   "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt",
   "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
+  "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt",
+  "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/https/data.txt",
+  "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/http.txt",
+  "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/https.txt",
+  "https://raw.githubusercontent.com/zloi-user/hideip.me/main/http.txt",
+  "https://raw.githubusercontent.com/zloi-user/hideip.me/main/https.txt",
+  "https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/http.txt",
+  "https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/https.txt",
+  "https://raw.githubusercontent.com/ALIILAPRO/Proxy/main/http.txt",
+  "https://raw.githubusercontent.com/officialputuid/KangProxy/KangProxy/http/http.txt",
+  "https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/http.txt",
+  "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt",
+  "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt",
+  "https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt",
+  "https://raw.githubusercontent.com/saschazesiger/Free-Proxies/master/proxies/http.txt",
 ];
 
 export interface ProxyDiscoveryOptions {
@@ -32,6 +51,7 @@ export interface ProxyDiscoveryOptions {
   sources?: string[];
   fetcher?: UpstreamFetcher;
   candidates?: string[];
+  onProgress?: (progress: ProxyDiscoveryProgress) => void;
 }
 
 export interface ProviderVerificationResult {
@@ -58,6 +78,16 @@ export interface ProxyDiscoveryReport {
   persisted?: { path: string; applied: number; removed: string[] };
 }
 
+export interface ProxyDiscoveryProgress {
+  targetCount: number;
+  providers: string[];
+  candidatesFetched: number;
+  candidatesTested: number;
+  accepted: number;
+  rejectedByProvider: Record<string, number>;
+  skippedProviders: Record<string, string>;
+}
+
 interface VerificationProfile {
   provider: string;
   url: string;
@@ -66,6 +96,7 @@ interface VerificationProfile {
   timeoutMs: number;
   auth: "none" | "public" | "provider_key";
   apiKey?: string;
+  headers: Record<string, string>;
 }
 
 export function currentProxyStatus(providerNames?: string[]): {
@@ -96,7 +127,7 @@ export async function discoverProxies(
   const concurrency = clampPositive(options.concurrency, DEFAULT_CONCURRENCY);
   const sourceLimit = clampPositive(options.sourceLimit, DEFAULT_SOURCE_LIMIT);
   const fetcher: UpstreamFetcher = options.fetcher ?? fetch;
-  const timeoutMs = clampPositive(options.timeoutMs, 15000);
+  const timeoutMs = clampPositive(options.timeoutMs, 2000);
   const providerNames = options.providers ?? enabledVerifiedProviders();
   const profiles = buildVerificationProfiles(providerNames, timeoutMs);
   const activeProfiles = profiles.filter((p): p is VerificationProfile => "url" in p);
@@ -117,6 +148,20 @@ export async function discoverProxies(
   const rejectedByProvider: Record<string, number> = {};
   let tested = 0;
   let cursor = 0;
+  let progressTick = 0;
+
+  const emitProgress = () => {
+    options.onProgress?.({
+      targetCount,
+      providers: activeProfiles.map((p) => p.provider),
+      candidatesFetched: candidates.length,
+      candidatesTested: tested,
+      accepted: accepted.length,
+      rejectedByProvider: { ...rejectedByProvider },
+      skippedProviders: { ...skippedProviders },
+    });
+  };
+  emitProgress();
 
   async function worker(): Promise<void> {
     while (accepted.length < targetCount && cursor < candidates.length) {
@@ -130,6 +175,8 @@ export async function discoverProxies(
       } else {
         rejectedByProvider[failed.provider] = (rejectedByProvider[failed.provider] ?? 0) + 1;
       }
+      progressTick += 1;
+      if (progressTick % 50 === 0 || accepted.length >= targetCount) emitProgress();
     }
   }
 
@@ -145,8 +192,18 @@ export async function discoverProxies(
     skippedProviders,
   };
 
-  if (options.persist !== false && report.accepted.length > 0) {
+  if (
+    options.persist !== false &&
+    activeProfiles.length > 0 &&
+    report.accepted.length >= targetCount
+  ) {
     report.persisted = persistSharedProxies(report.accepted.map((p) => p.url));
+  } else if (options.persist !== false) {
+    log.warn("proxy discovery did not meet target; leaving existing shared pool unchanged", {
+      accepted: report.accepted.length,
+      verifiedProviders: activeProfiles.length,
+      targetCount,
+    });
   }
 
   log.info("proxy discovery completed", {
@@ -154,6 +211,7 @@ export async function discoverProxies(
     tested: report.candidatesTested,
     providers: report.providers,
   });
+  emitProgress();
   return report;
 }
 
@@ -185,13 +243,25 @@ function buildVerificationProfiles(providers: string[], timeoutMs: number): Prof
       return { provider, reason: "missing_api_key" };
     }
     const url = verification.url ?? `${cfg.endpoints.base_url.replace(/\/$/, "")}${cfg.endpoints.completions}`;
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (auth !== "none" && key !== undefined) {
+      Object.assign(headers, buildAuthHeaders(cfg, key));
+    }
+    if (provider === "opencode") {
+      const session = crypto.randomUUID();
+      headers["x-opencode-session"] = session;
+      headers["x-opencode-request"] = session;
+      headers["x-opencode-client"] = "model-proxy";
+      headers["User-Agent"] = "model-proxy/2.0.0";
+    }
     return {
       provider,
       url,
       method: verification.method ?? "GET",
       successStatuses: verification.success_statuses ?? [200],
-      timeoutMs: verification.timeout_ms ?? timeoutMs,
+    timeoutMs,
       auth,
+      headers,
       ...(key !== undefined ? { apiKey: key } : {}),
     };
   });
@@ -206,17 +276,17 @@ async function verifyProxyForProfiles(
   for (const profile of profiles) {
     const started = performance.now();
     try {
-      const headers: Record<string, string> = { Accept: "application/json" };
-      if (profile.auth !== "none" && profile.apiKey !== undefined) {
-        headers.Authorization = `Bearer ${profile.apiKey}`;
-      }
-      const response = await upstreamFetch(profile.url, {
-        method: profile.method,
-        headers,
-        proxy,
-        timeoutMs: profile.timeoutMs,
-        fetcher,
-      });
+      const response = await withTimeout(
+        upstreamFetch(profile.url, {
+          method: profile.method,
+          headers: profile.headers,
+          proxy,
+          timeoutMs: profile.timeoutMs,
+          fetcher,
+        }),
+        profile.timeoutMs + 1000,
+        `Proxy verification timed out after ${profile.timeoutMs + 1000}ms`,
+      );
       const durationMs = Math.round(performance.now() - started);
       if (profile.successStatuses.includes(response.status)) {
         out.push({ provider: profile.provider, status: "passed", httpStatus: response.status, durationMs });
@@ -239,11 +309,29 @@ async function verifyProxyForProfiles(
 
 async function fetchCandidates(sources: string[], fetcher: UpstreamFetcher): Promise<string[]> {
   const settled = await Promise.allSettled(sources.map(async (url) => {
-    const res = await fetcher(url, { signal: AbortSignal.timeout(15000) });
+    const res = await withTimeout(
+      fetcher(url, { signal: AbortSignal.timeout(15000) }),
+      16000,
+      `Proxy source timed out: ${url}`,
+    );
     if (!res.ok) return "";
     return await res.text();
   }));
   return settled.flatMap((result) => result.status === "fulfilled" ? extractProxyUrls(result.value) : []);
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
 }
 
 function extractProxyUrls(text: string): string[] {

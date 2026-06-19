@@ -48,6 +48,48 @@ export type RequestEvent =
       willFallback: boolean;
     }
   | {
+      type: "route.hedge.started";
+      at: string;
+      candidates: number;
+      maxParallel: number;
+      stream: boolean;
+    }
+  | {
+      type: "route.hedge.candidate_started";
+      at: string;
+      attempt: number;
+      provider: string;
+      model: string;
+      routeIndex: number;
+    }
+  | {
+      type: "route.hedge.candidate_won";
+      at: string;
+      attempt: number;
+      provider: string;
+      model: string;
+      latencyMs: number;
+      cancelledCandidates: number;
+      failedCandidates: number;
+    }
+  | {
+      type: "route.hedge.candidate_cancelled";
+      at: string;
+      attempt: number;
+      provider: string;
+      model: string;
+      reason: "winner_selected" | "client_abort" | "not_started";
+    }
+  | {
+      type: "route.hedge.candidate_failed";
+      at: string;
+      attempt: number;
+      provider: string;
+      model: string;
+      errorType: string;
+      message: string;
+    }
+  | {
       type: "key.cooldown";
       at: string;
       provider: string;

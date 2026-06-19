@@ -23,6 +23,7 @@ import {
   runWithRequestContext,
 } from "../../observability/request-context.ts";
 import {
+  recordRequestAbort,
   recordRequestFinish,
   recordRequestStart,
 } from "../request-log.ts";
@@ -112,7 +113,25 @@ async function handleTranscription(
     wireProtocol: "audio",
     isStreaming: isStream,
     enforceMode: false,
+    requestBody: {
+      ...metadata,
+      file:
+        file instanceof Blob
+          ? { name: "name" in file ? String((file as { name?: unknown }).name) : undefined, size: file.size, type: file.type }
+          : undefined,
+    },
   });
+  const recordAbort = () => {
+    recordRequestAbort({
+      requestId,
+      responseTimeMs: Math.round(performance.now() - startedAt),
+    });
+  };
+  if (c.req.raw.signal.aborted) {
+    recordAbort();
+  } else {
+    c.req.raw.signal.addEventListener("abort", recordAbort, { once: true });
+  }
 
   const run = async (): Promise<Response> =>
     runWithRequestContext(requestId, async () => {
@@ -134,14 +153,24 @@ async function handleTranscription(
           file: file instanceof Blob ? file : undefined,
           signal: c.req.raw.signal,
         });
+        const responseForStorage = new Response(response.body, {
+          status: response.status,
+          headers: response.headers,
+        });
+        const responseBytes = await responseForStorage.arrayBuffer();
+        const contentType = response.headers.get("content-type") ?? "";
+        const responseBody = contentType.includes("json") || contentType.startsWith("text/")
+          ? new TextDecoder().decode(responseBytes)
+          : { binary: true, bytes: responseBytes.byteLength, contentType };
         const totalMs = Math.round(performance.now() - startedAt);
         emit({ type: "request.finished", at: nowIso(), status: response.status, totalMs });
         recordRequestFinish({
           requestId,
           responseStatus: response.status,
           responseTimeMs: totalMs,
+          responseBody,
         });
-        return new Response(response.body, {
+        return new Response(responseBytes, {
           status: response.status,
           headers: response.headers,
         });
@@ -169,6 +198,7 @@ async function handleTranscription(
           responseTimeMs: totalMs,
           errorMessage: message,
           errorType: err instanceof Error ? err.name : "Unknown",
+          responseBody: audioError(message, type),
         });
         return c.json(audioError(message, type), status);
       }

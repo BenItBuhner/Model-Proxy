@@ -53,7 +53,7 @@ export type AnthropicContentBlock = z.infer<typeof AnthropicContentBlock>;
 
 export const AnthropicMessage = z
   .object({
-    role: z.enum(["user", "assistant"]),
+    role: z.enum(["user", "assistant", "system"]),
     content: z.union([z.string(), z.array(AnthropicContentBlock)]),
   })
   .passthrough();
