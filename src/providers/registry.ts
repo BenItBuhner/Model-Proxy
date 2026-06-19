@@ -24,7 +24,6 @@ const defaultFactories: Record<string, ProviderFactory> = {
   github: () => new OpenAIProvider("github"),
   opencode: () => new OpenCodeProvider(),
   tokenrouter: () => new OpenAIProvider("tokenrouter"),
-  codebuff: () => new OpenAIProvider("codebuff"),
 
   gemini: () => new GeminiOpenAIProvider(),
   anthropic: () => new AnthropicProvider(),
