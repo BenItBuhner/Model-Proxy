@@ -114,7 +114,8 @@ Optional `context_window` on the model or on a route overrides discovery when up
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
 | GET | `/health` | No | Liveness |
-| GET | `/health/detailed` | No | Models/providers counts |
+| GET | `/health/ready` | No | Readiness for blue/green deploys |
+| GET | `/health/detailed` | No | Models/providers counts, readiness, deploy metadata |
 | GET | `/v1/models` | Bearer | OpenAI list + context metadata |
 | POST | `/v1/chat/completions` | Bearer | OpenAI chat |
 | POST | `/v1/chat/completions/stream` | Bearer | Forces `stream: true` |
@@ -162,11 +163,24 @@ bun run build:web    # build admin UI → web/out
 - **Image:** `model-proxy:v2` (see [Dockerfile](Dockerfile))
 - **Compose (dev):** [docker-compose.yml](docker-compose.yml) — bind-mounts `./config` and `./.env`
 - **Compose (prod):** [docker-compose.prod.yml](docker-compose.prod.yml) — named volume for config
+- **Compose (zero-downtime):** [docker-compose.bluegreen.yml](docker-compose.bluegreen.yml) — Caddy frontdoor on `:9876`, blue/green backends on loopback debug ports `9877`/`9878`
 
 ```bash
+# Single-container dev path. This recreates the container and can interrupt
+# active agents, so do not use it for production rebuilds.
 docker compose up -d --build
 docker compose -f docker-compose.prod.yml up -d --build
+
+# Production-safe blue/green path.
+scripts/deploy-model-proxy.sh status
+scripts/deploy-model-proxy.sh bootstrap   # first blue/green start
+scripts/deploy-model-proxy.sh deploy      # rebuild + switch + drain old
+scripts/deploy-model-proxy.sh rollback    # flip back to previous image/color
 ```
+
+In blue/green mode, host port `9876` belongs to Caddy. The backend containers must not publish `9876` directly; the deploy script starts the inactive color, waits for `/health/ready`, reloads Caddy to the new upstream, then gives the old color a long graceful shutdown window for active streams.
+
+For the one-time migration from the legacy single `model-proxy` container, `bootstrap` can prepare the blue backend while the legacy container still serves `9876`, but Caddy cannot bind `9876` until the legacy container stops. The script prints the exact stop/rerun command at that point; future `deploy` runs are blue/green and avoid the port gap.
 
 ## Development
 

@@ -1,0 +1,9 @@
+# This file is rewritten by scripts/deploy-model-proxy.sh during blue/green
+# cutovers. It must name exactly one active backend so storage stays effectively
+# single-writer during normal operation.
+reverse_proxy proxy-green:9876 {
+	health_uri /health/ready
+	health_interval 5s
+	health_timeout 2s
+	flush_interval -1
+}

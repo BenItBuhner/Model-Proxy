@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { EventTimeline } from "@/components/test/event-timeline";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { Panel, PanelBody } from "@/components/ui/panel";
 import { getStoredCompletion, type RequestLogRecord } from "@/lib/endpoints";
 import type { RequestEvent } from "@/lib/test-events";
 import { truncate } from "@/lib/utils";
+import { FusionPipelineView, type FusionTraceLike } from "./fusion-pipeline-view";
 import { formatCount, formatDurationMs, formatUsd } from "./metric-widget";
 
 export interface RequestTrace {
@@ -15,6 +16,42 @@ export interface RequestTrace {
   finished: boolean;
   startedAt: string;
   events: RequestEvent[];
+}
+
+/** Shape of the fusion_trace data from the server response. */
+interface FusionTrace {
+  version: number;
+  effort: number;
+  complexityScore: number;
+  complexityReason: string;
+  subTaskCount: number;
+  subagentDetails?: Array<{
+    id: string;
+    focus_area: string;
+    success: boolean;
+    modelRouting: string;
+    durationMs: number;
+    outputLength: number;
+  }>;
+  steps?: Array<{
+    type: string;
+    label: string;
+    durationMs: number;
+    modelRouting?: string;
+    details?: Record<string, unknown>;
+  }>;
+  costs?: Array<{
+    modelRouting: string;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    userCostUsd: number;
+    typicalCostUsd: number;
+  }>;
+  totalCostUsd: number;
+  totalTokens: number;
+  cacheHit: boolean;
+  fusedByModelRouting: string;
 }
 
 export function RequestDetailPanel({
@@ -28,15 +65,37 @@ export function RequestDetailPanel({
 }): React.ReactElement {
   const [completionPreview, setCompletionPreview] = useState<string | undefined>(undefined);
   const [completionError, setCompletionError] = useState<string | undefined>(undefined);
+  const [completionBody, setCompletionBody] = useState<Record<string, unknown> | undefined>(undefined);
+
+  // Extract fusion trace from the completion body or event trace
+  const fusionTrace: FusionTrace | undefined = useMemo(() => {
+    // Option 1: From stored completion body
+    if (completionBody) {
+      const response = completionBody["response"] as Record<string, unknown> | undefined;
+      const body = (response?.["body"] ?? completionBody) as Record<string, unknown> | undefined;
+      if (body?.["fusion_trace"]) return body["fusion_trace"] as FusionTrace;
+    }
+    // Option 2: From event trace (request.finished carries fusionTrace)
+    if (trace?.events) {
+      for (const evt of trace.events) {
+        if (evt.type === "request.finished" && (evt as any).fusionTrace) {
+          return (evt as any).fusionTrace as FusionTrace;
+        }
+      }
+    }
+    return undefined;
+  }, [completionBody, trace]);
 
   const loadCompletion = async (): Promise<void> => {
     if (record === undefined) return;
     try {
       const result = await getStoredCompletion(record.requestId);
+      setCompletionBody(result.completion);
       setCompletionPreview(JSON.stringify(result.completion, null, 2).slice(0, 4000));
       setCompletionError(undefined);
     } catch (err) {
       setCompletionPreview(undefined);
+      setCompletionBody(undefined);
       setCompletionError((err as Error).message);
     }
   };
@@ -85,6 +144,14 @@ export function RequestDetailPanel({
           )}
         </PanelBody>
       </Panel>
+
+      {/* Fusion Pipeline — live interactive view while running, identical
+          retained state once complete (falls back to stored trace). */}
+      <FusionPipelineView
+        events={trace?.events ?? []}
+        live={trace?.finished === false || record?.state === "running"}
+        fallbackTrace={fusionTrace as FusionTraceLike | undefined}
+      />
 
       <Panel title="verbose event trace" accent className="min-h-0 flex-1" bodyClassName="h-[520px]">
         <EventTimeline events={trace?.events ?? []} live={trace?.finished === false} onClear={() => undefined} />

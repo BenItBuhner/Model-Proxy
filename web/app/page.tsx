@@ -9,12 +9,18 @@ import { Panel, PanelBody } from "@/components/ui/panel";
 import { Badge, StatusDot } from "@/components/ui/badge";
 import { Table, Thead, Tr, Th, Td, EmptyRow } from "@/components/ui/table";
 import {
+  getCurrentUserAnalytics,
+  getCurrentUserLimits,
   getAnalytics,
   getHealth,
   getLogs,
+  getMe,
+  listAvailableModels,
   type AnalyticsSummary,
   type HealthDetailed,
+  type PrincipalInfo,
   type RequestLogRecord,
+  type UserLimits,
 } from "@/lib/endpoints";
 import { formatRelativeTime, truncate } from "@/lib/utils";
 
@@ -29,8 +35,11 @@ export default function DashboardPage(): React.ReactElement {
 }
 
 function DashboardBody(): React.ReactElement {
+  const [principal, setPrincipal] = useState<PrincipalInfo | undefined>(undefined);
   const [health, setHealth] = useState<HealthDetailed | undefined>(undefined);
   const [records, setRecords] = useState<RequestLogRecord[]>([]);
+  const [allowedModels, setAllowedModels] = useState<string[]>([]);
+  const [limits, setLimits] = useState<UserLimits | undefined>(undefined);
   const [logStats, setLogStats] = useState<{
     total: number;
     active: number;
@@ -43,11 +52,30 @@ function DashboardBody(): React.ReactElement {
     let cancelled = false;
     const load = async () => {
       try {
-        const [h, logs, analyticsResult] = await Promise.all([getHealth(), getLogs(15), getAnalytics()]);
+        const me = await getMe();
+        const admin = isAdminPrincipal(me.principal);
+        const [h, analyticsResult, logs, modelsResult, limitsResult] = admin
+          ? await Promise.all([
+              getHealth(),
+              getAnalytics(),
+              getLogs(15),
+              Promise.resolve(undefined),
+              Promise.resolve(undefined),
+            ])
+          : await Promise.all([
+              getHealth(),
+              getCurrentUserAnalytics(),
+              Promise.resolve(undefined),
+              listAvailableModels(),
+              getCurrentUserLimits(),
+            ]);
         if (cancelled) return;
+        setPrincipal(me.principal);
         setHealth(h);
-        setRecords(logs.records);
         setAnalytics(analyticsResult.summary);
+        setRecords(logs?.records ?? []);
+        setAllowedModels(modelsResult?.data.map((model) => model.id).sort((a, b) => a.localeCompare(b)) ?? []);
+        setLimits(limitsResult?.limits);
         setLogStats({
           total: analyticsResult.summary.totalRequests,
           active: analyticsResult.summary.activeRequests,
@@ -65,6 +93,62 @@ function DashboardBody(): React.ReactElement {
       clearInterval(id);
     };
   }, []);
+
+  const admin = principal === undefined || isAdminPrincipal(principal);
+
+  if (!admin) {
+    return (
+      <>
+        <PageHeader
+          eyebrow="client"
+          title="Client Console"
+          description="Your assigned models, usage analytics, and account limits."
+        />
+
+        {err !== undefined ? (
+          <div className="mb-6 flex items-center gap-3 bg-[rgba(255,59,48,0.08)] px-4 py-3 font-mono text-[11px] shadow-[inset_0_0_0_1px_rgba(255,59,48,0.3)]">
+            <StatusDot tone="danger" />
+            <span className="text-alert-500">{err}</span>
+          </div>
+        ) : null}
+
+        <div className="mb-6 grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+          <MetricCard label="Status" value={health?.status ?? "..."} tone="phosphor" sublabel={health !== undefined ? `uptime ${formatUptime(health.uptime_seconds)}` : undefined} />
+          <MetricCard label="Requests" value={logStats !== undefined ? formatCount(logStats.total) : "..."} sublabel={logStats !== undefined ? `${logStats.active} running` : undefined} />
+          <MetricCard label="Tokens" value={analytics !== undefined ? formatCount(analytics.totalTokens) : "..."} sublabel={analytics !== undefined ? `${formatCount(analytics.completionTokens)} output` : undefined} />
+          <MetricCard label="Saved cost" value={analytics !== undefined ? formatUsd(analytics.savedCostUsd) : "-"} sublabel="your account usage" />
+        </div>
+
+        <div className="grid gap-5 xl:grid-cols-3">
+          <Panel title="allowed models" className="xl:col-span-2" accent toolbar={<Link href="/account" className="font-mono text-[10px] uppercase tracking-[0.18em] text-bone-500 hover:text-phosphor-500">manage keys</Link>}>
+            <PanelBody>
+              {allowedModels.length === 0 ? (
+                <div className="font-mono text-xs text-bone-300">No models are currently assigned to this account.</div>
+              ) : (
+                <div className="grid gap-2 md:grid-cols-2">
+                  {allowedModels.map((model) => (
+                    <div key={model} className="border border-ink-500 bg-ink-800 px-3 py-2 font-mono text-xs text-bone-900">
+                      {model}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </PanelBody>
+          </Panel>
+
+          <Panel title="limits" accent>
+            <PanelBody className="space-y-4">
+              <KV label="Requests / minute" value={formatLimit(limits?.requestsPerMinute)} />
+              <KV label="Requests / day" value={formatLimit(limits?.requestsPerDay)} />
+              <KV label="Tokens / day" value={formatLimit(limits?.tokensPerDay)} />
+              <KV label="Cost / day" value={formatUsdLimit(limits?.costUsdPerDay)} />
+              <KV label="Concurrent" value={formatLimit(limits?.concurrentRequests)} />
+            </PanelBody>
+          </Panel>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -267,6 +351,14 @@ function formatUsd(value: number): string {
   return `$${value.toFixed(6)}`;
 }
 
+function formatLimit(value: number | undefined): string {
+  return value === undefined ? "unlimited" : formatCount(value);
+}
+
+function formatUsdLimit(value: number | undefined): string {
+  return value === undefined ? "unlimited" : `$${value.toFixed(2)}`;
+}
+
 function formatSpeed(record: RequestLogRecord): string {
   if (
     record.completionTokens !== undefined &&
@@ -290,4 +382,8 @@ function formatUptime(seconds: number): string {
   if (h < 24) return `${h}h ${mm}m`;
   const d = Math.floor(h / 24);
   return `${d}d ${h % 24}h`;
+}
+
+function isAdminPrincipal(principal: PrincipalInfo): boolean {
+  return principal.isOwner || principal.role === "owner" || principal.role === "admin";
 }

@@ -20,8 +20,28 @@ import { resetProxyState } from "../src/providers/egress-proxy-manager.ts";
 import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { FallbackRouter } from "../src/routing/fallback.ts";
 import { modelConfigLoader } from "../src/config/model-loader.ts";
+import type { Principal } from "../src/storage/identity-store.ts";
 
 const tmpRoot = join(tmpdir(), `mp-v2-routing-${process.pid}-${Date.now()}`);
+
+const ownerPrincipal: Principal = {
+  id: "test-owner",
+  userId: "test-owner",
+  apiKeyId: undefined,
+  email: "owner@example.test",
+  role: "owner",
+  isOwner: true,
+  scopes: ["*"],
+  authMethod: "no-auth",
+  ownerBypass: true,
+  completionLoggingEnabled: false,
+};
+
+function makeRouter(
+  options: Omit<ConstructorParameters<typeof FallbackRouter>[0], "principal"> = {},
+): FallbackRouter {
+  return new FallbackRouter({ ...options, principal: ownerPrincipal });
+}
 
 // Replace the singleton loader's config dir at module-scope by a fresh loader
 // pointing at our sandbox (via monkey-patched internals).
@@ -176,6 +196,99 @@ beforeAll(() => {
       model_routings: [
         { provider: "fake", model: "fake-empty-backend", wire_protocol: "openai" },
         { provider: "fake", model: "fake-success-backend", wire_protocol: "openai" },
+      ],
+    }),
+  );
+
+  writeFileSync(
+    join(tmpRoot, "models", "fake-capability-model.json"),
+    JSON.stringify({
+      logical_name: "fake-capability-model",
+      timeout_seconds: 5,
+      default_cooldown_seconds: 0,
+      model_routings: [
+        {
+          provider: "fake",
+          model: "fake-text-only-backend",
+          wire_protocol: "openai",
+          capabilities: { multimodal: false },
+        },
+        {
+          provider: "fake",
+          model: "fake-vision-backend",
+          wire_protocol: "openai",
+          capabilities: { multimodal: true },
+        },
+      ],
+    }),
+  );
+
+  writeFileSync(
+    join(tmpRoot, "models", "fake-context-model.json"),
+    JSON.stringify({
+      logical_name: "fake-context-model",
+      timeout_seconds: 5,
+      default_cooldown_seconds: 0,
+      model_routings: [
+        {
+          provider: "fake",
+          model: "fake-small-context-backend",
+          wire_protocol: "openai",
+          context_window: 5,
+        },
+        {
+          provider: "fake",
+          model: "fake-large-context-backend",
+          wire_protocol: "openai",
+          context_window: 10000,
+        },
+      ],
+    }),
+  );
+
+  writeFileSync(
+    join(tmpRoot, "models", "fake-all-ineligible-model.json"),
+    JSON.stringify({
+      logical_name: "fake-all-ineligible-model",
+      timeout_seconds: 5,
+      default_cooldown_seconds: 0,
+      model_routings: [
+        {
+          provider: "fake",
+          model: "fake-text-only-backend",
+          wire_protocol: "openai",
+          capabilities: { multimodal: false },
+        },
+      ],
+    }),
+  );
+
+  writeFileSync(
+    join(tmpRoot, "models", "fake-hedged-capability-model.json"),
+    JSON.stringify({
+      logical_name: "fake-hedged-capability-model",
+      timeout_seconds: 5,
+      default_cooldown_seconds: 0,
+      hedged_routing: {
+        enabled: true,
+        min_parallel: 2,
+        max_parallel: 2,
+        stagger_ms: 0,
+        primary_bias: 0.9,
+      },
+      model_routings: [
+        {
+          provider: "fake",
+          model: "fake-hedged-text-only",
+          wire_protocol: "openai",
+          capabilities: { multimodal: false },
+        },
+        {
+          provider: "fake",
+          model: "fake-hedged-vision",
+          wire_protocol: "openai",
+          capabilities: { multimodal: true },
+        },
       ],
     }),
   );
@@ -474,7 +587,7 @@ describe("FallbackRouter", () => {
       },
     ];
 
-    const router = new FallbackRouter();
+    const router = makeRouter();
     const result = await router.callWithFallback({
       logicalModel: "fake-model",
       requestData: {
@@ -516,7 +629,7 @@ describe("FallbackRouter", () => {
       },
     ];
 
-    const router = new FallbackRouter();
+    const router = makeRouter();
     const result = await router.callWithFallback({
       logicalModel: "fake-model",
       requestData: {
@@ -536,6 +649,111 @@ describe("FallbackRouter", () => {
     const toolCall = (message["tool_calls"] as Array<Record<string, unknown>>)[0]!;
     expect(toolCall["id"]).toBe("call_0");
     expect((toolCall["function"] as Record<string, unknown>)["arguments"]).toBe('{"q":"demo"}');
+  });
+
+  test("skips non-multimodal routes for image requests", async () => {
+    FakeProvider.calls = [];
+    FakeProvider.responses = [
+      {
+        id: "vision",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "saw it" },
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ];
+
+    const router = makeRouter();
+    const result = await router.callWithFallback({
+      logicalModel: "fake-capability-model",
+      requestData: {
+        model: "fake-capability-model",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "what is this?" },
+              { type: "image_url", image_url: { url: "data:image/png;base64,abc" } },
+            ],
+          },
+        ],
+      },
+      targetProtocol: "openai",
+    });
+
+    expect(result["id"]).toBe("vision");
+    expect(FakeProvider.calls.map((call) => call.args.model)).toEqual([
+      "fake-vision-backend",
+    ]);
+  });
+
+  test("skips routes whose declared context window is too small", async () => {
+    FakeProvider.calls = [];
+    FakeProvider.responses = [
+      {
+        id: "large-context",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "ok" },
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ];
+
+    const router = makeRouter();
+    const result = await router.callWithFallback({
+      logicalModel: "fake-context-model",
+      requestData: {
+        model: "fake-context-model",
+        messages: [{ role: "user", content: "this request is definitely longer than five tokens" }],
+      },
+      targetProtocol: "openai",
+    });
+
+    expect(result["id"]).toBe("large-context");
+    expect(FakeProvider.calls.map((call) => call.args.model)).toEqual([
+      "fake-large-context-backend",
+    ]);
+  });
+
+  test("throws RoutingError when every route is ineligible", async () => {
+    FakeProvider.calls = [];
+    FakeProvider.responses = [];
+
+    const router = makeRouter();
+    await expect(
+      router.callWithFallback({
+        logicalModel: "fake-all-ineligible-model",
+        requestData: {
+          model: "fake-all-ineligible-model",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "image_url", image_url: { url: "data:image/png;base64,abc" } },
+              ],
+            },
+          ],
+        },
+        targetProtocol: "openai",
+      }),
+    ).rejects.toMatchObject({
+      name: "RoutingError",
+      errors: [
+        {
+          error: "multimodal_unsupported",
+          error_type: "RouteEligibilityError",
+        },
+      ],
+    });
+    expect(FakeProvider.calls).toEqual([]);
   });
 
   test("hedged non-streaming routing returns the first valid response and aborts losers", async () => {
@@ -568,7 +786,7 @@ describe("FallbackRouter", () => {
       },
     ];
 
-    const router = new FallbackRouter({ random: () => 0.5 });
+    const router = makeRouter({ random: () => 0.5 });
     const result = await router.callWithFallback({
       logicalModel: "fake-hedged-model",
       requestData: {
@@ -584,6 +802,45 @@ describe("FallbackRouter", () => {
       "fake-fast-secondary",
     ]);
     expect(FakeProvider.calls[0]?.ctx.signal?.aborted).toBe(true);
+  });
+
+  test("hedged routing filters non-multimodal candidates before launch", async () => {
+    FakeProvider.calls = [];
+    FakeProvider.responses = [
+      {
+        id: "hedged-vision",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "vision" },
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ];
+
+    const router = makeRouter({ random: () => 0.5 });
+    const result = await router.callWithFallback({
+      logicalModel: "fake-hedged-capability-model",
+      requestData: {
+        model: "fake-hedged-capability-model",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "image_url", image_url: { url: "data:image/png;base64,abc" } },
+            ],
+          },
+        ],
+      },
+      targetProtocol: "openai",
+    });
+
+    expect(result["id"]).toBe("hedged-vision");
+    expect(FakeProvider.calls.map((call) => call.args.model)).toEqual([
+      "fake-hedged-vision",
+    ]);
   });
 
   test("hedged routing includes a secondary route even when primary has many proxy variants", async () => {
@@ -624,7 +881,7 @@ describe("FallbackRouter", () => {
     process.env.FAKE_PROXY_EGRESS_PROXY_3 = "http://proxy-three:8080";
     process.env.FAKE_PROXY_EGRESS_PROXY_4 = "http://proxy-four:8080";
 
-    const router = new FallbackRouter({ random: () => 0.99 });
+    const router = makeRouter({ random: () => 0.99 });
     const result = await router.callWithFallback({
       logicalModel: "fake-hedged-proxy-spread-model",
       requestData: {
@@ -673,7 +930,7 @@ describe("FallbackRouter", () => {
     }
     process.env.FAKE_HEDGE_LAST_KEY = "last-key";
 
-    const router = new FallbackRouter({ random: () => 0.5 });
+    const router = makeRouter({ random: () => 0.5 });
     const result = await router.callWithFallback({
       logicalModel: "fake-hedged-key-spread-model",
       requestData: {
@@ -708,7 +965,7 @@ describe("FallbackRouter", () => {
       ],
     ];
 
-    const router = new FallbackRouter({ random: () => 0.5 });
+    const router = makeRouter({ random: () => 0.5 });
     const chunks: string[] = [];
     for await (const chunk of router.streamWithFallback({
       logicalModel: "fake-hedged-stream-model",
@@ -753,7 +1010,7 @@ describe("FallbackRouter", () => {
       ],
     ];
 
-    const router = new FallbackRouter({ random: () => 0.5 });
+    const router = makeRouter({ random: () => 0.5 });
     const chunks: string[] = [];
     for await (const chunk of router.streamWithFallback({
       logicalModel: "fake-hedged-stream-model",
@@ -782,7 +1039,7 @@ describe("FallbackRouter", () => {
       ],
     ];
 
-    const router = new FallbackRouter();
+    const router = makeRouter();
     const chunks: string[] = [];
     for await (const chunk of router.streamWithFallback({
       logicalModel: "fake-model",
@@ -815,7 +1072,7 @@ describe("FallbackRouter", () => {
       ],
     ];
 
-    const router = new FallbackRouter();
+    const router = makeRouter();
     const chunks: string[] = [];
     for await (const chunk of router.streamWithFallback({
       logicalModel: "fake-model",
@@ -854,7 +1111,7 @@ describe("FallbackRouter", () => {
       ],
     ];
 
-    const router = new FallbackRouter({ random: () => 0.5 });
+    const router = makeRouter({ random: () => 0.5 });
     const chunks: string[] = [];
     for await (const chunk of router.streamWithFallback({
       logicalModel: "fake-hedged-stream-model",
@@ -886,7 +1143,7 @@ describe("FallbackRouter", () => {
       new ProviderAPIError("500 boom", 500, { provider: "fake", body: "{}" }),
     ];
 
-    const router = new FallbackRouter();
+    const router = makeRouter();
     await expect(
       router.callWithFallback({
         logicalModel: "fake-model",
@@ -917,7 +1174,7 @@ describe("FallbackRouter", () => {
     ];
     resetKeyState("fake");
 
-    const router = new FallbackRouter();
+    const router = makeRouter();
     const result = await router.callWithFallback({
       logicalModel: "fake-timeout-model",
       requestData: {
@@ -952,7 +1209,7 @@ describe("FallbackRouter", () => {
     ];
     resetKeyState("fake");
 
-    const router = new FallbackRouter();
+    const router = makeRouter();
     const result = await router.callWithFallback({
       logicalModel: "fake-timeout-model",
       requestData: {
@@ -980,7 +1237,7 @@ describe("FallbackRouter", () => {
     ];
     resetKeyState("fake");
 
-    const router = new FallbackRouter();
+    const router = makeRouter();
     const chunks: string[] = [];
     for await (const chunk of router.streamWithFallback({
       logicalModel: "fake-timeout-model",
@@ -1015,7 +1272,7 @@ describe("FallbackRouter", () => {
     ];
     resetKeyState("fake");
 
-    const router = new FallbackRouter();
+    const router = makeRouter();
     const chunks: string[] = [];
     for await (const chunk of router.streamWithFallback({
       logicalModel: "fake-timeout-model",
@@ -1055,7 +1312,7 @@ describe("FallbackRouter", () => {
     ];
     resetKeyState("fake");
 
-    const router = new FallbackRouter();
+    const router = makeRouter();
     const result = await router.callWithFallback({
       logicalModel: "fake-connect-model",
       requestData: {
@@ -1105,7 +1362,7 @@ describe("FallbackRouter", () => {
     ];
     resetKeyState("fake");
 
-    const router = new FallbackRouter();
+    const router = makeRouter();
     const result = await router.callWithFallback({
       logicalModel: "fake-empty-response-model",
       requestData: {
@@ -1156,7 +1413,7 @@ describe("FallbackRouter", () => {
     ];
     resetKeyState("fake");
 
-    const router = new FallbackRouter();
+    const router = makeRouter();
     const result = await router.callWithFallback({
       logicalModel: "fake-empty-response-model",
       requestData: {
@@ -1195,7 +1452,7 @@ describe("FallbackRouter", () => {
     ];
     resetKeyState("fake");
 
-    const router = new FallbackRouter();
+    const router = makeRouter();
     const result = await router.callWithFallback({
       logicalModel: "fake-transient-error-model",
       requestData: {
@@ -1229,7 +1486,7 @@ describe("FallbackRouter", () => {
       },
     ];
 
-    const router = new FallbackRouter();
+    const router = makeRouter();
     await router.callWithFallback({
       logicalModel: "fake-model",
       requestData: {
@@ -1262,7 +1519,7 @@ describe("FallbackRouter", () => {
       },
     ];
 
-    const router = new FallbackRouter();
+    const router = makeRouter();
     await router.callWithFallback({
       logicalModel: "fake-openai-extensions-model",
       requestData: {
@@ -1305,7 +1562,7 @@ describe("FallbackRouter", () => {
       },
     ];
 
-    const router = new FallbackRouter();
+    const router = makeRouter();
     await router.callWithFallback({
       logicalModel: "fake-openai-defaults-model",
       requestData: {
@@ -1347,7 +1604,7 @@ describe("FallbackRouter", () => {
     process.env.FAKE_PROXY_EGRESS_PROXY_1 = "http://proxy-one:8080";
     process.env.FAKE_PROXY_EGRESS_PROXY_2 = "http://proxy-two:8080";
 
-    const router = new FallbackRouter();
+    const router = makeRouter();
     const result = await router.callWithFallback({
       logicalModel: "fake-proxy-model",
       requestData: { model: "fake-proxy-model", messages: [{ role: "user", content: "hi" }] },

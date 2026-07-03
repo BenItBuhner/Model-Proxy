@@ -30,7 +30,11 @@ export const Effort2ConfigSchema = z
       .array(z.enum(["context_search", "web_search"]))
       .default(["context_search"]),
   })
-  .strict();
+  .strict()
+  .refine(
+    (val) => val.subagent_count.min <= val.subagent_count.max,
+    { message: "subagent_count.min must be <= subagent_count.max", path: ["subagent_count"] },
+  );
 
 export type Effort2Config = z.infer<typeof Effort2ConfigSchema>;
 
@@ -46,7 +50,11 @@ export const Effort3ConfigSchema = z
       .array(z.enum(["context_search", "web_search", "code_execution"]))
       .default(["context_search", "web_search", "code_execution"]),
   })
-  .strict();
+  .strict()
+  .refine(
+    (val) => val.subagent_count.min <= val.subagent_count.max,
+    { message: "subagent_count.min must be <= subagent_count.max", path: ["subagent_count"] },
+  );
 
 export type Effort3Config = z.infer<typeof Effort3ConfigSchema>;
 
@@ -95,6 +103,22 @@ export const FusionSynthesisConfigSchema = z
 
 export type FusionSynthesisConfig = z.infer<typeof FusionSynthesisConfigSchema>;
 
+// ── Reasoning Summarizer ─────────────────────────────────────────────
+
+export const FusionSummarizerConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    /** Fast/cheap existing model routing that live-summarizes raw reasoning (e.g. "turbo"). */
+    model_routing: z.string().min(1).default("turbo"),
+    /** Raw reasoning/transcript characters accumulated before a summary segment is produced. */
+    segment_chars: z.number().int().min(200).max(20000).default(1400),
+    /** Max output tokens per summary segment. */
+    max_summary_tokens: z.number().int().min(32).max(4096).default(256),
+  })
+  .strict();
+
+export type FusionSummarizerConfig = z.infer<typeof FusionSummarizerConfigSchema>;
+
 // ── Cache ─────────────────────────────────────────────────────────────
 
 export const FusionCacheConfigSchema = z
@@ -105,6 +129,19 @@ export const FusionCacheConfigSchema = z
   .strict();
 
 export type FusionCacheConfig = z.infer<typeof FusionCacheConfigSchema>;
+
+// ── Bounded scheduler / nested Fusion controls ─────────────────────────
+
+export const FusionSchedulerConfigSchema = z
+  .object({
+    allow_nested_fusion: z.boolean().default(false),
+    max_depth: z.number().int().min(0).max(8).default(0),
+    max_leaf_calls: z.number().int().min(1).max(64).default(8),
+    max_wall_ms: z.number().int().positive().default(120_000),
+  })
+  .strict();
+
+export type FusionSchedulerConfig = z.infer<typeof FusionSchedulerConfigSchema>;
 
 // ── Top-level Fusion Config ───────────────────────────────────────────
 
@@ -131,8 +168,14 @@ export const FusionConfigSchema = z
     // Layer 5: Fusion synthesis
     fusion: FusionSynthesisConfigSchema,
 
+    // Live reasoning summarizer (streams summaries of subagent + synthesis reasoning)
+    summarizer: FusionSummarizerConfigSchema.default({}),
+
     // Layer 1: Cache
     cache: FusionCacheConfigSchema.default({}),
+
+    // Bounded scheduler controls for optional nested Fusion.
+    scheduler: FusionSchedulerConfigSchema.default({}),
   })
   .strict();
 

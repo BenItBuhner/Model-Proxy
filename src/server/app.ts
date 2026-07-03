@@ -9,6 +9,7 @@ import { createAudioRoutes } from "./routes/audio.ts";
 import { createHealthRoutes } from "./routes/health.ts";
 import { createOpenAIRoutes } from "./routes/openai.ts";
 import { createStaticUIRoutes } from "./routes/static-ui.ts";
+import { isDraining } from "./lifecycle.ts";
 
 const log = createLogger("server");
 
@@ -17,6 +18,23 @@ export function createApp(): Hono {
 
   app.use("*", requestContextMiddleware());
   app.use("*", corsMiddleware());
+  app.use("*", async (c, next) => {
+    if (!isDraining() || c.req.path.startsWith("/health")) {
+      return next();
+    }
+    return c.json(
+      {
+        error: {
+          message: "Model-Proxy is draining for deploy; retry against the frontdoor.",
+          type: "service_unavailable",
+        },
+      },
+      503,
+      {
+        "Retry-After": "5",
+      },
+    );
+  });
 
   app.route("/", createHealthRoutes());
   app.route("/", createOpenAIRoutes());

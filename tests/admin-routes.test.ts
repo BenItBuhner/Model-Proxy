@@ -380,4 +380,25 @@ describe("admin routes", () => {
     expect(statusBody?.discovery_job?.report?.candidatesTested).toBe(1);
   });
 
+  test("admin mutations accept forwarded same-origin tunnel requests", async () => {
+    const res = await app.request("/v1/admin/signup-settings", {
+      method: "PUT",
+      headers: {
+        ...auth(),
+        "content-type": "application/json",
+        origin: "https://infer.techlitnow.com",
+        "x-forwarded-host": "infer.techlitnow.com",
+        "x-forwarded-proto": "https",
+      },
+      body: JSON.stringify({
+        multi_user_enabled: true,
+        invite_signup_enabled: true,
+        open_signup_enabled: false,
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await json(res)) as { signup: { inviteSignupEnabled: boolean } };
+    expect(body.signup.inviteSignupEnabled).toBe(true);
+  });
+
 });

@@ -19,6 +19,8 @@ import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/ui/panel";
 import { apiFetch } from "@/lib/api";
 import type { ObservabilityFilters } from "@/lib/endpoints";
+import { openEventStream, type EventStreamHandle } from "@/lib/test-dispatch";
+import type { RequestEvent } from "@/lib/test-events";
 
 export default function LogsPage(): React.ReactElement {
   return (
@@ -52,11 +54,35 @@ function ObservabilityBody(): React.ReactElement {
     }
     const requestId = selectedId;
     let cancelled = false;
+    let stream: EventStreamHandle | undefined;
+
     async function loadTrace(): Promise<void> {
       setLoadingTrace(true);
       try {
         const next = await apiFetch<RequestTrace>(`/v1/admin/events/${encodeURIComponent(requestId)}`);
-        if (!cancelled) setTrace(next);
+        if (cancelled) return;
+        setTrace(next);
+        if (next.finished) return;
+
+        // Request is still running — subscribe to the live event stream so the
+        // fusion pipeline view and timeline update in real time. The stream
+        // replays the backlog first, so rebuild the event list from scratch.
+        const liveEvents: RequestEvent[] = [];
+        stream = openEventStream(requestId, {
+          onEvent: (event) => {
+            if (cancelled) return;
+            liveEvents.push(event);
+            setTrace({
+              ...next,
+              finished: event.type === "request.finished",
+              events: [...liveEvents],
+            });
+          },
+          onDone: () => {
+            if (cancelled) return;
+            setTrace((current) => (current === undefined ? current : { ...current, finished: true }));
+          },
+        });
       } catch {
         if (!cancelled) setTrace(undefined);
       } finally {
@@ -66,6 +92,7 @@ function ObservabilityBody(): React.ReactElement {
     loadTrace();
     return () => {
       cancelled = true;
+      stream?.close();
     };
   }, [selectedId]);
 

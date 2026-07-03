@@ -95,6 +95,24 @@ export interface AnalyticsSummary {
   }>;
 }
 
+export interface UserLimits {
+  requestsPerMinute?: number;
+  requestsPerDay?: number;
+  tokensPerDay?: number;
+  costUsdPerDay?: number;
+  concurrentRequests?: number;
+}
+
+export interface AvailableModel {
+  id: string;
+  object?: string;
+  created?: number;
+  owned_by?: string;
+  context_window?: number;
+  context_length?: number;
+  limit?: { context?: number };
+}
+
 export interface ModelListItem {
   logical_name: string;
   path: string;
@@ -230,6 +248,10 @@ export async function listModels(): Promise<{ models: ModelListItem[] }> {
   return apiFetch("/v1/admin/config/models");
 }
 
+export async function listAvailableModels(): Promise<{ object: "list"; data: AvailableModel[] }> {
+  return apiFetch("/v1/models");
+}
+
 export async function getModel(name: string): Promise<{ model: Record<string, unknown> }> {
   return apiFetch(`/v1/admin/config/models/${encodeURIComponent(name)}`);
 }
@@ -299,6 +321,108 @@ export async function saveEnv(entries: Array<{ key: string; value: string }>): P
     method: "PUT",
     body: { entries },
   });
+}
+
+// -------- Multi-user --------
+export interface PrincipalInfo {
+  userId?: string;
+  apiKeyId?: string;
+  email?: string;
+  role: "owner" | "admin" | "user";
+  isOwner: boolean;
+  ownerBypass: boolean;
+  completionLoggingEnabled: boolean;
+}
+
+export interface UserRecord {
+  id: string;
+  email: string;
+  role: "owner" | "admin" | "user";
+  status: "active" | "disabled";
+  completionLoggingEnabled: boolean;
+  createdAt: string;
+  lastLoginAt?: string;
+}
+
+export interface SignupSettings {
+  multiUserEnabled: boolean;
+  openSignupEnabled: boolean;
+  inviteSignupEnabled: boolean;
+  allowUserKeyCreation: boolean;
+  allowUserCompletionLogging: boolean;
+  defaultLimits: Record<string, unknown>;
+  inviteLimits: Record<string, unknown>;
+}
+
+export interface InviteRecord {
+  id: string;
+  email?: string;
+  expiresAt: string;
+  usedByUserId?: string;
+  usedAt?: string;
+  revokedAt?: string;
+  createdAt: string;
+}
+
+export function getMe(): Promise<{ principal: PrincipalInfo; signup: SignupSettings; owner_user_exists: boolean }> {
+  return apiFetch("/v1/auth/me");
+}
+
+export function getCurrentUserLimits(): Promise<{ limits: UserLimits }> {
+  return apiFetch("/v1/user/limits");
+}
+
+export function getCurrentUserAnalytics(filters: ObservabilityFilters = {}): Promise<{
+  filters_applied: ObservabilityFilters & { userId?: string };
+  summary: AnalyticsSummary;
+}> {
+  return apiFetch(`/v1/user/analytics?${observabilityQuery({ filters })}`);
+}
+
+export function listUsersAdmin(): Promise<{ users: UserRecord[] }> {
+  return apiFetch("/v1/admin/users");
+}
+
+export function getUserEntitlements(userId: string): Promise<{ entitlements: Array<Record<string, unknown>> }> {
+  return apiFetch(`/v1/admin/users/${encodeURIComponent(userId)}/entitlements`);
+}
+
+export function saveUserEntitlements(userId: string, entitlements: Array<Record<string, unknown>>): Promise<{ entitlements: Array<Record<string, unknown>> }> {
+  return apiFetch(`/v1/admin/users/${encodeURIComponent(userId)}/entitlements`, {
+    method: "PUT",
+    body: { entitlements },
+  });
+}
+
+export function getUserLimits(userId: string): Promise<{ limits: Record<string, unknown> }> {
+  return apiFetch(`/v1/admin/users/${encodeURIComponent(userId)}/limits`);
+}
+
+export function saveUserLimits(userId: string, limits: Record<string, unknown>): Promise<{ limits: Record<string, unknown> }> {
+  return apiFetch(`/v1/admin/users/${encodeURIComponent(userId)}/limits`, {
+    method: "PUT",
+    body: limits,
+  });
+}
+
+export function listInvitesAdmin(): Promise<{ invites: InviteRecord[] }> {
+  return apiFetch("/v1/admin/invites");
+}
+
+export function createInviteAdmin(input: Record<string, unknown>): Promise<{ invite: InviteRecord; token: string }> {
+  return apiFetch("/v1/admin/invites", { method: "POST", body: input });
+}
+
+export function getSignupSettingsAdmin(): Promise<{ signup: SignupSettings }> {
+  return apiFetch("/v1/admin/signup-settings");
+}
+
+export function saveSignupSettingsAdmin(input: Record<string, unknown>): Promise<{ signup: SignupSettings }> {
+  return apiFetch("/v1/admin/signup-settings", { method: "PUT", body: input });
+}
+
+export function createUserApiKey(label: string): Promise<{ api_key: { id: string; key: string; keyPrefix: string; keyLastFour: string } }> {
+  return apiFetch("/v1/user/api-keys", { method: "POST", body: { label } });
 }
 
 

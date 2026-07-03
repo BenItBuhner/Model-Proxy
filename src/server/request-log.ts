@@ -7,7 +7,9 @@ import {
   normalizeUsageFromResponse,
   type UsageSnapshot,
 } from "../observability/usage.ts";
+import { commitRequestUsage } from "../storage/limit-store.ts";
 import { writeCompletionEnvelope } from "../storage/completion-store.ts";
+import { writeRequestMetric } from "../storage/metrics-store.ts";
 import type { CompletionEnvelope } from "../storage/types.ts";
 
 export interface StartEntry {
@@ -18,6 +20,10 @@ export interface StartEntry {
   resolvedModel?: string;
   resolvedProvider?: string;
   wireProtocol?: "openai" | "anthropic" | "audio";
+  userId?: string;
+  apiKeyId?: string;
+  principalRole?: string;
+  ownerBypass?: boolean;
   isStreaming: boolean;
   enforceMode: boolean;
   hedgedRouting?: boolean;
@@ -90,6 +96,10 @@ export function recordRequestStart(entry: StartEntry): void {
     apiKeyEnvVar: undefined,
     keyHint: undefined,
     wireProtocol: entry.wireProtocol,
+    userId: entry.userId,
+    apiKeyId: entry.apiKeyId,
+    principalRole: entry.principalRole,
+    ownerBypass: entry.ownerBypass,
     state: "running",
     responseStatus: undefined,
     responseTimeMs: undefined,
@@ -198,6 +208,10 @@ export function recordRequestFinish(entry: FinishEntry): void {
     apiKeyEnvVar,
     keyHint,
     wireProtocol: base?.wireProtocol,
+    userId: base.userId,
+    apiKeyId: base.apiKeyId,
+    principalRole: base.principalRole,
+    ownerBypass: base.ownerBypass,
     state: "completed",
     responseStatus: entry.responseStatus,
     responseTimeMs: entry.responseTimeMs,
@@ -230,6 +244,8 @@ export function recordRequestFinish(entry: FinishEntry): void {
   };
 
   requestLogRingBuffer.record(record);
+  persistRequestMetric(record);
+  commitUsage(record);
   if ((base.persistCompletions ?? completionPersistenceDefault()) === true) {
     persistCompletion(record, base, entry, usageForAnalytics, costs, cache);
   }
@@ -352,6 +368,28 @@ function persistCompletion(
     writeCompletionEnvelope(envelope);
   } catch (err) {
     log.warn("failed to persist completion envelope", {
+      requestId: record.requestId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+function commitUsage(record: RequestLogRecord): void {
+  try {
+    commitRequestUsage(record);
+  } catch (err) {
+    log.warn("failed to commit request usage", {
+      requestId: record.requestId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+function persistRequestMetric(record: RequestLogRecord): void {
+  try {
+    writeRequestMetric(record);
+  } catch (err) {
+    log.warn("failed to persist request metric", {
       requestId: record.requestId,
       err: err instanceof Error ? err.message : String(err),
     });

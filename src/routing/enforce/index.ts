@@ -1,5 +1,6 @@
 import { createLogger } from "../../observability/logger.ts";
 import { emit, nowIso } from "../../observability/request-context.ts";
+import type { Principal } from "../../storage/identity-store.ts";
 import type { FallbackRouter } from "../fallback.ts";
 import { resolveEnforceConfig, type PerRequestOverrides } from "./config.ts";
 import { injectGuidance } from "./injector.ts";
@@ -75,6 +76,7 @@ export interface EnforceCallArgs {
   requestData: Record<string, unknown>;
   targetProtocol: EnforceProtocol;
   signal?: AbortSignal;
+  principal?: Principal;
   /** Extra headers forwarded to upstream providers (e.g. x-opencode-*). */
   extraHeaders?: Record<string, string>;
   /** Optional per-request overrides (header / query). */
@@ -110,6 +112,7 @@ export class EnforceRouter {
         logicalModel: args.logicalModel,
         requestData: scrubRetryMarkers(args.requestData),
         targetProtocol: args.targetProtocol,
+        ...(args.principal !== undefined ? { principal: args.principal } : {}),
         ...(args.signal !== undefined ? { signal: args.signal } : {}),
         ...(args.extraHeaders !== undefined ? { extraHeaders: args.extraHeaders } : {}),
       });
@@ -132,6 +135,7 @@ export class EnforceRouter {
       args.targetProtocol,
       args.signal,
       args.extraHeaders,
+      args.principal,
       config,
     );
     const hadFlag = responseContainsFlag(
@@ -166,6 +170,7 @@ export class EnforceRouter {
       };
       if (args.signal !== undefined) streamArgs.signal = args.signal;
       if (args.extraHeaders !== undefined) streamArgs.extraHeaders = args.extraHeaders;
+      if (args.principal !== undefined) streamArgs.principal = args.principal;
       for await (const chunk of this.fallbackRouter.streamWithFallback(streamArgs)) {
         yield chunk;
       }
@@ -189,6 +194,7 @@ export class EnforceRouter {
       args.targetProtocol,
       args.signal,
       args.extraHeaders,
+      args.principal,
       config,
     );
     const hadFlag = responseContainsFlag(
@@ -228,6 +234,7 @@ export class EnforceRouter {
     protocol: EnforceProtocol,
     signal: AbortSignal | undefined,
     extraHeaders: Record<string, string> | undefined,
+    principal: Principal | undefined,
     config: ResolvedEnforceConfig,
   ): Promise<Record<string, unknown>> {
     let currentRequest = seedRequest;
@@ -252,6 +259,7 @@ export class EnforceRouter {
         requestData: scrubRetryMarkers(currentRequest),
         targetProtocol: protocol,
         validateResponse: false,
+        ...(principal !== undefined ? { principal } : {}),
         ...(signal !== undefined ? { signal } : {}),
         ...(extraHeaders !== undefined ? { extraHeaders } : {}),
       });

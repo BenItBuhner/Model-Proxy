@@ -4,6 +4,15 @@ import { FusionConfigSchema } from "./fusion.ts";
 import { HedgedRoutingConfigSchema } from "./hedged.ts";
 import { PricingConfigSchema } from "./pricing.ts";
 
+export const RouteCapabilitiesSchema = z
+  .object({
+    /** Whether this route can accept image/multimodal chat content. */
+    multimodal: z.boolean().optional(),
+  })
+  .strict();
+
+export type RouteCapabilities = z.infer<typeof RouteCapabilitiesSchema>;
+
 /**
  * Configuration for a single provider route inside a ModelRoutingConfig.
  * Mirrors `app/routing/models.py::RouteConfig`.
@@ -11,6 +20,8 @@ import { PricingConfigSchema } from "./pricing.ts";
 export const RouteConfigSchema = z
   .object({
     wire_protocol: z.enum(["openai", "anthropic"]).optional(),
+    route_id: z.string().min(1).optional(),
+    access_tags: z.array(z.string().min(1)).optional(),
     provider: z.string().min(1),
     model: z.string().min(1),
     base_url: z.string().url().optional(),
@@ -19,6 +30,8 @@ export const RouteConfigSchema = z
     cooldown_seconds: z.number().int().nonnegative().optional(),
     /** Override context window (tokens) when upstream catalog lacks this route's model. */
     context_window: z.number().int().positive().optional(),
+    /** Declared route capabilities used for request-aware preflight routing. */
+    capabilities: RouteCapabilitiesSchema.optional(),
     /** Pin this route to a single egress proxy env var (e.g. OPENCODE_EGRESS_PROXY_1). */
     egress_proxy_env: z.string().min(1).optional(),
     /** Auth mode override for providers like OpenCode Zen (`public` = Bearer public). */

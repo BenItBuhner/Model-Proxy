@@ -13,6 +13,7 @@ import { modelConfigLoader } from "../config/model-loader.ts";
 import { providerConfigLoader } from "../config/provider-loader.ts";
 import { createLogger } from "../observability/logger.ts";
 import { currentRequestId, emit, nowIso } from "../observability/request-context.ts";
+import { canUseLogicalModel, canUseRouteConfig } from "../policy/access-control.ts";
 import {
   KeyCycleTracker,
   getAvailableKeys,
@@ -32,7 +33,13 @@ import {
 } from "../providers/errors.ts";
 import { getProviderWireProtocol } from "../providers/provider-helpers.ts";
 import { recordRequestProgress } from "../server/request-log.ts";
+import type { Principal } from "../storage/identity-store.ts";
+import { getProviderConfigContextWindow } from "./context-window.ts";
 import { execute, executeStream } from "./executor.ts";
+import {
+  analyzeRequestForRouting,
+  type RoutingRequestAnalysis,
+} from "./request-analysis.ts";
 import {
   fixMissingToolResponsesOpenAI,
   fixMissingToolResultsAnthropic,
@@ -89,6 +96,14 @@ interface HedgedRouteTuple extends RouteTuple {
   routeIndex: number;
 }
 
+type RouteSkipReason = "multimodal_unsupported" | "context_window_exceeded";
+
+interface RouteSkip extends RouteTuple {
+  reason: RouteSkipReason;
+  estimatedPromptTokens?: number;
+  contextWindow?: number;
+}
+
 interface HedgedResolvedCandidate {
   route: ResolvedRoute;
   routeConfig: RouteConfig;
@@ -98,6 +113,11 @@ interface HedgedResolvedCandidate {
   attempt: Attempt;
   routeIndex: number;
   weight: number;
+}
+
+interface HedgedCandidateCollection {
+  candidates: HedgedResolvedCandidate[];
+  skipped: RouteSkip[];
 }
 
 type HedgedOutcome =
@@ -133,6 +153,7 @@ type HedgedStreamEvent =
 
 interface FallbackRouterOptions {
   random?: () => number;
+  principal?: Principal;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -349,6 +370,7 @@ export interface CallWithFallbackArgs {
   targetProtocol: "openai" | "anthropic";
   maxKeyCycles?: number;
   signal?: AbortSignal;
+  principal?: Principal;
   validateResponse?: boolean;
   /** Extra headers forwarded to upstream providers (e.g. x-opencode-*). */
   extraHeaders?: Record<string, string>;
@@ -480,9 +502,11 @@ export class FallbackRouter {
   private visited = new Set<string>();
   private modelConfigCache = new Map<string, ModelRoutingConfig>();
   private readonly random: () => number;
+  private readonly principal: Principal | undefined;
 
   constructor(options: FallbackRouterOptions = {}) {
     this.random = options.random ?? Math.random;
+    this.principal = options.principal;
   }
 
   private getModelConfig(name: string): ModelRoutingConfig {
@@ -493,15 +517,17 @@ export class FallbackRouter {
     return cfg;
   }
 
-  collectRouteConfigs(logicalModel: string): RouteTuple[] {
+  collectRouteConfigs(logicalModel: string, principal = this.principal): RouteTuple[] {
     this.visited.clear();
-    return this.collectRouteConfigsRecursive(logicalModel, false);
+    return this.collectRouteConfigsRecursive(logicalModel, false, principal);
   }
 
   private collectRouteConfigsRecursive(
     logicalModel: string,
     isFallback: boolean,
+    principal: Principal | undefined,
   ): RouteTuple[] {
+    if (!canUseLogicalModel(principal, logicalModel)) return [];
     if (this.visited.has(logicalModel)) return [];
     this.visited.add(logicalModel);
 
@@ -524,13 +550,118 @@ export class FallbackRouter {
 
     const out: RouteTuple[] = [];
     for (const routeConfig of config.model_routings) {
+      if (!canUseRouteConfig(principal, logicalModel, routeConfig)) continue;
       out.push({ routeConfig, isFallback, sourceModel: logicalModel });
     }
     for (const fallback of config.fallback_model_routings) {
-      out.push(...this.collectRouteConfigsRecursive(fallback, true));
+      out.push(...this.collectRouteConfigsRecursive(fallback, true, principal));
     }
     this.visited.delete(logicalModel);
     return out;
+  }
+
+  private declaredContextWindow(
+    routeConfig: RouteConfig,
+    modelConfig: ModelRoutingConfig,
+  ): number | undefined {
+    return (
+      routeConfig.context_window ??
+      modelConfig.context_window ??
+      getProviderConfigContextWindow(routeConfig.provider, routeConfig.model)
+    );
+  }
+
+  private skipReasonForRoute(
+    tuple: RouteTuple,
+    analysis: RoutingRequestAnalysis,
+  ): RouteSkip | undefined {
+    const modelConfig = this.getModelConfig(tuple.sourceModel);
+    const contextWindow = this.declaredContextWindow(tuple.routeConfig, modelConfig);
+    if (
+      analysis.hasMultimodalContent &&
+      tuple.routeConfig.capabilities?.multimodal === false
+    ) {
+      return {
+        ...tuple,
+        reason: "multimodal_unsupported",
+        ...(analysis.estimatedPromptTokens !== undefined
+          ? { estimatedPromptTokens: analysis.estimatedPromptTokens }
+          : {}),
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+      };
+    }
+    if (
+      analysis.estimatedPromptTokens !== undefined &&
+      contextWindow !== undefined &&
+      analysis.estimatedPromptTokens > contextWindow
+    ) {
+      return {
+        ...tuple,
+        reason: "context_window_exceeded",
+        estimatedPromptTokens: analysis.estimatedPromptTokens,
+        contextWindow,
+      };
+    }
+    return undefined;
+  }
+
+  private emitRouteSkipped(skip: RouteSkip): void {
+    const { routeConfig } = skip;
+    log.info("skipping incompatible route", {
+      provider: routeConfig.provider,
+      model: routeConfig.model,
+      reason: skip.reason,
+      sourceLogicalModel: skip.sourceModel,
+      ...(skip.estimatedPromptTokens !== undefined
+        ? { estimatedPromptTokens: skip.estimatedPromptTokens }
+        : {}),
+      ...(skip.contextWindow !== undefined ? { contextWindow: skip.contextWindow } : {}),
+    });
+    emit({
+      type: "route.skipped",
+      at: nowIso(),
+      provider: routeConfig.provider,
+      model: routeConfig.model,
+      reason: skip.reason,
+      sourceLogicalModel: skip.sourceModel,
+      isFallback: skip.isFallback,
+      ...(skip.estimatedPromptTokens !== undefined
+        ? { estimatedPromptTokens: skip.estimatedPromptTokens }
+        : {}),
+      ...(skip.contextWindow !== undefined ? { contextWindow: skip.contextWindow } : {}),
+    });
+  }
+
+  private eligibleRouteTuples<T extends RouteTuple>(
+    routeTuples: T[],
+    analysis: RoutingRequestAnalysis,
+    options: { emitSkips: boolean } = { emitSkips: true },
+  ): { eligible: T[]; skipped: RouteSkip[] } {
+    const eligible: T[] = [];
+    const skipped: RouteSkip[] = [];
+    for (const tuple of routeTuples) {
+      const skip = this.skipReasonForRoute(tuple, analysis);
+      if (skip !== undefined) {
+        skipped.push(skip);
+        if (options.emitSkips) this.emitRouteSkipped(skip);
+        continue;
+      }
+      eligible.push(tuple);
+    }
+    return { eligible, skipped };
+  }
+
+  private skippedRouteErrors(skipped: RouteSkip[]): Array<Record<string, unknown>> {
+    return skipped.map((skip) => ({
+      provider: skip.routeConfig.provider,
+      model: skip.routeConfig.model,
+      error: skip.reason,
+      error_type: "RouteEligibilityError",
+      ...(skip.estimatedPromptTokens !== undefined
+        ? { estimated_prompt_tokens: skip.estimatedPromptTokens }
+        : {}),
+      ...(skip.contextWindow !== undefined ? { context_window: skip.contextWindow } : {}),
+    }));
   }
 
   private createTrackerForRoute(
@@ -684,9 +815,10 @@ export class FallbackRouter {
   private collectHedgedRouteTuples(
     logicalModel: string,
     config: HedgedRoutingConfig,
+    principal: Principal | undefined,
   ): HedgedRouteTuple[] {
     const tuples = config.include_fallback_model_routings
-      ? this.collectRouteConfigs(logicalModel)
+      ? this.collectRouteConfigs(logicalModel, principal)
       : this.getModelConfig(logicalModel).model_routings.map((routeConfig) => ({
           routeConfig,
           isFallback: false,
@@ -711,14 +843,23 @@ export class FallbackRouter {
     maxKeyCycles,
     extraHeaders,
     limit,
+    principal,
+    analysis,
   }: {
     logicalModel: string;
     config: HedgedRoutingConfig;
     maxKeyCycles: number | undefined;
     extraHeaders: Record<string, string> | undefined;
     limit: number;
-  }): HedgedResolvedCandidate[] {
-    const routeTuples = this.collectHedgedRouteTuples(logicalModel, config);
+    principal: Principal | undefined;
+    analysis: RoutingRequestAnalysis;
+  }): HedgedCandidateCollection {
+    const collectedRouteTuples = this.collectHedgedRouteTuples(logicalModel, config, principal);
+    const { eligible: routeTuples, skipped } = this.eligibleRouteTuples(
+      collectedRouteTuples,
+      analysis,
+      { emitSkips: true },
+    );
     const candidates: HedgedResolvedCandidate[] = [];
     let attemptNumber = 1;
     const collectionLimit = Math.max(limit * 4, limit + 4);
@@ -782,7 +923,10 @@ export class FallbackRouter {
       }
     }
 
-    return this.selectHedgedCandidates(candidates, limit);
+    return {
+      candidates: this.selectHedgedCandidates(candidates, limit),
+      skipped,
+    };
   }
 
   private resolveHedgedKeys(
@@ -876,8 +1020,13 @@ export class FallbackRouter {
     logicalModel: string,
     config: HedgedRoutingConfig,
     maxParallel: number,
+    principal: Principal | undefined,
+    analysis: RoutingRequestAnalysis,
   ): number {
-    const routeCount = this.collectHedgedRouteTuples(logicalModel, config).length;
+    const collectedRouteTuples = this.collectHedgedRouteTuples(logicalModel, config, principal);
+    const routeCount = this.eligibleRouteTuples(collectedRouteTuples, analysis, {
+      emitSkips: false,
+    }).eligible.length;
     return Math.min(30, Math.max(maxParallel, routeCount));
   }
 
@@ -1008,23 +1157,39 @@ export class FallbackRouter {
     args: CallWithFallbackArgs,
     config: HedgedRoutingConfig,
   ): Promise<Record<string, unknown>> {
-    const { logicalModel, requestData, targetProtocol, maxKeyCycles, signal, validateResponse, extraHeaders } =
+    const { logicalModel, requestData, targetProtocol, maxKeyCycles, signal, validateResponse, extraHeaders, principal } =
       args;
     const maxParallel = this.resolveHedgedConcurrency(config);
-    const candidates = this.collectHedgedCandidates({
+    const resolvedPrincipal = principal ?? this.principal;
+    const analysis = analyzeRequestForRouting(requestData);
+    const collection = this.collectHedgedCandidates({
       logicalModel,
       config,
       maxKeyCycles,
       extraHeaders,
-      limit: this.hedgedCandidatePoolLimit(logicalModel, config, maxParallel),
+      limit: this.hedgedCandidatePoolLimit(
+        logicalModel,
+        config,
+        maxParallel,
+        resolvedPrincipal,
+        analysis,
+      ),
+      principal: resolvedPrincipal,
+      analysis,
     });
+    const { candidates, skipped } = collection;
 
     if (candidates.length === 0) {
+      const skippedErrors = this.skippedRouteErrors(skipped);
       throw new RoutingError(
         logicalModel,
         [],
-        [{ error: "No hedged routes available", error_type: "NoRoutesError" }],
-        `No hedged routes available for logical model '${logicalModel}'`,
+        skippedErrors.length > 0
+          ? skippedErrors
+          : [{ error: "No hedged routes available", error_type: "NoRoutesError" }],
+        skippedErrors.length > 0
+          ? `No eligible hedged routes available for logical model '${logicalModel}'`
+          : `No hedged routes available for logical model '${logicalModel}'`,
       );
     }
 
@@ -1255,23 +1420,39 @@ export class FallbackRouter {
     args: CallWithFallbackArgs,
     config: HedgedRoutingConfig,
   ): AsyncGenerator<string, void, unknown> {
-    const { logicalModel, requestData, targetProtocol, maxKeyCycles, signal, extraHeaders } =
+    const { logicalModel, requestData, targetProtocol, maxKeyCycles, signal, extraHeaders, principal } =
       args;
     const maxParallel = this.resolveHedgedConcurrency(config);
-    const candidates = this.collectHedgedCandidates({
+    const resolvedPrincipal = principal ?? this.principal;
+    const analysis = analyzeRequestForRouting(requestData);
+    const collection = this.collectHedgedCandidates({
       logicalModel,
       config,
       maxKeyCycles,
       extraHeaders,
-      limit: this.hedgedCandidatePoolLimit(logicalModel, config, maxParallel),
+      limit: this.hedgedCandidatePoolLimit(
+        logicalModel,
+        config,
+        maxParallel,
+        resolvedPrincipal,
+        analysis,
+      ),
+      principal: resolvedPrincipal,
+      analysis,
     });
+    const { candidates, skipped } = collection;
 
     if (candidates.length === 0) {
+      const skippedErrors = this.skippedRouteErrors(skipped);
       throw new RoutingError(
         logicalModel,
         [],
-        [{ error: "No hedged routes available", error_type: "NoRoutesError" }],
-        `No hedged routes available for logical model '${logicalModel}'`,
+        skippedErrors.length > 0
+          ? skippedErrors
+          : [{ error: "No hedged routes available", error_type: "NoRoutesError" }],
+        skippedErrors.length > 0
+          ? `No eligible hedged routes available for logical model '${logicalModel}'`
+          : `No hedged routes available for logical model '${logicalModel}'`,
       );
     }
 
@@ -1608,19 +1789,32 @@ export class FallbackRouter {
   }
 
   async callWithFallback(args: CallWithFallbackArgs): Promise<Record<string, unknown>> {
-    const { logicalModel, requestData, targetProtocol, maxKeyCycles, signal, validateResponse, extraHeaders } =
+    const { logicalModel, requestData, targetProtocol, maxKeyCycles, signal, validateResponse, extraHeaders, principal } =
       args;
     const hedgedConfig = this.hedgedConfigFor(logicalModel);
     if (hedgedConfig !== undefined) {
       return this.callWithHedgedRouting(args, hedgedConfig);
     }
-    const routeTuples = this.collectRouteConfigs(logicalModel);
-    if (routeTuples.length === 0) {
+    const collectedRouteTuples = this.collectRouteConfigs(logicalModel, principal ?? this.principal);
+    if (collectedRouteTuples.length === 0) {
       throw new RoutingError(
         logicalModel,
         [],
         [{ error: "No routes available", error_type: "NoRoutesError" }],
         `No routes available for logical model '${logicalModel}'`,
+      );
+    }
+    const analysis = analyzeRequestForRouting(requestData);
+    const { eligible: routeTuples, skipped } = this.eligibleRouteTuples(
+      collectedRouteTuples,
+      analysis,
+    );
+    if (routeTuples.length === 0) {
+      throw new RoutingError(
+        logicalModel,
+        [],
+        this.skippedRouteErrors(skipped),
+        `No eligible routes available for logical model '${logicalModel}'`,
       );
     }
 
@@ -1826,20 +2020,33 @@ export class FallbackRouter {
   async *streamWithFallback(
     args: CallWithFallbackArgs,
   ): AsyncGenerator<string, void, unknown> {
-    const { logicalModel, requestData, targetProtocol, maxKeyCycles, signal, extraHeaders } =
+    const { logicalModel, requestData, targetProtocol, maxKeyCycles, signal, extraHeaders, principal } =
       args;
     const hedgedConfig = this.hedgedConfigFor(logicalModel);
     if (hedgedConfig !== undefined) {
       yield* this.streamWithHedgedRouting(args, hedgedConfig);
       return;
     }
-    const routeTuples = this.collectRouteConfigs(logicalModel);
-    if (routeTuples.length === 0) {
+    const collectedRouteTuples = this.collectRouteConfigs(logicalModel, principal ?? this.principal);
+    if (collectedRouteTuples.length === 0) {
       throw new RoutingError(
         logicalModel,
         [],
         [{ error: "No routes available", error_type: "NoRoutesError" }],
         `No routes available for logical model '${logicalModel}'`,
+      );
+    }
+    const analysis = analyzeRequestForRouting(requestData);
+    const { eligible: routeTuples, skipped } = this.eligibleRouteTuples(
+      collectedRouteTuples,
+      analysis,
+    );
+    if (routeTuples.length === 0) {
+      throw new RoutingError(
+        logicalModel,
+        [],
+        this.skippedRouteErrors(skipped),
+        `No eligible routes available for logical model '${logicalModel}'`,
       );
     }
 

@@ -156,6 +156,31 @@ describe("zod schemas", () => {
     expect(result.success).toBe(false);
   });
 
+  test("RouteConfig accepts route capabilities", () => {
+    const result = RouteConfigSchema.safeParse({
+      provider: "nahcrof",
+      model: "glm-5.2",
+      capabilities: {
+        multimodal: false,
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.capabilities?.multimodal).toBe(false);
+    }
+  });
+
+  test("RouteConfig rejects malformed route capabilities", () => {
+    const result = RouteConfigSchema.safeParse({
+      provider: "nahcrof",
+      model: "glm-5.2",
+      capabilities: {
+        multimodal: "nope",
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   test("ModelRoutingConfig accepts model-level context_window", () => {
     const result = ModelRoutingConfigSchema.safeParse({
       logical_name: "x",

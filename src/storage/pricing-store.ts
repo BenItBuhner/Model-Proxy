@@ -9,9 +9,20 @@ export interface AnalyticsPricingSettings {
   default_pricing?: PricingConfig;
 }
 
+export const BUILTIN_DEFAULT_PRICING: PricingConfig = {
+  user_cost: {
+    input_per_1m: 0,
+    output_per_1m: 0,
+  },
+  typical_cost: {
+    input_per_1m: 3,
+    output_per_1m: 15,
+  },
+};
+
 export function readAnalyticsPricingSettings(): AnalyticsPricingSettings {
   const path = pricingPath();
-  if (!existsSync(path)) return {};
+  if (!existsSync(path)) return { default_pricing: BUILTIN_DEFAULT_PRICING };
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
     const defaultPricing = parsed["default_pricing"];
@@ -19,9 +30,9 @@ export function readAnalyticsPricingSettings(): AnalyticsPricingSettings {
       const result = PricingConfigSchema.safeParse(defaultPricing);
       if (result.success) return { default_pricing: result.data };
     }
-    return {};
+    return { default_pricing: BUILTIN_DEFAULT_PRICING };
   } catch {
-    return {};
+    return { default_pricing: BUILTIN_DEFAULT_PRICING };
   }
 }
 

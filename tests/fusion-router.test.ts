@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import { FusionRouter } from "../src/routing/fusion/fusion-router.ts";
+import { formatReasoningChunk } from "../src/routing/fusion/reasoning-summarizer.ts";
 import type { FusionRequestContext } from "../src/routing/fusion/types.ts";
 import type { FusionConfig } from "../shared/schemas/fusion.ts";
 
@@ -7,8 +8,8 @@ const testFusionConfig: FusionConfig = {
   enabled: true,
   context_window: 10_000_000,
   complexity_scoring: {
-    effort_1_threshold: 0.15,
-    effort_2_threshold: 0.45,
+    effort_1_threshold: 0.20,
+    effort_2_threshold: 0.55,
   },
   task_divider: {
     model_routing: "glm-5.2",
@@ -16,7 +17,7 @@ const testFusionConfig: FusionConfig = {
     max_subtasks: 5,
   },
   effort_levels: {
-    1: { model_routing: "turbo" },
+    1: { model_routing: "__missing-test-model__" },
     2: {
       subagent_count: { min: 2, max: 4 },
       model_routings: ["complete"],
@@ -34,6 +35,8 @@ const testFusionConfig: FusionConfig = {
     wire_protocol: "openai",
   },
   cache: { enabled: true, scope: "permanent" },
+  summarizer: { enabled: false, model_routing: "turbo", segment_chars: 1400, max_summary_tokens: 256 },
+  scheduler: { allow_nested_fusion: false, max_depth: 0, max_leaf_calls: 8, max_wall_ms: 120_000 },
 };
 
 describe("FusionRouter", () => {
@@ -119,5 +122,22 @@ describe("FusionRouter", () => {
     expect(ctx.clientProtocol).toBe("anthropic");
     expect(ctx.logicalModel).toBe("fusion-beta");
     expect(ctx.fusionConfig.enabled).toBe(true);
+  });
+
+  it("formats OpenAI reasoning summaries as reasoning_content deltas", () => {
+    const ctx: FusionRequestContext = {
+      logicalModel: "fusion-beta",
+      fusionConfig: testFusionConfig,
+      requestData: { messages: [] },
+      clientProtocol: "openai",
+      messages: [],
+      requestId: "req-test",
+    };
+
+    const chunk = formatReasoningChunk(ctx, "Subagent completed useful work.\n\n");
+    expect(chunk).toContain("data:");
+    expect(chunk).toContain("reasoning_content");
+    expect(chunk).toContain("Subagent completed useful work.");
+    expect(chunk).not.toContain("\"content\"");
   });
 });

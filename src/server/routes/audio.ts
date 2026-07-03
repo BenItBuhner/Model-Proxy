@@ -23,18 +23,25 @@ import {
   runWithRequestContext,
 } from "../../observability/request-context.ts";
 import {
+  AccessDeniedError,
+  assertCanUseAudioModel,
+  canUseAudioModel,
+} from "../../policy/access-control.ts";
+import { reserveRequest } from "../../storage/limit-store.ts";
+import {
   recordRequestAbort,
   recordRequestFinish,
   recordRequestStart,
 } from "../request-log.ts";
-import { requireAuth } from "../auth.ts";
+import { principal, requireAuth } from "../auth.ts";
 
 export function createAudioRoutes(): Hono {
   const app = new Hono();
   app.use("/v1/audio/*", requireAuth({ allowSession: true }));
 
   app.get("/v1/audio/models", (c) => {
-    const data = audioModelConfigLoader.getAvailableModels().map((id) => ({
+    const p = principal(c);
+    const data = audioModelConfigLoader.getAvailableModels().filter((id) => canUseAudioModel(p, id)).map((id) => ({
       id,
       object: "model" as const,
       created: Math.floor(Date.now() / 1000),
@@ -83,6 +90,19 @@ async function handleTranscription(
   }
   const request = parsed.data;
   const isStream = request.stream === true;
+  const p = principal(c);
+  try {
+    assertCanUseAudioModel(p, request.model);
+  } catch (err) {
+    if (err instanceof AccessDeniedError) {
+      return c.json(audioError(`Audio model '${request.model}' not found`, "invalid_request_error"), 404);
+    }
+    throw err;
+  }
+  const limitDecision = reserveRequest(p);
+  if (!limitDecision.allowed) {
+    return c.json(audioError(limitDecision.reason ?? "Rate limit exceeded", "rate_limit_exceeded"), 429);
+  }
 
   try {
     audioModelConfigLoader.loadConfig(request.model);
@@ -120,6 +140,10 @@ async function handleTranscription(
           ? { name: "name" in file ? String((file as { name?: unknown }).name) : undefined, size: file.size, type: file.type }
           : undefined,
     },
+    userId: p?.userId,
+    apiKeyId: p?.apiKeyId,
+    principalRole: p?.role,
+    ownerBypass: p?.ownerBypass,
   });
   const recordAbort = () => {
     recordRequestAbort({

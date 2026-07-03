@@ -16,6 +16,8 @@ import {
   nowIso,
   runWithRequestContext,
 } from "../../observability/request-context.ts";
+import { StreamUsageTracker } from "../../observability/stream-usage.ts";
+import { reserveRequest } from "../../storage/limit-store.ts";
 import { RouteExecutionError } from "../../providers/errors.ts";
 import {
   EnforceRouter,
@@ -26,10 +28,15 @@ import {
   buildOpenAIModelListEntry,
   SYSTEM_DEFAULT_CONTEXT_WINDOW,
 } from "../../routing/context-window.ts";
+import {
+  AccessDeniedError,
+  assertCanUseLogicalModel,
+  canListModel,
+} from "../../policy/access-control.ts";
 import { FallbackRouter } from "../../routing/fallback.ts";
 import { FusionRouter } from "../../routing/fusion/fusion-router.ts";
 import type { FusionRequestContext } from "../../routing/fusion/types.ts";
-import { requireAuth } from "../auth.ts";
+import { principal, requireAuth } from "../auth.ts";
 import { formatOpenAIError } from "../error-formatters.ts";
 import {
   estimateRequestTokens,
@@ -81,59 +88,23 @@ function buildUpstreamExtraHeaders(c: Context): Record<string, string> {
   return headers;
 }
 
-function extractOpenAIStreamUsage(text: string): Parameters<typeof recordRequestFinish>[0]["usage"] {
-  const usage = findLastStreamUsage(text);
-  if (usage === undefined) return undefined;
-  return {
-    promptTokens: numberField(usage, "prompt_tokens"),
-    completionTokens: numberField(usage, "completion_tokens"),
-    totalTokens: numberField(usage, "total_tokens"),
-  };
-}
-
-function extractOpenAIStreamCompletionTokens(text: string, fallbackCharCount?: number): number | undefined {
-  const usage = extractOpenAIStreamUsage(text);
-  if (usage?.completionTokens !== undefined) return usage.completionTokens;
-  if (fallbackCharCount !== undefined && Number.isFinite(fallbackCharCount)) {
-    return Math.ceil(fallbackCharCount / 4);
-  }
-  return estimateRequestTokens(text);
-}
-
-function findLastStreamUsage(text: string): Record<string, unknown> | undefined {
-  let last: Record<string, unknown> | undefined;
-  for (const line of text.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("data:")) continue;
-    const payload = trimmed.slice("data:".length).trim();
-    if (payload === "[DONE]" || payload === "") continue;
-    try {
-      const parsed = JSON.parse(payload) as Record<string, unknown>;
-      if (typeof parsed["usage"] === "object" && parsed["usage"] !== null) {
-        last = parsed["usage"] as Record<string, unknown>;
-      }
-    } catch {
-      // Ignore non-JSON stream frames.
-    }
-  }
-  return last;
-}
-
-function numberField(obj: Record<string, unknown>, key: string): number | undefined {
-  const value = obj[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function appendCapturedStream(existing: string, chunk: string): string {
-  const combined = existing + chunk;
-  if (combined.length <= MAX_CAPTURED_STREAM_CHARS) return combined;
-  return combined.slice(-MAX_CAPTURED_STREAM_CHARS);
-}
-
 function parsePositiveInt(value: string | undefined): number | undefined {
   if (value === undefined || value.trim() === "") return undefined;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function shouldPersistCompletion(modelOverride: boolean | undefined): boolean {
+  if (modelOverride !== undefined) return modelOverride;
+  return /^(1|true|yes|on)$/i.test(process.env.PERSIST_COMPLETIONS?.trim() ?? "");
+}
+
+function completionPersistenceForRequest(
+  p: ReturnType<typeof principal>,
+  modelOverride: boolean | undefined,
+): boolean | undefined {
+  if (p === undefined || p.isOwner) return modelOverride;
+  return p.completionLoggingEnabled === true;
 }
 
 export function createOpenAIRoutes(): Hono {
@@ -144,7 +115,8 @@ export function createOpenAIRoutes(): Hono {
   app.use("/v1/chat/*", requireAuth({ allowSession: true }));
 
   app.get("/v1/models", async (c) => {
-    const models = modelConfigLoader.getAvailableModels();
+    const p = principal(c);
+    const models = modelConfigLoader.getAvailableModels().filter((name) => canListModel(p, name));
     const data = await Promise.all(
       models.map(async (name) => {
         try {
@@ -210,6 +182,26 @@ async function handleChatCompletions(
   const requestDict: Record<string, unknown> = { ...request };
   if (options.forceStream) requestDict["stream"] = true;
   const isStream = Boolean(requestDict["stream"]);
+  const p = principal(c);
+  const estimatedPromptTokens = estimateRequestTokens(requestDict);
+  try {
+    assertCanUseLogicalModel(p, request.model);
+  } catch (err) {
+    if (err instanceof AccessDeniedError) {
+      return c.json(
+        formatOpenAIError(404, `Model '${request.model}' not found`, "invalid_request_error"),
+        404,
+      );
+    }
+    throw err;
+  }
+  const limitDecision = reserveRequest(p, estimatedPromptTokens ?? 0);
+  if (!limitDecision.allowed) {
+    return c.json(
+      formatOpenAIError(429, limitDecision.reason ?? "Rate limit exceeded", "rate_limit_exceeded"),
+      429,
+    );
+  }
 
   // Confirm the logical model is known up front.
   let modelConfig: ModelRoutingConfig;
@@ -232,10 +224,10 @@ async function handleChatCompletions(
 
   // ── Fusion dispatch ───────────────────────────────────────────────
   if (modelConfig.fusion?.enabled === true) {
-    return handleFusionRequest(c, requestDict, request.model, modelConfig, isStream, endpointPath);
+    return runWithRequestContext(requestId, () => handleFusionRequest(c, requestDict, request.model, modelConfig, isStream, endpointPath));
   }
 
-  const fallback = new FallbackRouter();
+  const fallback = new FallbackRouter({ principal: p });
   const enforce = new EnforceRouter(fallback);
   const overrides = {
     header: c.req.header("x-enforce-tool-call"),
@@ -245,6 +237,7 @@ async function handleChatCompletions(
     logicalModel: request.model,
     overrides,
   });
+  const persistCompletions = completionPersistenceForRequest(p, modelConfig.persist_completions);
 
   recordRequestStart({
     requestId,
@@ -255,10 +248,14 @@ async function handleChatCompletions(
     wireProtocol: "openai",
     isStreaming: isStream,
     enforceMode: enforceConfig.enabled,
-    promptTokens: estimateRequestTokens(requestDict),
+    promptTokens: estimatedPromptTokens,
     promptTokensEstimated: true,
     requestBody: requestDict,
-    persistCompletions: modelConfig.persist_completions,
+    persistCompletions,
+    userId: p?.userId,
+    apiKeyId: p?.apiKeyId,
+    principalRole: p?.role,
+    ownerBypass: p?.ownerBypass,
   });
 
   const signal = c.req.raw.signal;
@@ -274,6 +271,7 @@ async function handleChatCompletions(
     signal.addEventListener("abort", recordAbort, { once: true });
   }
   const extraHeaders = buildUpstreamExtraHeaders(c);
+  const captureStreamPayload = shouldPersistCompletion(persistCompletions);
 
   if (isStream) {
     const stream = new ReadableStream<Uint8Array>({
@@ -305,8 +303,10 @@ async function handleChatCompletions(
               enforceEnabled: enforceConfig.enabled,
             });
             try {
-              let responseText = "";
-              let responseChars = 0;
+              const streamUsage = new StreamUsageTracker("openai", {
+                captureText: captureStreamPayload,
+                maxCapturedChars: MAX_CAPTURED_STREAM_CHARS,
+              });
               const generator = enforceConfig.enabled
                 ? enforce.stream({
                     logicalModel: request.model,
@@ -314,6 +314,7 @@ async function handleChatCompletions(
                     targetProtocol: "openai",
                     overrides,
                     extraHeaders,
+                    ...(p !== undefined ? { principal: p } : {}),
                     ...(signal !== undefined ? { signal } : {}),
                   })
                 : fallback.streamWithFallback({
@@ -321,11 +322,11 @@ async function handleChatCompletions(
                     requestData: requestDict,
                     targetProtocol: "openai",
                     extraHeaders,
+                    ...(p !== undefined ? { principal: p } : {}),
                     ...(signal !== undefined ? { signal } : {}),
                   });
               for await (const chunk of generator) {
-                responseChars += chunk.length;
-                responseText = appendCapturedStream(responseText, chunk);
+                streamUsage.ingest(chunk);
                 const encoded = encoder.encode(chunk);
                 controller.enqueue(encoded);
                 recordRequestProgress({
@@ -337,14 +338,15 @@ async function handleChatCompletions(
               controller.close();
               const totalMs = Math.round(performance.now() - startedAt);
               emit({ type: "request.finished", at: nowIso(), status: 200, totalMs });
+              const usageResult = streamUsage.finish();
               recordRequestFinish({
                 requestId,
                 responseStatus: 200,
                 responseTimeMs: totalMs,
-                responseBody: responseText,
-                completionTokens: extractOpenAIStreamCompletionTokens(responseText, responseChars),
-                completionTokensEstimated: findLastStreamUsage(responseText) === undefined,
-                usage: extractOpenAIStreamUsage(responseText),
+                responseBody: usageResult.capturedText,
+                completionTokens: usageResult.completionTokens,
+                completionTokensEstimated: usageResult.completionTokensEstimated,
+                usage: usageResult.usage,
               });
             } catch (err) {
               const routingStatus = err instanceof RoutingError ? routingErrorStatus(err) : undefined;
@@ -410,6 +412,7 @@ async function handleChatCompletions(
             targetProtocol: "openai",
             overrides,
             extraHeaders,
+            ...(p !== undefined ? { principal: p } : {}),
             ...(signal !== undefined ? { signal } : {}),
           })
         : await fallback.callWithFallback({
@@ -417,6 +420,7 @@ async function handleChatCompletions(
             requestData: requestDict,
             targetProtocol: "openai",
             extraHeaders,
+            ...(p !== undefined ? { principal: p } : {}),
             ...(signal !== undefined ? { signal } : {}),
           });
       // Preserve the client-visible model name.
@@ -538,6 +542,8 @@ async function handleChatCompletions(
 
 /**
  * Handle a chat completion request routed through the Model Fusion (Beta) system.
+ * Properly wired into the observability event sink with lifecycle events,
+ * usage tracking, and completion persistence.
  */
 async function handleFusionRequest(
   c: Context,
@@ -549,8 +555,9 @@ async function handleFusionRequest(
 ): Promise<Response> {
   const requestId: string = c.get("requestId");
   const fusionConfig = modelConfig.fusion;
+  const p = principal(c);
+  const persistCompletions = completionPersistenceForRequest(p, modelConfig.persist_completions);
   if (!fusionConfig?.enabled) {
-    // Should not happen — guard from caller
     return c.json(
       formatOpenAIError(400, "Fusion not enabled for this model", "invalid_request_error"),
       400,
@@ -559,6 +566,7 @@ async function handleFusionRequest(
 
   const fusionRouter = new FusionRouter();
   const messages = (requestDict["messages"] as unknown[]) ?? [];
+  const extraHeaders = buildUpstreamExtraHeaders(c);
 
   const fusionCtx: FusionRequestContext = {
     logicalModel,
@@ -567,95 +575,191 @@ async function handleFusionRequest(
     clientProtocol: "openai",
     messages,
     signal: c.req.raw.signal,
+    requestId,
+    extraHeaders,
+    ...(p !== undefined ? { principal: p } : {}),
   };
 
-  // Record the fusion-specific request start
-  recordRequestStart({
-    requestId,
+  // NOTE: The caller (route handler) already wraps in runWithRequestContext,
+  // so emit() will find the existing ALS context. No need to wrap again here.
+  // Emit request.started event — field names must match server-side RequestEvent type
+  emit({
+    type: "request.started",
+    at: nowIso(),
+    protocol: "openai",
     endpoint: "/v1/chat/completions",
-    method: "POST",
-    requestedModel: logicalModel,
-    resolvedModel: logicalModel,
-    wireProtocol: "openai",
-    isStreaming: isStream,
-    enforceMode: false,
-    promptTokens: estimateRequestTokens(requestDict),
-    promptTokensEstimated: true,
-    requestBody: requestDict,
-    persistCompletions: false,
+    model: logicalModel,
+    stream: isStream,
+    enforceEnabled: false,
   });
 
-  if (isStream) {
-    return handleFusionStream(c, fusionRouter, fusionCtx, requestId);
-  }
+    // Record the fusion-specific request start without forcing payload storage.
+    recordRequestStart({
+      requestId,
+      endpoint: "/v1/chat/completions",
+      method: "POST",
+      requestedModel: logicalModel,
+      resolvedModel: logicalModel,
+      wireProtocol: "openai",
+      isStreaming: isStream,
+      enforceMode: false,
+      promptTokens: estimateRequestTokens(requestDict),
+      promptTokensEstimated: true,
+      requestBody: requestDict,
+      persistCompletions,
+      userId: p?.userId,
+      apiKeyId: p?.apiKeyId,
+      principalRole: p?.role,
+      ownerBypass: p?.ownerBypass,
+    });
 
-  // Non-streaming path
-  try {
-    const startedAt = c.get("startedAt") as number;
-    const result = await fusionRouter.route(fusionCtx);
-    const responseTimeMs = Math.round(performance.now() - startedAt);
+    if (isStream) {
+      return handleFusionStream(c, fusionRouter, fusionCtx, requestId);
+    }
 
-    // Build an OpenAI-compatible response
-    const openaiResponse = {
-      id: `chatcmpl-${requestId}`,
-      object: "chat.completion",
-      created: Math.floor(Date.now() / 1000),
-      model: logicalModel,
-      choices: [
-        {
-          index: 0,
-          message: {
-            role: "assistant",
-            content: result.content,
+    // Non-streaming path
+    try {
+      const startedAt = c.get("startedAt") as number;
+      const result = await fusionRouter.route(fusionCtx);
+      const responseTimeMs = Math.round(performance.now() - startedAt);
+
+      // Emit route events from the fusion result — field names must match server-side RequestEvent type
+      emit({
+        type: "route.attempted",
+        at: nowIso(),
+        attempt: 1,
+        provider: "fusion",
+        model: result.fusedByModelRouting || logicalModel,
+        wireProtocol: "openai",
+        isFallback: false,
+        keyHint: "fusion",
+      });
+      emit({
+        type: "route.succeeded",
+        at: nowIso(),
+        attempt: 1,
+        provider: "fusion",
+        model: result.fusedByModelRouting || logicalModel,
+        latencyMs: responseTimeMs,
+      });
+
+      // Build an OpenAI-compatible response
+      const message: Record<string, unknown> = {
+        role: "assistant",
+      };
+
+      if (result.toolCalls && result.toolCalls.length > 0) {
+        message.content = result.content || null;
+        message.tool_calls = result.toolCalls;
+      } else {
+        message.content = result.content;
+      }
+      if (result.reasoning !== undefined) {
+        message.reasoning = result.reasoning;
+      }
+      if (result.reasoningContent !== undefined) {
+        message.reasoning_content = result.reasoningContent;
+      }
+
+      const openaiResponse: Record<string, unknown> = {
+        id: `chatcmpl-${requestId}`,
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model: logicalModel,
+        choices: [
+          {
+            index: 0,
+            message,
+            finish_reason: result.finishReason || "stop",
           },
-          finish_reason: "stop",
+        ],
+        usage: result.usage ?? {
+          prompt_tokens: estimateRequestTokens(requestDict) ?? 0,
+          completion_tokens: result.content ? Math.ceil(result.content.length / 4) : (result.toolCalls ? String(result.toolCalls).length / 4 : 0),
+          total_tokens: (estimateRequestTokens(requestDict) ?? 0) + (result.content ? Math.ceil(result.content.length / 4) : (result.toolCalls ? String(result.toolCalls).length / 4 : 0)),
         },
-      ],
-      usage: result.usage ?? {
-        prompt_tokens: estimateRequestTokens(requestDict) ?? 0,
-        completion_tokens: Math.ceil(result.content.length / 4),
-        total_tokens: (estimateRequestTokens(requestDict) ?? 0) + Math.ceil(result.content.length / 4),
-      },
-    };
+      };
 
-    recordRequestFinish({
-      requestId,
-      responseStatus: 200,
-      responseTimeMs,
-      responseBody: openaiResponse,
-    });
+      // Attach the full fusion trace for analytics/observability
+      if (result.fusionTrace) {
+        openaiResponse["fusion_trace"] = result.fusionTrace;
+      }
 
-    emit({
-      type: "request.finished",
-      at: nowIso(),
-      status: 200,
-      totalMs: responseTimeMs,
-    });
+      // Pass real usage data to recordRequestFinish for proper cost tracking
+      const usage = result.usage;
+      const responseUsage = openaiResponse["usage"] as { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
+      recordRequestFinish({
+        requestId,
+        responseStatus: 200,
+        responseTimeMs,
+        promptTokens: usage?.promptTokens ?? responseUsage?.prompt_tokens,
+        completionTokens: usage?.completionTokens ?? responseUsage?.completion_tokens,
+        totalTokens: usage?.totalTokens ?? responseUsage?.total_tokens,
+        cacheReadTokens: result.cacheHit === true ? (usage?.promptTokens ?? responseUsage?.prompt_tokens ?? 0) : undefined,
+        cachedTokens: result.cacheHit === true ? (usage?.promptTokens ?? responseUsage?.prompt_tokens ?? 0) : undefined,
+        resolvedModel: result.fusedByModelRouting || logicalModel,
+        resolvedProvider: "fusion",
+        responseBody: openaiResponse,
+      });
 
-    return c.json(openaiResponse);
-  } catch (err) {
-    const startedAt = c.get("startedAt") as number;
-    const responseTimeMs = Math.round(performance.now() - startedAt);
-    const message = err instanceof Error ? err.message : String(err);
+      // Emit request.finished with fusionTrace for observability page
+      const finishEvent: Record<string, unknown> = {
+        type: "request.finished",
+        at: nowIso(),
+        status: 200,
+        totalMs: responseTimeMs,
+      };
+      if (result.fusionTrace) {
+        finishEvent["fusionTrace"] = result.fusionTrace;
+      }
+      emit(finishEvent as any);
 
-    recordRequestFinish({
-      requestId,
-      responseStatus: 500,
-      responseTimeMs,
-      errorMessage: message,
-      responseBody: formatOpenAIError(500, `Fusion error: ${message}`, "internal_server_error"),
-    });
+      return c.json(openaiResponse);
+    } catch (err) {
+      const startedAt = c.get("startedAt") as number;
+      const responseTimeMs = Math.round(performance.now() - startedAt);
+      const message = err instanceof Error ? err.message : String(err);
 
-    return c.json(
-      formatOpenAIError(500, `Fusion error: ${message}`, "internal_server_error"),
-      500,
-    );
+      emit({
+        type: "route.failed",
+        at: nowIso(),
+        attempt: 1,
+        provider: "fusion",
+        model: logicalModel,
+        errorType: "FusionError",
+        message,
+        willFallback: false,
+      });
+
+      recordRequestFinish({
+        requestId,
+        responseStatus: 500,
+        responseTimeMs,
+        errorMessage: message,
+        resolvedModel: logicalModel,
+        resolvedProvider: "fusion",
+        responseBody: formatOpenAIError(500, `Fusion error: ${message}`, "internal_server_error"),
+      });
+
+      emit({
+        type: "request.finished",
+        at: nowIso(),
+        status: 500,
+        totalMs: responseTimeMs,
+        errorType: message,
+      });
+
+      return c.json(
+        formatOpenAIError(500, `Fusion error: ${message}`, "internal_server_error"),
+        500,
+      );
+    }
   }
-}
 
 /**
  * Handle a streaming fusion request — streams SSE events for reasoning
  * summaries and the final fusion model output.
+ * Now properly wired into the observability event sink.
  */
 async function handleFusionStream(
   c: Context,
@@ -669,27 +773,102 @@ async function handleFusionStream(
     async start(controller) {
       const encoder = new TextEncoder();
 
+      // If the client disconnects, controller.enqueue throws. Every write goes
+      // through this guard so a mid-stream disconnect can never skip the
+      // request-finish accounting below (a leaked inflight record blocks
+      // graceful drains until the stale sweep).
+      let clientGone = false;
+      const safeEnqueue = (text: string): boolean => {
+        if (clientGone) return false;
+        try {
+          controller.enqueue(encoder.encode(text));
+          return true;
+        } catch {
+          clientGone = true;
+          return false;
+        }
+      };
+
+      // SSE heartbeats: the fusion pipeline can be quiet for long stretches
+      // (task division, subagent execution, provider queueing). Comment
+      // lines keep the connection alive through proxies and idle timeouts;
+      // OpenAI-compatible clients ignore them.
+      let lastWrite = Date.now();
+      const heartbeat = setInterval(() => {
+        if (Date.now() - lastWrite < 5_000) return;
+        if (safeEnqueue(": keep-alive\n\n")) {
+          lastWrite = Date.now();
+        } else {
+          clearInterval(heartbeat);
+        }
+      }, 2_500);
+
       try {
         const generator = fusionRouter.stream(fusionCtx);
         for await (const event of generator) {
-          controller.enqueue(encoder.encode(event));
+          if (event.trim() === "data: [DONE]") {
+            continue;
+          }
+          if (!safeEnqueue(event)) break;
+          lastWrite = Date.now();
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify({ error: message })}\n\n`),
-        );
+        safeEnqueue(`data: ${JSON.stringify({ error: message })}\n\n`);
       } finally {
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        controller.close();
+        clearInterval(heartbeat);
+        safeEnqueue("data: [DONE]\n\n");
+        try {
+          controller.close();
+        } catch {
+          // stream already errored/cancelled — nothing left to close
+        }
       }
 
       const responseTimeMs = Math.round(performance.now() - startedAt);
+
+      // Stream started event
+      emit({
+        type: "route.attempted",
+        at: nowIso(),
+        attempt: 1,
+        provider: "fusion",
+        model: "fusion-stream",
+        wireProtocol: "openai",
+        isFallback: false,
+        keyHint: "fusion",
+      });
+
+      // Emit stream finished as route.succeeded — must use latencyMs not durationMs
+      emit({
+        type: "route.succeeded",
+        at: nowIso(),
+        attempt: 1,
+        provider: "fusion",
+        model: "fusion-stream",
+        latencyMs: responseTimeMs,
+      });
+
       recordRequestFinish({
         requestId,
         responseStatus: 200,
         responseTimeMs,
+        resolvedModel: "fusion-stream",
+        resolvedProvider: "fusion",
       });
+
+      // Attach the compact fusion trace assembled by the streaming pipeline so
+      // the observability page retains the completed pipeline state.
+      const streamFinishEvent: Record<string, unknown> = {
+        type: "request.finished",
+        at: nowIso(),
+        status: 200,
+        totalMs: responseTimeMs,
+      };
+      if (fusionCtx.streamFusionTrace !== undefined) {
+        streamFinishEvent["fusionTrace"] = fusionCtx.streamFusionTrace;
+      }
+      emit(streamFinishEvent as never);
     },
   });
 

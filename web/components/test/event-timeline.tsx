@@ -135,6 +135,8 @@ function classify(type: RequestEventType): {
       return { label: "ok", tone: "phosphor" };
     case "route.failed":
       return { label: "fail", tone: "danger" };
+    case "route.skipped":
+      return { label: "skip", tone: "warning" };
     case "route.hedge.started":
       return { label: "hedge", tone: "warning" };
     case "route.hedge.candidate_started":
@@ -165,6 +167,20 @@ function classify(type: RequestEventType): {
       return { label: "strip", tone: "phosphor" };
     case "stream.chunk":
       return { label: "chunk", tone: "muted" };
+    case "fusion.pipeline.started":
+      return { label: "fusion", tone: "phosphor" };
+    case "fusion.pipeline.completed":
+      return { label: "fusion", tone: "phosphor" };
+    case "fusion.phase":
+      return { label: "phase", tone: "bone" };
+    case "fusion.cache":
+      return { label: "cache", tone: "warning" };
+    case "fusion.subtasks":
+      return { label: "divide", tone: "bone" };
+    case "fusion.subagent":
+      return { label: "agent", tone: "bone" };
+    case "fusion.summary":
+      return { label: "summary", tone: "muted" };
     default:
       return { label: "event", tone: "muted" };
   }
@@ -182,6 +198,13 @@ function summarize(event: RequestEvent): string {
       return `${event.provider}/${event.model} ok in ${event.latencyMs}ms`;
     case "route.failed":
       return `${event.provider}/${event.model} ${event.status ?? "?"} · ${event.errorType}${event.willFallback ? " → fallback" : ""}`;
+    case "route.skipped": {
+      const context =
+        event.estimatedPromptTokens !== undefined && event.contextWindow !== undefined
+          ? ` · ${event.estimatedPromptTokens}/${event.contextWindow} tokens`
+          : "";
+      return `${event.provider}/${event.model} skipped · ${event.reason}${event.isFallback ? " [fallback]" : ""}${context}`;
+    }
     case "route.hedge.started":
       return `hedged ${event.stream ? "stream" : "call"} with ${event.candidates} candidate(s), max ${event.maxParallel}`;
     case "route.hedge.candidate_started":
@@ -212,6 +235,20 @@ function summarize(event: RequestEvent): string {
       return `flag stripped${event.contentBecameNull ? " · content=null" : ""}${event.toolCallsPreserved ? " · tool_calls preserved" : ""}`;
     case "stream.chunk":
       return `chunk #${event.chunkNumber} (${event.bytes}B)`;
+    case "fusion.pipeline.started":
+      return `effort ${event.effort}${event.fusionEffort !== undefined ? ` (${event.fusionEffort})` : ""} · complexity ${event.complexityScore.toFixed(3)} · ${event.logicalModel}`;
+    case "fusion.pipeline.completed":
+      return `pipeline complete in ${event.totalMs}ms`;
+    case "fusion.phase":
+      return `${event.phase} ${event.status}${event.durationMs !== undefined ? ` in ${event.durationMs}ms` : ""}${event.modelRouting !== undefined ? ` · ${event.modelRouting}` : ""}`;
+    case "fusion.cache":
+      return `${event.kind} cache ${event.hit ? "HIT" : "miss"}${event.detail !== undefined ? ` · ${event.detail}` : ""}`;
+    case "fusion.subtasks":
+      return `divided into ${event.subTasks.length} sub-task(s): ${event.subTasks.map((t) => t.id).join(", ")}`;
+    case "fusion.subagent":
+      return `${event.id} (${event.model}) ${event.status}${event.chars !== undefined ? ` · ${event.chars} chars` : ""}${event.durationMs !== undefined ? ` · ${event.durationMs}ms` : ""}${event.error !== undefined ? ` · ${event.error.slice(0, 60)}` : ""}`;
+    case "fusion.summary":
+      return `[${event.label}] ${event.text.slice(0, 100)}`;
     default:
       return "—";
   }

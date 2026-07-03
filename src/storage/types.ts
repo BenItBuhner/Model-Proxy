@@ -86,10 +86,60 @@ export interface RequestIndexRow {
   savedCostUsd: number;
 }
 
+export interface RequestMetricRow {
+  version: 1;
+  requestId: string;
+  timestamp: string;
+  completedAt: string | undefined;
+  endpoint: string;
+  method: string;
+  requestedModel: string;
+  resolvedProvider: string | undefined;
+  resolvedModel: string | undefined;
+  wireProtocol: "openai" | "anthropic" | "audio" | undefined;
+  apiKeyEnvVar: string | undefined;
+  keyHint: string | undefined;
+  userId: string | undefined;
+  apiKeyId: string | undefined;
+  principalRole: string | undefined;
+  ownerBypass: boolean | undefined;
+  responseStatus: number | undefined;
+  state: "running" | "completed";
+  elapsedMs: number;
+  responseTimeMs: number | undefined;
+  isStreaming: boolean;
+  enforceMode: boolean;
+  hedgedRouting: boolean | undefined;
+  hedgeCandidateCount: number | undefined;
+  hedgeCancelledCount: number | undefined;
+  hedgeFailedCount: number | undefined;
+  retryCount: number;
+  errorType: string | undefined;
+  promptTokens: number | undefined;
+  promptTokensEstimated: boolean | undefined;
+  completionTokens: number | undefined;
+  completionTokensEstimated: boolean | undefined;
+  totalTokens: number | undefined;
+  cacheReadTokens: number | undefined;
+  cacheCreationTokens: number | undefined;
+  cachedTokens: number | undefined;
+  matchedTokens: number;
+  isCacheHit: boolean;
+  msSinceLastMatch: number | undefined;
+  userCostUsd: number;
+  typicalCostUsd: number;
+  savedCostUsd: number;
+  streamChunkCount: number | undefined;
+  streamBytes: number | undefined;
+  payloadStored: boolean | undefined;
+}
+
 export interface RequestLogFilters {
   provider?: string;
   model?: string;
   apiKeyEnvVar?: string;
+  userId?: string;
+  apiKeyId?: string;
   status?: "ok" | "error" | "running";
   state?: "running" | "completed";
   cacheHit?: boolean;

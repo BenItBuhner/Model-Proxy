@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { getAnalyticsSummary } from "../src/storage/analytics-store.ts";
 import { listRequestIndexRows, readCompletionEnvelope } from "../src/storage/completion-store.ts";
+import { listRequestMetricRows } from "../src/storage/metrics-store.ts";
 import { writeAnalyticsPricingSettings } from "../src/storage/pricing-store.ts";
 import { getStorageRoot, setStorageRootForTests } from "../src/storage/storage-paths.ts";
 import {
@@ -63,6 +64,12 @@ describe("persistent completion storage and analytics", () => {
     });
 
     expect(listRequestIndexRows({ limit: undefined, offset: 0 }).records).toHaveLength(0);
+    const metrics = listRequestMetricRows({ limit: undefined, offset: 0 }).records;
+    expect(metrics).toHaveLength(1);
+    expect(metrics[0]?.totalTokens).toBe(4);
+    const summary = getAnalyticsSummary({}, 0);
+    expect(summary.totalTokens).toBe(4);
+    expect(summary.savedCostUsd).toBeGreaterThan(0);
     expect(readCompletionEnvelope("storage-default-off")).toBeUndefined();
   });
 

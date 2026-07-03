@@ -7,25 +7,25 @@ const defaultFusionConfig: FusionConfig = {
   enabled: true,
   context_window: 10_000_000,
   complexity_scoring: {
-    effort_1_threshold: 0.15,
-    effort_2_threshold: 0.45,
+    effort_1_threshold: 0.20,
+    effort_2_threshold: 0.55,
   },
   task_divider: {
     model_routing: "glm-5.2",
-    timeout_seconds: 60,
+    timeout_seconds: 120,
     max_subtasks: 10,
   },
   effort_levels: {
-    1: { model_routing: "turbo" },
+    1: { model_routing: "glm-5.2" },
     2: {
-      subagent_count: { min: 2, max: 4 },
-      model_routings: ["complete"],
-      tools: ["context_search"],
+      subagent_count: { min: 2, max: 3 },
+      model_routings: ["glm-5.2", "kimi-k2.7-code", "minimax-m3-free"],
+      tools: ["context_search", "web_search"],
     },
     3: {
-      subagent_count: { min: 4, max: 8 },
-      model_routings: ["complete", "glm-5.2"],
-      tools: ["context_search", "code_execution"],
+      subagent_count: { min: 3, max: 5 },
+      model_routings: ["glm-5.2", "kimi-k2.7-code", "minimax-m3-free", "nemotron-3-ultra", "greg-2-ultra"],
+      tools: ["context_search", "web_search", "code_execution"],
     },
   },
   fusion: {
@@ -34,6 +34,8 @@ const defaultFusionConfig: FusionConfig = {
     wire_protocol: "openai",
   },
   cache: { enabled: true, scope: "permanent" },
+  summarizer: { enabled: false, model_routing: "turbo", segment_chars: 1400, max_summary_tokens: 256 },
+  scheduler: { allow_nested_fusion: false, max_depth: 0, max_leaf_calls: 8, max_wall_ms: 120_000 },
 };
 
 function makeCtx(messages: unknown[]): FusionRequestContext {
@@ -94,16 +96,16 @@ describe("ComplexityScorer", () => {
     expect(result.tokenCount).toBeGreaterThan(500);
   });
 
-  it("scores highly with many tools", () => {
+  it("scores moderately with many tools meeting effort 2 with code", () => {
     const ctx: FusionRequestContext = {
       logicalModel: "fusion-beta",
       fusionConfig: defaultFusionConfig,
       requestData: {
         messages: [
-          { role: "user", content: "Analyze this data using available tools" },
+          { role: "user", content: "Implement a function to analyze this data using available tools and explain the algorithm" },
         ],
         // Tools at the request level (OpenAI API format)
-        tools: Array.from({ length: 8 }, (_, i) => ({
+        tools: Array.from({ length: 5 }, (_, i) => ({
           type: "function",
           function: {
             name: `tool_${i}`,
@@ -114,11 +116,13 @@ describe("ComplexityScorer", () => {
       },
       clientProtocol: "openai",
       messages: [
-        { role: "user", content: "Analyze this data using available tools" },
+        { role: "user", content: "Implement a function to analyze this data using available tools and explain the algorithm" },
       ],
     };
     const result = scorer.score(ctx);
+    // code (implement, function, data) + tools (5) + reasoning (explain, analyze) should push to effort 2
     expect(result.effort).toBeGreaterThanOrEqual(2);
+    expect(result.tokenCount).toBeGreaterThan(0);
   });
 
   it("handles Anthropic-format tool calls", () => {

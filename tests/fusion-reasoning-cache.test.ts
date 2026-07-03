@@ -10,12 +10,14 @@ const testFusionConfig: FusionConfig = {
   enabled: true,
   context_window: 10_000_000,
   complexity_scoring: { effort_1_threshold: 0.15, effort_2_threshold: 0.45 },
-  task_divider: { model_routing: "glm-5.2" },
+  task_divider: { model_routing: "glm-5.2", timeout_seconds: 60, max_subtasks: 10 },
   effort_levels: {
     1: { model_routing: "turbo" },
   },
   fusion: { model_routing: "complete", strategy: "sequential_append", wire_protocol: "openai" },
   cache: { enabled: true, scope: "permanent" },
+  summarizer: { enabled: false, model_routing: "turbo", segment_chars: 1400, max_summary_tokens: 256 },
+  scheduler: { allow_nested_fusion: false, max_depth: 0, max_leaf_calls: 8, max_wall_ms: 120_000 },
 };
 
 function makeCtx(messages: unknown[]): FusionRequestContext {
@@ -97,6 +99,33 @@ describe("ReasoningCache", () => {
     const key1 = cache.computeKey(ctx1, tasks);
     const key2 = cache.computeKey(ctx2, tasks);
     expect(key1).not.toBe(key2);
+  });
+
+  it("stores and retrieves entries by pre-divider request key", () => {
+    const ctx = makeCtx([{ role: "user", content: "Repeatable agent turn" }]);
+    ctx.inputFingerprint = "stable-input";
+    const subTasks: SubTask[] = [
+      { id: "t1", description: "Research prior context", focus_area: "research", suggested_model_routing: "complete" },
+    ];
+    const score: ComplexityScore = { score: 0.5, effort: 2, reason: "test", tokenCount: 25 };
+    const results: SubagentResult[] = [
+      {
+        subTask: subTasks[0],
+        success: true,
+        usedModelRouting: "complete",
+        content: "Prior context found",
+        durationMs: 10,
+      },
+    ];
+
+    const requestKey = cache.computeRequestKey(ctx);
+    const key = cache.computeKey(ctx, subTasks);
+    cache.set(key, results, subTasks, score, "Fused", requestKey);
+
+    const retrieved = cache.getByRequestKey(requestKey);
+    expect(retrieved).not.toBeNull();
+    expect(retrieved?.key).toBe(key);
+    expect(retrieved?.subagentResults[0].content).toBe("Prior context found");
   });
 
   it("reports cache size correctly", () => {

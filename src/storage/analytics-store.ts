@@ -1,12 +1,14 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { calculateCosts, resolvePricing } from "../observability/pricing.ts";
+import type { UsageSnapshot } from "../observability/usage.ts";
 import { getStorageDir } from "./storage-paths.ts";
-import { listRequestIndexRows } from "./completion-store.ts";
-import type { AnalyticsSummary, RequestIndexRow, RequestLogFilters } from "./types.ts";
+import { listRequestMetricRows } from "./metrics-store.ts";
+import type { AnalyticsSummary, RequestLogFilters, RequestMetricRow } from "./types.ts";
 
 export function getAnalyticsSummary(filters: RequestLogFilters = {}, activeRequests = 0): AnalyticsSummary {
-  const rows = listRequestIndexRows({ limit: undefined, offset: 0, filters }).records;
+  const rows = listRequestMetricRows({ limit: undefined, offset: 0, filters }).records;
   const summary = summarizeRows(rows, activeRequests);
   writeFileSync(join(getStorageDir("analytics"), "summary.json"), JSON.stringify(summary, null, 2) + "\n", "utf8");
   return summary;
@@ -20,9 +22,10 @@ export function getAnalyticsTimeseries(filters: RequestLogFilters = {}, bucket: 
   typicalCostUsd: number;
   savedCostUsd: number;
 }> {
-  const rows = listRequestIndexRows({ limit: undefined, offset: 0, filters }).records;
+  const rows = listRequestMetricRows({ limit: undefined, offset: 0, filters }).records;
   const buckets = new Map<string, { bucket: string; requests: number; totalTokens: number; userCostUsd: number; typicalCostUsd: number; savedCostUsd: number }>();
   for (const row of rows) {
+    const costs = costsForRow(row);
     const key = bucketKey(row.timestamp, bucket);
     const current = buckets.get(key) ?? {
       bucket: key,
@@ -34,15 +37,15 @@ export function getAnalyticsTimeseries(filters: RequestLogFilters = {}, bucket: 
     };
     current.requests += 1;
     current.totalTokens += row.totalTokens ?? 0;
-    current.userCostUsd += row.userCostUsd;
-    current.typicalCostUsd += row.typicalCostUsd;
-    current.savedCostUsd += row.savedCostUsd;
+    current.userCostUsd += costs.userCostUsd;
+    current.typicalCostUsd += costs.typicalCostUsd;
+    current.savedCostUsd += costs.savedCostUsd;
     buckets.set(key, current);
   }
   return Array.from(buckets.values()).sort((a, b) => a.bucket.localeCompare(b.bucket));
 }
 
-function summarizeRows(rows: RequestIndexRow[], activeRequests: number): AnalyticsSummary {
+function summarizeRows(rows: RequestMetricRow[], activeRequests: number): AnalyticsSummary {
   let failedRequests = 0;
   let totalTokens = 0;
   let promptTokens = 0;
@@ -59,6 +62,7 @@ function summarizeRows(rows: RequestIndexRow[], activeRequests: number): Analyti
   const byKey = new Map<string, AnalyticsSummary["byProviderKey"][number]>();
 
   for (const row of rows) {
+    const costs = costsForRow(row);
     if (row.responseStatus === undefined || row.responseStatus >= 400) failedRequests += 1;
     totalTokens += row.totalTokens ?? 0;
     promptTokens += row.promptTokens ?? 0;
@@ -67,9 +71,9 @@ function summarizeRows(rows: RequestIndexRow[], activeRequests: number): Analyti
     cacheCreationTokens += row.cacheCreationTokens ?? 0;
     matchedTokens += row.matchedTokens;
     if (row.isCacheHit) cacheHits += 1;
-    userCostUsd += row.userCostUsd;
-    typicalCostUsd += row.typicalCostUsd;
-    savedCostUsd += row.savedCostUsd;
+    userCostUsd += costs.userCostUsd;
+    typicalCostUsd += costs.typicalCostUsd;
+    savedCostUsd += costs.savedCostUsd;
     if (row.responseTimeMs !== undefined) latencies.push(row.responseTimeMs);
     if ((row.completionTokens ?? 0) > 0 && row.responseTimeMs !== undefined && row.responseTimeMs > 0) {
       speeds.push((row.completionTokens ?? 0) / (row.responseTimeMs / 1000));
@@ -88,9 +92,9 @@ function summarizeRows(rows: RequestIndexRow[], activeRequests: number): Analyti
     };
     group.requests += 1;
     group.totalTokens += row.totalTokens ?? 0;
-    group.userCostUsd += row.userCostUsd;
-    group.typicalCostUsd += row.typicalCostUsd;
-    group.savedCostUsd += row.savedCostUsd;
+    group.userCostUsd += costs.userCostUsd;
+    group.typicalCostUsd += costs.typicalCostUsd;
+    group.savedCostUsd += costs.savedCostUsd;
     if (row.isCacheHit) group.cacheHits += 1;
     byKey.set(key, group);
   }
@@ -131,6 +135,44 @@ function summarizeRows(rows: RequestIndexRow[], activeRequests: number): Analyti
 function average(values: number[]): number | undefined {
   if (values.length === 0) return undefined;
   return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10;
+}
+
+function costsForRow(row: RequestMetricRow): {
+  userCostUsd: number;
+  typicalCostUsd: number;
+  savedCostUsd: number;
+} {
+  if (
+    row.userCostUsd !== 0 ||
+    row.typicalCostUsd !== 0 ||
+    row.savedCostUsd !== 0 ||
+    (row.totalTokens ?? 0) <= 0
+  ) {
+    return {
+      userCostUsd: row.userCostUsd,
+      typicalCostUsd: row.typicalCostUsd,
+      savedCostUsd: row.savedCostUsd,
+    };
+  }
+  return calculateCosts(usageFromRow(row), resolvePricing({
+    requestedModel: row.requestedModel,
+    resolvedProvider: row.resolvedProvider,
+    resolvedModel: row.resolvedModel,
+    apiKeyEnvVar: row.apiKeyEnvVar,
+  }));
+}
+
+function usageFromRow(row: RequestMetricRow): UsageSnapshot {
+  return {
+    promptTokens: row.promptTokens,
+    promptTokensEstimated: row.promptTokensEstimated ?? false,
+    completionTokens: row.completionTokens,
+    completionTokensEstimated: row.completionTokensEstimated ?? false,
+    totalTokens: row.totalTokens,
+    cacheReadTokens: row.cacheReadTokens,
+    cacheCreationTokens: row.cacheCreationTokens,
+    cachedTokens: row.cachedTokens,
+  };
 }
 
 function bucketKey(iso: string, bucket: "hour" | "day"): string {

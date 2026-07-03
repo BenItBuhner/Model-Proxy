@@ -15,14 +15,27 @@ export function AuthGuard({ children }: { children: React.ReactNode }): React.Re
     let cancelled = false;
     const storedKey = getStoredApiKey();
     if (storedKey === undefined) {
-      setState("unauthenticated");
-      router.replace("/login");
+      authStatus()
+        .then((result) => {
+          if (cancelled) return;
+          if (result.authenticated) {
+            setState("authenticated");
+            return;
+          }
+          setState("unauthenticated");
+          router.replace("/login");
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setState("unauthenticated");
+          router.replace("/login");
+        });
       return;
     }
     authStatus()
       .then((result) => {
         if (cancelled) return;
-        if (result.authenticated && (result.header_authenticated ?? true)) {
+        if (result.authenticated) {
           setState("authenticated");
         } else {
           clearStoredApiKey();

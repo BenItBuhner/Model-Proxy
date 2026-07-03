@@ -9,6 +9,7 @@ import { modelConfigLoader } from "../src/config/model-loader.ts";
 import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import {
+  buildLogicalModelListEntry,
   SYSTEM_DEFAULT_CONTEXT_WINDOW,
   resolveContextWindow,
 } from "../src/routing/context-window.ts";
@@ -287,5 +288,27 @@ describe("GET /v1/models", () => {
     expect(entry!["context_length"]).toBe(88000);
     expect(entry!["limit"]).toEqual({ context: 88000 });
     expect(entry!["owned_by"]).toBe("groq");
+  });
+
+  test("builds general with a one-million token primary context window", async () => {
+    writeModel("general", {
+      timeout_seconds: 60,
+      default_cooldown_seconds: 60,
+      context_window: 1000000,
+      model_routings: [
+        {
+          provider: "groq",
+          model: "glm-5.2",
+          context_window: 1000000,
+          capabilities: { multimodal: false },
+        },
+      ],
+      fallback_model_routings: [],
+    });
+
+    const entry = await buildLogicalModelListEntry("general");
+    expect(entry.context_window).toBe(1000000);
+    expect(entry.context_length).toBe(1000000);
+    expect(entry.limit).toEqual({ context: 1000000 });
   });
 });

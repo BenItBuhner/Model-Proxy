@@ -17,6 +17,10 @@ export interface RequestLogRecord {
   apiKeyEnvVar: string | undefined;
   keyHint: string | undefined;
   wireProtocol: "openai" | "anthropic" | "audio" | undefined;
+  userId: string | undefined;
+  apiKeyId: string | undefined;
+  principalRole: string | undefined;
+  ownerBypass: boolean | undefined;
   state: "running" | "completed";
   responseStatus: number | undefined;
   responseTimeMs: number | undefined;
@@ -85,7 +89,7 @@ class RuntimeRequestStore<T> {
   }
 }
 
-const capacity = parseOptionalPositiveInt(process.env.REQUEST_LOG_CAPACITY);
+const capacity = parseOptionalPositiveInt(process.env.REQUEST_LOG_CAPACITY) ?? 1_000;
 const globalBuffer = new RuntimeRequestStore<RequestLogRecord>(capacity);
 
 export const requestLogRingBuffer = {
