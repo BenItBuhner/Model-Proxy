@@ -49,39 +49,54 @@ export class AnthropicProvider extends AbstractProvider {
     const url = this.endpointUrl(ctx, "streaming");
     const timeoutMs = Math.max(1, ctx.timeoutSeconds * 1000);
 
-    const response = await upstreamFetch(url, {
-      method: "POST",
-      headers: {
-        ...this.authHeaders(ctx),
-        "Content-Type": "application/json",
-        Accept: "text/event-stream",
-      },
-      body: JSON.stringify(payload),
-      proxy: ctx.egressProxyUrl,
-      timeoutMs,
-      signal: ctx.signal,
-    });
-
-    if (response.status >= 400) {
-      const body = await this.readErrorBody(response);
-      throw new ProviderAPIError(
-        `anthropic API error ${response.status}: ${body.slice(0, 500)}`,
-        response.status,
-        { body, provider: "anthropic" },
-      );
+    // Own the connection: aborting is the only reliable way to release a
+    // partially-consumed streaming body out of Bun's per-host pool (see
+    // streamOpenAI for the full story).
+    const connController = new AbortController();
+    const onCallerAbort = () => connController.abort();
+    if (ctx.signal !== undefined) {
+      if (ctx.signal.aborted) connController.abort();
+      else ctx.signal.addEventListener("abort", onCallerAbort, { once: true });
     }
 
-    if (response.body === null) {
-      throw new ProviderAPIError(
-        "anthropic streaming response body was empty",
-        502,
-        { provider: "anthropic" },
-      );
-    }
+    try {
+      const response = await upstreamFetch(url, {
+        method: "POST",
+        headers: {
+          ...this.authHeaders(ctx),
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify(payload),
+        proxy: ctx.egressProxyUrl,
+        timeoutMs,
+        signal: connController.signal,
+      });
 
-    for await (const line of readSSELines(response.body)) {
-      if (line.length === 0) continue;
-      yield `${line}\n\n`;
+      if (response.status >= 400) {
+        const body = await this.readErrorBody(response);
+        throw new ProviderAPIError(
+          `anthropic API error ${response.status}: ${body.slice(0, 500)}`,
+          response.status,
+          { body, provider: "anthropic" },
+        );
+      }
+
+      if (response.body === null) {
+        throw new ProviderAPIError(
+          "anthropic streaming response body was empty",
+          502,
+          { provider: "anthropic" },
+        );
+      }
+
+      for await (const line of readSSELines(response.body)) {
+        if (line.length === 0) continue;
+        yield `${line}\n\n`;
+      }
+    } finally {
+      ctx.signal?.removeEventListener("abort", onCallerAbort);
+      connController.abort();
     }
   }
 

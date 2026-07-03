@@ -4,16 +4,12 @@ import type { FusionRequestContext, ComplexityScore, EffortLevel } from "./types
 const log = createLogger("routing.fusion.complexity");
 
 /**
- * Token estimation: rough heuristic (chars / 4), mirroring
- * the estimate used elsewhere in the proxy.
+ * Token estimation: chars / 4, mirroring standard heuristic.
  */
 function estimateTokenCount(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-/**
- * Estimate total tokens from the full request messages array.
- */
 function estimateTotalTokens(messages: unknown[]): number {
   let total = 0;
   for (const msg of messages) {
@@ -27,29 +23,24 @@ function estimateTotalTokens(messages: unknown[]): number {
           total += estimateTokenCount(partObj["text"]);
         }
       }
+    } else {
+      // Count the whole message JSON for tool_calls, images, etc.
+      total += estimateTokenCount(JSON.stringify(msg));
     }
   }
   return total;
 }
 
-/**
- * Count tool definitions in the request.
- * Checks both message-level tools and request-level tools array.
- */
 function countTools(messages: unknown[], requestData?: Record<string, unknown>): number {
   let count = 0;
-
-  // Check request-level tools array (OpenAI API format)
   if (requestData && Array.isArray(requestData["tools"])) {
     count += (requestData["tools"] as unknown[]).length;
   }
-
   for (const msg of messages) {
     const m = msg as Record<string, unknown>;
     if (m["tools"] && Array.isArray(m["tools"])) {
       count += m["tools"].length;
     }
-    // Also check for tool_use content blocks (Anthropic format)
     if (Array.isArray(m["content"])) {
       for (const part of m["content"]) {
         const p = part as Record<string, unknown>;
@@ -58,7 +49,6 @@ function countTools(messages: unknown[], requestData?: Record<string, unknown>):
         }
       }
     }
-    // Count function/tool calls in OpenAI format
     if (m["tool_calls"] && Array.isArray(m["tool_calls"])) {
       count += m["tool_calls"].length;
     }
@@ -69,9 +59,6 @@ function countTools(messages: unknown[], requestData?: Record<string, unknown>):
   return count;
 }
 
-/**
- * Count conversation turns (user ↔ assistant pairs).
- */
 function countConversationTurns(messages: unknown[]): number {
   let turns = 0;
   let lastRole = "";
@@ -79,18 +66,12 @@ function countConversationTurns(messages: unknown[]): number {
     const role = (msg as Record<string, unknown>)["role"] as string | undefined;
     if (role === "user" && lastRole === "assistant") {
       turns += 1;
-    } else if (role === "user") {
-      // First user message starts turn counting
     }
     lastRole = role ?? "";
   }
   return Math.max(1, turns);
 }
 
-/**
- * Heuristic: does the task involve code generation?
- * Scans messages for code-related keywords.
- */
 function hasCodeGeneration(messages: unknown[]): boolean {
   const codeKeywords = [
     "implement", "function", "class ", "def ", "const ", "let ", "import ",
@@ -107,9 +88,6 @@ function hasCodeGeneration(messages: unknown[]): boolean {
   return matches >= 2;
 }
 
-/**
- * Heuristic: does the task involve open-ended reasoning or research?
- */
 function hasOpenEndedReasoning(messages: unknown[]): boolean {
   const reasoningKeywords = [
     "explain", "analyze", "compare", "contrast", "research", "investigate",
@@ -126,23 +104,35 @@ function hasOpenEndedReasoning(messages: unknown[]): boolean {
   return matches >= 2;
 }
 
+function hasImageContent(messages: unknown[]): boolean {
+  for (const msg of messages) {
+    const content = (msg as Record<string, unknown>)["content"];
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      const p = part as Record<string, unknown>;
+      if (p["type"] === "image_url") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 /**
  * ComplexityScorer (Layer 2)
  *
  * Analyzes the incoming request and assigns a complexity score (0-1)
  * which determines the effort level for fusion routing.
  *
- * Scoring dimensions:
- *  - Token count (weight: high)
+ * Scoring dimensions (scaled for 1M token contexts):
+ *  - Token count (weight: high) — scales from 0 at 100 tokens to 1 at 500K tokens
  *  - Tool count (weight: medium)
  *  - Conversation turns (weight: medium)
  *  - Code generation presence (weight: medium)
  *  - Open-ended reasoning presence (weight: low)
+ *  - Image content presence (weight: medium)
  */
 export class ComplexityScorer {
-  /**
-   * Score a fusion request and return the complexity assessment.
-   */
   score(ctx: FusionRequestContext): ComplexityScore {
     const { messages, fusionConfig, requestData } = ctx;
     const tokenCount = estimateTotalTokens(messages);
@@ -150,25 +140,25 @@ export class ComplexityScorer {
     const turns = countConversationTurns(messages);
     const hasCode = hasCodeGeneration(messages);
     const hasReasoning = hasOpenEndedReasoning(messages);
+    const hasImages = !!ctx.hadImages || hasImageContent(messages);
 
-    // Normalize each dimension to 0-1
     const tokenScore = this.normalizeTokenCount(tokenCount);
     const toolScore = this.normalizeToolCount(toolCount);
     const turnsScore = this.normalizeTurns(turns);
 
-    // Weighted combination
+    // Weighted combination — scales for 1M token contexts
     const score = Math.min(1, Math.max(0,
-      tokenScore * 0.25 +
+      tokenScore * 0.30 +
       toolScore * 0.20 +
       turnsScore * 0.10 +
-      (hasCode ? 0.35 : 0) +
-      (hasReasoning ? 0.20 : 0) +
-      (hasCode && hasReasoning ? 0.15 : 0) +
+      (hasCode ? 0.25 : 0) +
+      (hasReasoning ? 0.15 : 0) +
+      (hasCode && hasReasoning ? 0.10 : 0) +
+      (hasImages ? 0.20 : 0) +
       (tokenCount > 2000 ? 0.10 : 0) +
-      (turns >= 3 ? 0.10 : 0)
+      (turns >= 5 ? 0.10 : 0)
     ));
 
-    // Determine effort level
     const thresholds = fusionConfig.complexity_scoring;
     let effort: EffortLevel;
     let reason: string;
@@ -184,13 +174,13 @@ export class ComplexityScorer {
       reason = `High complexity (${score.toFixed(2)}) — using full fusion pipeline`;
     }
 
-    // Build a detailed reason string
     const details = [
       `tokens: ~${tokenCount} (score: ${tokenScore.toFixed(2)})`,
       `tools: ${toolCount} (score: ${toolScore.toFixed(2)})`,
       `turns: ${turns} (score: ${turnsScore.toFixed(2)})`,
       hasCode ? "code-gen: yes" : "code-gen: no",
       hasReasoning ? "reasoning: yes" : "reasoning: no",
+      hasImages ? "images: yes" : "images: no",
     ];
 
     log.info("complexity score", {
@@ -201,6 +191,7 @@ export class ComplexityScorer {
       turns,
       hasCode,
       hasReasoning,
+      hasImages,
     });
 
     return {
@@ -211,11 +202,17 @@ export class ComplexityScorer {
     };
   }
 
+  /**
+   * Normalize token count on a scale that goes to 500K tokens
+   * (suitable for 1M context-window models).
+   *  - < 100 tokens: 0
+   *  - >= 500K tokens: 1
+   *  - Smooth sigmoid-like progression between.
+   */
   private normalizeTokenCount(tokens: number): number {
     if (tokens <= 100) return 0;
-    if (tokens >= 50_000) return 1;
-    // S-curve: sigmoid-like progression
-    const t = (tokens - 100) / (50_000 - 100);
+    if (tokens >= 500_000) return 1;
+    const t = (tokens - 100) / (500_000 - 100);
     return Math.min(1, t * t * (3 - 2 * t)); // smoothstep
   }
 
@@ -227,7 +224,7 @@ export class ComplexityScorer {
 
   private normalizeTurns(turns: number): number {
     if (turns <= 1) return 0;
-    if (turns >= 20) return 1;
-    return Math.min(1, (turns - 1) / 19);
+    if (turns >= 30) return 1;
+    return Math.min(1, (turns - 1) / 29);
   }
 }

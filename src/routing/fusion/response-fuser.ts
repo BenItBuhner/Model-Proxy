@@ -1,39 +1,71 @@
 import { createLogger } from "../../observability/logger.ts";
 import { FallbackRouter } from "../fallback.ts";
-import type { FusionRequestContext, SubagentResult, FusionResult } from "./types.ts";
+import { resolvePricing, calculateCosts } from "../../observability/pricing.ts";
+import type { FusionCostEntry, FusionRequestContext, FusionStep, SubagentResult, FusionResult } from "./types.ts";
+import {
+  ReasoningSummarizer,
+  formatReasoningChunk,
+  parseOpenAIDelta,
+  splitSseEvents,
+  streamSummaryPieces,
+  stripToolCallArtifacts,
+} from "./reasoning-summarizer.ts";
+import { emitFusion, nowIso } from "./fusion-events.ts";
 
 const log = createLogger("routing.fusion.fuser");
 
-// ── ResponseFuser ────────────────────────────────────────────────────
+/** Max output tokens for the synthesis model — matches 1M-context models. */
+const FUSER_MAX_TOKENS = 131072;
+
+/** Max context messages to include. */
+const MAX_CONTEXT_MESSAGES = 200;
+
+/** Rough token estimate: chars / 4. */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function usageSnapshotFromCounts(counts: {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}) {
+  return {
+    ...counts,
+    promptTokensEstimated: true,
+    completionTokensEstimated: true,
+    cacheReadTokens: undefined,
+    cacheCreationTokens: undefined,
+    cachedTokens: undefined,
+  };
+}
 
 /**
- * Layer 5: Response Fusion
+ * ResponseFuser (Layer 5)
  *
  * Takes completed subagent outputs and produces the final fused response.
- *
- * Strategy (sequential_append):
- * 1. Append all subagent outputs sequentially, keeping them isolated
- * 2. Feed the appended content + original request to the fusion model
- * 3. The fusion model streams its reasoning over all subagent work
- * 4. Returns the final response
+ * Includes FULL context (not just last 5 messages) for large conversations.
+ * Also records the synthesis step in the pipeline trace.
  */
 export class ResponseFuser {
   private readonly fallbackRouter: FallbackRouter;
+  private readonly summarizer: ReasoningSummarizer;
 
-  constructor() {
+  constructor(summarizer?: ReasoningSummarizer) {
     this.fallbackRouter = new FallbackRouter();
+    this.summarizer = summarizer ?? new ReasoningSummarizer(this.fallbackRouter);
   }
 
   /**
    * Fuse subagent outputs into a single coherent response.
-   *
-   * @param ctx The original fusion request context
-   * @param subagentResults Results from all executed subagents
-   * @returns The final fusion result
+   * @param steps Accumulating pipeline trace steps — we append the synthesis step here.
+   * @param costs Accumulating cost entries — we append the synthesis cost here.
    */
   async fuse(
     ctx: FusionRequestContext,
     subagentResults: SubagentResult[],
+    steps: FusionStep[] = [],
+    costs: FusionCostEntry[] = [],
   ): Promise<FusionResult> {
     const { fusionConfig, messages, signal } = ctx;
     const fusionModel = fusionConfig.fusion.model_routing;
@@ -45,47 +77,138 @@ export class ResponseFuser {
       wireProtocol,
     });
 
-    // Step 1: Build the sequential append of all subagent outputs
     const appendedContent = this.buildSequentialAppend(subagentResults);
 
-    // Step 2: Build the synthesis prompt for the fusion model
     const synthesisMessages = this.buildSynthesisMessages(
       messages,
       appendedContent,
       subagentResults,
+      ctx,
     );
 
-    // Step 3: Feed to the fusion model
+    const synthStart = performance.now();
+    emitFusion(ctx, {
+      type: "fusion.phase",
+      at: nowIso(),
+      phase: "synthesis",
+      status: "started",
+      modelRouting: fusionModel,
+      detail: { subagentCount: subagentResults.length },
+    });
+
     try {
+      const fusionRequestData: Record<string, unknown> = {
+        model: fusionModel,
+        messages: synthesisMessages,
+        max_tokens: FUSER_MAX_TOKENS,
+      };
+      const tools = (ctx.requestData?.["tools"] as unknown[] | undefined);
+      const toolChoice = ctx.requestData?.["tool_choice"];
+      if (tools && tools.length > 0) {
+        fusionRequestData["tools"] = tools;
+        if (toolChoice !== undefined) {
+          fusionRequestData["tool_choice"] = toolChoice;
+        }
+      }
+
       const response = await this.fallbackRouter.callWithFallback({
         logicalModel: fusionModel,
-        requestData: {
-          model: fusionModel,
-          messages: synthesisMessages,
-          max_tokens: 8192,
-        } as Record<string, unknown>,
+        requestData: fusionRequestData,
         targetProtocol: wireProtocol === "anthropic" ? "anthropic" : "openai",
         signal,
+        principal: ctx.principal,
         validateResponse: false,
+        extraHeaders: ctx.extraHeaders,
       });
 
-      const content = this.extractContent(response);
+      const toolCalls = this.extractToolCalls(response);
+      const content = this.extractContent(response, toolCalls);
+      const reasoning = this.extractStringField(response, "reasoning");
+      const reasoningContent = this.extractStringField(response, "reasoning_content");
+      const finishReason = this.extractFinishReason(response);
+      const usage = this.extractUsage(response);
+      const synthMs = Math.round(performance.now() - synthStart);
+
+      emitFusion(ctx, {
+        type: "fusion.phase",
+        at: nowIso(),
+        phase: "synthesis",
+        status: "completed",
+        durationMs: synthMs,
+        modelRouting: fusionModel,
+      });
+
+      // Record synthesis step
+      steps.push({
+        type: "synthesis",
+        label: "Response Synthesis",
+        startedAt: new Date(Date.now() - synthMs).toISOString(),
+        durationMs: synthMs,
+        modelRouting: fusionModel,
+        details: {
+          contentLength: content?.length ?? 0,
+          hasToolCalls: !!(toolCalls && toolCalls.length > 0),
+          subagentCount: subagentResults.length,
+          successfulSubagents: subagentResults.filter(r => r.success).length,
+          usage,
+        },
+      });
+
+      // Record synthesis cost
+      if (usage) {
+        const pricing = resolvePricing({ requestedModel: fusionModel });
+        const costResult = calculateCosts(usageSnapshotFromCounts(usage), pricing);
+        costs.push({
+          modelRouting: fusionModel,
+          promptTokens: usage.promptTokens,
+          completionTokens: usage.completionTokens,
+          totalTokens: usage.totalTokens,
+          userCostUsd: costResult.userCostUsd,
+          typicalCostUsd: costResult.typicalCostUsd,
+        });
+      }
 
       log.info("fusion complete", {
-        contentLength: content.length,
+        contentLength: content?.length ?? 0,
         wireProtocol,
         subagentCount: subagentResults.length,
+        hasToolCalls: !!toolCalls && toolCalls.length > 0,
+        durationMs: synthMs,
       });
 
       return {
         content,
+        reasoning,
+        reasoningContent,
+        toolCalls,
+        finishReason,
         wireProtocol,
         subagentResults,
         fusedByModelRouting: fusionModel,
+        usage,
       };
     } catch (err) {
-      log.error("fusion model call failed", { error: String(err) });
-      // Fallback: return the concatenated subagent outputs directly
+      const synthMs = Math.round(performance.now() - synthStart);
+      log.error("fusion model call failed", { error: String(err), durationMs: synthMs });
+      emitFusion(ctx, {
+        type: "fusion.phase",
+        at: nowIso(),
+        phase: "synthesis",
+        status: "failed",
+        durationMs: synthMs,
+        modelRouting: fusionModel,
+        detail: { error: String(err) },
+      });
+
+      steps.push({
+        type: "synthesis",
+        label: "Response Synthesis (fallback)",
+        startedAt: new Date(Date.now() - synthMs).toISOString(),
+        durationMs: synthMs,
+        modelRouting: fusionModel,
+        details: { error: String(err), fallback: true },
+      });
+
       return {
         content: appendedContent,
         wireProtocol,
@@ -95,9 +218,6 @@ export class ResponseFuser {
     }
   }
 
-  /**
-   * Stream variant: yields SSE events as the fusion model streams.
-   */
   async *fuseStream(
     ctx: FusionRequestContext,
     subagentResults: SubagentResult[],
@@ -105,93 +225,235 @@ export class ResponseFuser {
     const { fusionConfig, messages, signal } = ctx;
     const fusionModel = fusionConfig.fusion.model_routing;
     const wireProtocol = fusionConfig.fusion.wire_protocol;
+    const synthStart = performance.now();
+    emitFusion(ctx, {
+      type: "fusion.phase",
+      at: nowIso(),
+      phase: "synthesis",
+      status: "started",
+      modelRouting: fusionModel,
+      detail: { subagentCount: subagentResults.length },
+    });
 
-    // Step 1: Build the sequential append
     const appendedContent = this.buildSequentialAppend(subagentResults);
 
-    // Step 2: Build synthesis messages
     const synthesisMessages = this.buildSynthesisMessages(
       messages,
       appendedContent,
       subagentResults,
+      ctx,
     );
 
-    // Step 3: Stream from the fusion model
-    yield this.encodeEvent("reasoning", {
-      type: "reasoning",
-      summary: `[Fusion] Synthesizing ${subagentResults.length} subagent outputs into final response...`,
-    });
-
     try {
+      const fusionRequestData: Record<string, unknown> = {
+        model: fusionModel,
+        messages: synthesisMessages,
+        max_tokens: FUSER_MAX_TOKENS,
+        stream: true,
+      };
+      const tools = (ctx.requestData?.["tools"] as unknown[] | undefined);
+      const toolChoice = ctx.requestData?.["tool_choice"];
+      if (tools && tools.length > 0) {
+        fusionRequestData["tools"] = tools;
+        if (toolChoice !== undefined) {
+          fusionRequestData["tool_choice"] = toolChoice;
+        }
+      }
+
       const streamGen = this.fallbackRouter.streamWithFallback({
         logicalModel: fusionModel,
-        requestData: {
-          model: fusionModel,
-          messages: synthesisMessages,
-          max_tokens: 8192,
-          stream: true,
-        } as Record<string, unknown>,
+        requestData: fusionRequestData,
         targetProtocol: wireProtocol === "anthropic" ? "anthropic" : "openai",
         signal,
+        principal: ctx.principal,
+        extraHeaders: ctx.extraHeaders,
       });
 
-      for await (const chunk of streamGen) {
-        yield chunk;
+      if (wireProtocol !== "anthropic" && this.summarizer.isEnabled(ctx)) {
+        yield* this.streamWithReasoningSummaries(ctx, streamGen);
+      } else {
+        for await (const chunk of streamGen) {
+          yield chunk;
+        }
       }
+      emitFusion(ctx, {
+        type: "fusion.phase",
+        at: nowIso(),
+        phase: "synthesis",
+        status: "completed",
+        durationMs: Math.round(performance.now() - synthStart),
+        modelRouting: fusionModel,
+      });
     } catch (err) {
-      log.error("fusion stream failed, returning raw appended content", { error: String(err) });
-      yield this.encodeEvent("reasoning", {
-        type: "reasoning",
-        summary: "[Fusion] Synthesis failed. Returning raw subagent outputs.",
+      log.error("fusion stream failed", { error: String(err) });
+      emitFusion(ctx, {
+        type: "fusion.phase",
+        at: nowIso(),
+        phase: "synthesis",
+        status: "failed",
+        durationMs: Math.round(performance.now() - synthStart),
+        modelRouting: fusionModel,
+        detail: { error: String(err) },
       });
-      yield this.encodeEvent("completion", {
-        type: "completion",
-        content: appendedContent,
-      });
+      const fallbackChunk = {
+        id: `chatcmpl-fallback-${Date.now()}`,
+        object: "chat.completion.chunk",
+        created: Math.floor(Date.now() / 1000),
+        model: fusionModel,
+        choices: [{
+          index: 0,
+          delta: { role: "assistant", content: appendedContent || "[Fusion synthesis failed]" },
+          finish_reason: "stop",
+        }],
+      };
+      yield `data: ${JSON.stringify(fallbackChunk)}\n\n`;
     }
+  }
+
+  /**
+   * Forward the synthesis model's stream to the client, but intercept its raw
+   * reasoning deltas: buffer them into segments and stream live summaries
+   * (via the turbo summarizer) on the reasoning channel instead. Content and
+   * tool_call deltas pass through untouched.
+   */
+  private async *streamWithReasoningSummaries(
+    ctx: FusionRequestContext,
+    streamGen: AsyncGenerator<string, void, unknown>,
+  ): AsyncGenerator<string, void, unknown> {
+    const segmentChars = ctx.fusionConfig.summarizer.segment_chars;
+    // Prefer flushing at paragraph boundaries once a reasonable amount of
+    // reasoning has accumulated, so summaries track natural units of thought.
+    const paragraphFlushChars = Math.max(300, Math.floor(segmentChars / 3));
+    let reasoningBuf = "";
+    let previousSummary: string | undefined;
+
+    const self = this;
+    async function* summarizeText(text: string): AsyncGenerator<string, void, unknown> {
+      if (text.trim().length === 0) return;
+      let summaryText = "";
+      for await (const piece of streamSummaryPieces(
+        self.summarizer,
+        ctx,
+        { label: "synthesis", text },
+        previousSummary,
+      )) {
+        summaryText += piece;
+        yield formatReasoningChunk(ctx, piece);
+      }
+      const trimmed = summaryText.trim();
+      if (trimmed.length > 0) {
+        yield formatReasoningChunk(ctx, "\n\n");
+        previousSummary = trimmed;
+        emitFusion(ctx, { type: "fusion.summary", at: nowIso(), label: "synthesis", text: trimmed });
+      }
+    }
+
+    async function* flushReasoning(): AsyncGenerator<string, void, unknown> {
+      const text = reasoningBuf;
+      reasoningBuf = "";
+      yield* summarizeText(text);
+    }
+
+    // Flush at a paragraph boundary when enough has accumulated, or hard-flush
+    // when the segment budget is reached.
+    async function* maybeFlushOnBoundary(): AsyncGenerator<string, void, unknown> {
+      if (reasoningBuf.length >= paragraphFlushChars) {
+        const boundary = reasoningBuf.lastIndexOf("\n\n");
+        if (boundary >= Math.floor(paragraphFlushChars / 2)) {
+          const text = reasoningBuf.slice(0, boundary);
+          reasoningBuf = reasoningBuf.slice(boundary + 2);
+          yield* summarizeText(text);
+          return;
+        }
+      }
+      if (reasoningBuf.length >= segmentChars) {
+        yield* flushReasoning();
+      }
+    }
+
+    for await (const raw of streamGen) {
+      for (const event of splitSseEvents(raw)) {
+        const parsed = parseOpenAIDelta(event);
+        if (parsed === null) {
+          // [DONE], comments, or non-JSON keep-alives — forward untouched
+          yield event;
+          continue;
+        }
+
+        if (parsed.reasoning.length > 0) {
+          reasoningBuf += parsed.reasoning;
+        }
+
+        const meaningful = parsed.content.length > 0 || parsed.hasToolCalls || parsed.finishReason !== undefined;
+        if (meaningful) {
+          // Flush any pending reasoning summary before real output continues
+          yield* flushReasoning();
+          if (parsed.reasoning.length > 0) {
+            yield this.stripReasoningFromEvent(parsed.chunk);
+          } else {
+            yield event;
+          }
+          continue;
+        }
+
+        if (parsed.reasoning.length > 0) {
+          // Pure reasoning delta: suppress raw text, summarize on boundaries
+          yield* maybeFlushOnBoundary();
+          continue;
+        }
+
+        // Role announcements, usage chunks, etc. — forward untouched
+        yield event;
+      }
+    }
+
+    yield* flushReasoning();
+  }
+
+  private stripReasoningFromEvent(chunk: Record<string, unknown>): string {
+    const choices = chunk["choices"] as Array<Record<string, unknown>> | undefined;
+    const delta = choices?.[0]?.["delta"] as Record<string, unknown> | undefined;
+    if (delta !== undefined) {
+      delete delta["reasoning"];
+      delete delta["reasoning_content"];
+    }
+    return `data: ${JSON.stringify(chunk)}\n\n`;
   }
 
   // ── Private helpers ───────────────────────────────────────────────
 
-  /**
-   * Build the sequentially appended content from all subagent outputs.
-   * Each subagent's output is kept isolated with clear headers.
-   */
   private buildSequentialAppend(results: SubagentResult[]): string {
     if (results.length === 0) return "";
 
     const parts: string[] = [];
-
     for (const result of results) {
       if (!result.success || !result.content) continue;
-
       parts.push(`[Sub-Task: ${result.subTask.focus_area}]`);
       parts.push(`${result.subTask.description}`);
       parts.push("");
-      parts.push(result.content.trim());
+      // Strip any hallucinated tool-call syntax so the synthesis model never
+      // sees (or mimics) fake invocations from subagent transcripts.
+      parts.push(stripToolCallArtifacts(result.content).trim());
       parts.push("");
       parts.push("---");
       parts.push("");
     }
-
     return parts.join("\n");
   }
 
-  /**
-   * Build the messages array for the synthesis model.
-   */
   private buildSynthesisMessages(
     originalMessages: unknown[],
     appendedContent: string,
     results: SubagentResult[],
+    ctx?: FusionRequestContext,
   ): unknown[] {
     const successfulResults = results.filter((r) => r.success && r.content.length > 0);
 
     const systemPrompt = {
       role: "system",
-      content: `You are the final synthesis model in a multi-agent fusion system.
+      content: `You are the final synthesis model in a multi-agent fusion system. You are the ONLY entity that produces the real, user-facing response for this conversation.
 
-You have received the outputs from ${successfulResults.length} specialized subagents that worked in parallel on different aspects of the original task.
+You have received the outputs from ${successfulResults.length} specialized research/reasoning subagents that worked in parallel on different aspects of the original task.
 
 Your job:
 1. Review all subagent outputs carefully
@@ -199,37 +461,112 @@ Your job:
 3. Eliminate redundancy while preserving important details
 4. Maintain the original user's intent and tone
 5. Your response should read as a single, unified answer — not a collection of separate parts
+6. TOOL CALLS: if tools are available and the correct next step in the conversation is to invoke one or more of them, respond with proper structured tool calls (tool_calls) exactly as the tool schema requires. NEVER describe a tool call in prose, and NEVER write tool-call JSON inside your text content.
+7. The subagent outputs are advisory research only. Subagents worked in a sealed sandbox with (at most) read-only research tools — they could not touch the user's environment. Ignore any claims they make about having created, edited, executed, or deployed anything, and never repeat such claims to the user.
 
 The subagent outputs are separated by section markers. Each section indicates its focus area.`,
     };
 
-    // Build a message that orients the model with the subagent work
+    const systemTokens = estimateTokens(JSON.stringify(systemPrompt));
     const fusionPrompt = {
       role: "user",
-      content: `The following is the sequential output from ${successfulResults.length} parallel subagents, each working on a different aspect of the original request:\n\n${appendedContent}\n\nPlease synthesize these into a coherent, comprehensive final response that addresses the original request.`,
+      content: `The following is the sequential output from ${successfulResults.length} parallel research subagents, each working on a different aspect of the original request:\n\n${appendedContent}\n\nPlease synthesize these into a coherent, comprehensive final response that addresses the original request. If the appropriate next step is to invoke tools, emit the structured tool call(s) directly instead of a text answer.`,
     };
+
+    // Image context
+    const hadImgsFromCtx = !!(ctx as FusionRequestContext & { hadImages?: boolean }).hadImages;
+    const descsFromCtx = (ctx as FusionRequestContext & { imageDescriptions?: string[] }).imageDescriptions ?? [];
+    const hadImgs = hadImgsFromCtx || (originalMessages as Array<Record<string, unknown>>).some(m => Array.isArray(m.content) && (m.content as Array<Record<string, unknown>>).some(p => (p as Record<string, unknown>)["type"] === "image_url"));
+    const imgDescs = descsFromCtx.length > 0 ? descsFromCtx : [];
+
+    const imageContext: unknown[] = [];
+    if (hadImgs) {
+      const descText = imgDescs.length > 0
+        ? imgDescs.map((d, i) => `Image ${i + 1} description: ${d}`).join("\n\n")
+        : "(images were present and described by the vision subagent; descriptions have been merged into the conversation)";
+      imageContext.push({
+        role: "user",
+        content: `The user provided image(s) in the original request. The images were described by a dedicated vision subagent (kimi-k2.7-code). Use the descriptions below when synthesizing the answer:\n\n${descText}`,
+      });
+    }
+
+    // Include ALL context messages, dropping oldest if needed
+    const availableTokens = 900_000 - systemTokens - estimateTokens(JSON.stringify(fusionPrompt));
+
+    let contextMessages = [...originalMessages];
+    let totalCtxTokens = contextMessages.reduce<number>((t, m) => t + estimateTokens(JSON.stringify(m)), 0);
+    let trimmed = 0;
+
+    while (totalCtxTokens > availableTokens && contextMessages.length > 2 && trimmed < 10) {
+      if (contextMessages.length > 5) {
+        contextMessages.splice(1, 1);
+      } else {
+        contextMessages.shift();
+      }
+      totalCtxTokens = contextMessages.reduce<number>((t, m) => t + estimateTokens(JSON.stringify(m)), 0);
+      trimmed++;
+    }
+
+    if (contextMessages.length > MAX_CONTEXT_MESSAGES) {
+      contextMessages = contextMessages.slice(contextMessages.length - MAX_CONTEXT_MESSAGES);
+    }
+
+    log.info("synthesis context built", {
+      originalMessages: originalMessages.length,
+      includedMessages: contextMessages.length,
+      trimmedRounds: trimmed,
+      appendedContentLength: appendedContent.length,
+    });
 
     return [
       systemPrompt,
-      ...originalMessages.slice(-5), // Last few original messages for context
+      ...contextMessages,
+      ...imageContext,
       fusionPrompt,
     ];
   }
 
+  private extractToolCalls(response: Record<string, unknown>): unknown[] | undefined {
+    const choices = response["choices"] as Array<Record<string, unknown>> | undefined;
+    if (!choices || choices.length === 0) return undefined;
+    const message = choices[0]?.["message"] as Record<string, unknown> | undefined;
+    if (!message) return undefined;
+    return message["tool_calls"] as unknown[] | undefined;
+  }
+
+  private extractFinishReason(response: Record<string, unknown>): string | undefined {
+    const choices = response["choices"] as Array<Record<string, unknown>> | undefined;
+    if (!choices || choices.length === 0) return undefined;
+    return choices[0]?.["finish_reason"] as string | undefined;
+  }
+
+  private extractUsage(response: Record<string, unknown>): { promptTokens: number; completionTokens: number; totalTokens: number } | undefined {
+    const usageObj = response["usage"] as Record<string, unknown> | undefined;
+    if (!usageObj) return undefined;
+    return {
+      promptTokens: Number(usageObj["prompt_tokens"] ?? 0),
+      completionTokens: Number(usageObj["completion_tokens"] ?? 0),
+      totalTokens: Number(usageObj["total_tokens"] ?? 0),
+    };
+  }
+
   /**
-   * Extract text content from a provider response.
+   * Extract text content from the synthesis response.
+   *
+   * When the model responded with tool calls and no text, content is null —
+   * NEVER stringify the whole response, or tool calls end up delivered to
+   * the client as a plain-text message.
    */
-  private extractContent(response: Record<string, unknown>): string {
-    // OpenAI format
+  private extractContent(response: Record<string, unknown>, toolCalls?: unknown[]): string | null {
+    const hasToolCalls = Array.isArray(toolCalls) && toolCalls.length > 0;
     const choices = response["choices"] as Array<Record<string, unknown>> | undefined;
     if (choices && choices.length > 0) {
       const message = choices[0]?.["message"] as Record<string, unknown> | undefined;
       if (message && typeof message["content"] === "string") {
         return message["content"];
       }
+      if (hasToolCalls) return null;
     }
-
-    // Anthropic format
     const content = response["content"] as Array<Record<string, unknown>> | undefined;
     if (content && Array.isArray(content)) {
       return content
@@ -237,11 +574,17 @@ The subagent outputs are separated by section markers. Each section indicates it
         .map((b) => String(b["text"] ?? ""))
         .join("\n");
     }
-
-    return JSON.stringify(response);
+    return hasToolCalls ? null : "";
   }
 
-  private encodeEvent(_eventType: string, data: unknown): string {
-    return `data: ${JSON.stringify(data)}\n\n`;
+  private extractStringField(response: Record<string, unknown>, field: "reasoning" | "reasoning_content"): string | undefined {
+    const choices = response["choices"] as Array<Record<string, unknown>> | undefined;
+    if (choices && choices.length > 0) {
+      const message = choices[0]?.["message"] as Record<string, unknown> | undefined;
+      const value = message?.[field];
+      if (typeof value === "string") return value;
+    }
+    const value = response[field];
+    return typeof value === "string" ? value : undefined;
   }
 }

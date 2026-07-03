@@ -5,10 +5,11 @@ import {
   type OpenAICallArgs,
   type ProviderCallContext,
 } from "./base.ts";
-import { ProviderAPIError } from "./errors.ts";
+import { ProviderAPIError, ProviderTimeoutError } from "./errors.ts";
 import {
   parseRetryAfterFromErrorBody,
   parseRetryAfterHeader,
+  readBodyWithDeadline,
   upstreamFetch,
 } from "./upstream-fetch.ts";
 
@@ -88,13 +89,43 @@ export class OpenAIProvider extends AbstractProvider {
     const url = this.endpointUrl(ctx, "streaming");
     const timeoutMs = Math.max(1, ctx.timeoutSeconds * 1000);
 
+    // This generator owns the upstream connection. Streaming consumers
+    // routinely exit before the body is drained (returning on `data: [DONE]`,
+    // breaking early, stream errors) — and in Bun, aborting the fetch signal
+    // is the ONLY reliable way to release a partially-consumed body's
+    // connection. reader.cancel()/body.cancel() leave the socket stranded
+    // until GC, and with a 256-per-host connection cap, leaked sockets
+    // eventually starve the pool and every new request to that host queues
+    // forever (observed as a total pipeline freeze under summarizer load).
+    const connController = new AbortController();
+    const onCallerAbort = () => connController.abort();
+    if (ctx.signal !== undefined) {
+      if (ctx.signal.aborted) connController.abort();
+      else ctx.signal.addEventListener("abort", onCallerAbort, { once: true });
+    }
+    try {
+      yield* this.streamOpenAIInner(args, ctx, { payload, url, timeoutMs, signal: connController.signal });
+    } finally {
+      ctx.signal?.removeEventListener("abort", onCallerAbort);
+      // Hard-release the connection. No-op if the response completed and the
+      // socket was already returned to the pool.
+      connController.abort();
+    }
+  }
+
+  private async *streamOpenAIInner(
+    args: OpenAICallArgs,
+    ctx: ProviderCallContext,
+    req: { payload: Record<string, unknown>; url: string; timeoutMs: number; signal: AbortSignal },
+  ): AsyncGenerator<string, void, unknown> {
+    const { payload, url, timeoutMs, signal } = req;
     const response = await upstreamFetch(url, {
       method: "POST",
       headers: this.openAIRequestHeaders(ctx, "text/event-stream"),
       body: JSON.stringify(payload),
       proxy: ctx.egressProxyUrl,
       timeoutMs,
-      signal: ctx.signal,
+      signal,
     });
 
     if (response.status >= 400) {
@@ -118,7 +149,11 @@ export class OpenAIProvider extends AbstractProvider {
       // Non-SSE fallback: convert body to a single SSE chunk.
       let data: Record<string, unknown> = {};
       try {
-        data = (await response.json()) as Record<string, unknown>;
+        data = await readBodyWithDeadline(
+          response,
+          () => response.json() as Promise<Record<string, unknown>>,
+          timeoutMs,
+        );
       } catch {
         // leave as empty dict
       }
@@ -347,15 +382,48 @@ async function* synthesizeSingleChunkStream(
   yield "data: [DONE]\n\n";
 }
 
+/**
+ * Max silence between SSE chunks before the stream is declared dead. Covers
+ * upstreams that stall mid-body without closing the socket — connection
+ * timeouts only protect the header phase, and a silently dead stream would
+ * otherwise hang its consumer forever.
+ */
+const SSE_INACTIVITY_TIMEOUT_MS = 120_000;
+
 async function* readSSELines(
   stream: ReadableStream<Uint8Array>,
+  inactivityTimeoutMs: number = SSE_INACTIVITY_TIMEOUT_MS,
 ): AsyncGenerator<string, void, unknown> {
   const reader = stream.getReader();
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
+  const readWithInactivityGuard = async (): Promise<{ value?: Uint8Array; done: boolean }> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            // Reject BEFORE cancelling: cancel() resolves the pending read()
+            // as { done: true }, which would win the race and make the stall
+            // look like a clean end-of-stream.
+            reject(
+              new ProviderTimeoutError(
+                `SSE stream stalled; no data for ${inactivityTimeoutMs}ms`,
+                inactivityTimeoutMs,
+              ),
+            );
+            void reader.cancel().catch(() => {});
+          }, inactivityTimeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  };
   try {
     for (;;) {
-      const { value, done } = await reader.read();
+      const { value, done } = await readWithInactivityGuard();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       let newlineIdx = buffer.indexOf("\n");
@@ -372,6 +440,17 @@ async function* readSSELines(
       yield line;
     }
   } finally {
+    // Cancel, don't just release: this generator frequently exits before the
+    // body is fully drained (e.g. returning on `data: [DONE]` before the
+    // terminal chunk, or a consumer breaking early). A released-but-uncancelled
+    // body strands the connection — it can't be reused and isn't closed until
+    // GC. Bun caps concurrent connections per host (256); leaked streams
+    // exhaust the pool and every subsequent fetch to that host queues forever.
+    try {
+      void reader.cancel().catch(() => {});
+    } catch {
+      // reader may already be released/errored — nothing to cancel
+    }
     reader.releaseLock();
   }
 }

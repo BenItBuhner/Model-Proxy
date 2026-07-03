@@ -47,6 +47,17 @@ export type RequestEvent =
       willFallback: boolean;
     }
   | {
+      type: "route.skipped";
+      at: string;
+      provider: string;
+      model: string;
+      reason: "multimodal_unsupported" | "context_window_exceeded";
+      sourceLogicalModel: string;
+      isFallback: boolean;
+      estimatedPromptTokens?: number;
+      contextWindow?: number;
+    }
+  | {
       type: "route.hedge.started";
       at: string;
       candidates: number;
@@ -145,12 +156,77 @@ export type RequestEvent =
     }
   | { type: "stream.chunk"; at: string; bytes: number; chunkNumber: number }
   | {
+      type: "fusion.pipeline.started";
+      at: string;
+      effort: number;
+      fusionEffort?: string;
+      complexityScore: number;
+      complexityReason: string;
+      logicalModel: string;
+      stream: boolean;
+    }
+  | {
+      type: "fusion.phase";
+      at: string;
+      phase:
+        | "image_preprocessing"
+        | "complexity_scoring"
+        | "task_division"
+        | "subagent_execution"
+        | "synthesis"
+        | "fast_path";
+      status: "started" | "completed" | "failed";
+      durationMs?: number;
+      modelRouting?: string;
+      detail?: Record<string, unknown>;
+    }
+  | {
+      type: "fusion.cache";
+      at: string;
+      kind: "request" | "conversation" | "subtask";
+      hit: boolean;
+      detail?: string;
+    }
+  | {
+      type: "fusion.subtasks";
+      at: string;
+      subTasks: Array<{ id: string; focus: string; model: string; description: string }>;
+    }
+  | {
+      type: "fusion.subagent";
+      at: string;
+      id: string;
+      focus: string;
+      model: string;
+      status: "started" | "progress" | "retrying" | "completed" | "failed";
+      attempt?: number;
+      chars?: number;
+      durationMs?: number;
+      error?: string;
+      /** Extra structured detail (e.g. research tool executions). */
+      detail?: Record<string, unknown>;
+    }
+  | {
+      type: "fusion.summary";
+      at: string;
+      label: string;
+      text: string;
+    }
+  | {
+      type: "fusion.pipeline.completed";
+      at: string;
+      totalMs: number;
+      trace?: Record<string, unknown>;
+    }
+  | {
       type: "request.finished";
       at: string;
       status: number;
       totalMs: number;
       errorType?: string;
       errorMessage?: string;
+      /** Full fusion pipeline trace, emitted on fusion requests for the admin observability page. */
+      fusionTrace?: Record<string, unknown>;
     };
 
 export type RequestEventType = RequestEvent["type"];

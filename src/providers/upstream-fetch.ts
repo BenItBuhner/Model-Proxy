@@ -77,6 +77,39 @@ export async function upstreamFetch(
   }
 }
 
+/**
+ * Read a response body with a hard deadline.
+ *
+ * `upstreamFetch`'s timeout only covers the header phase — once a Response is
+ * returned, an upstream that goes silent mid-body would hang `json()`/`text()`
+ * forever. This helper races the body read against a timer and throws
+ * ProviderTimeoutError on stall. (The body cancel is best-effort: a stream
+ * locked by an in-flight `json()` read can't be cancelled and is left for GC.)
+ */
+export async function readBodyWithDeadline<T>(
+  response: Response,
+  read: () => Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      void response.body?.cancel().catch(() => {});
+      reject(
+        new ProviderTimeoutError(
+          `Upstream response body stalled; no completion within ${timeoutMs}ms`,
+          timeoutMs,
+        ),
+      );
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([read(), deadline]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export function parseRetryAfterHeader(
   response: Response,
 ): number | undefined {

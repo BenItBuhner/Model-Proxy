@@ -6,6 +6,7 @@ import { createLogger } from "../observability/logger.ts";
 import {
   parseRetryAfterFromErrorBody,
   parseRetryAfterHeader,
+  readBodyWithDeadline,
   upstreamFetch,
 } from "./upstream-fetch.ts";
 
@@ -112,7 +113,7 @@ export abstract class AbstractProvider implements BaseProvider {
 
   protected async readErrorBody(response: Response): Promise<string> {
     try {
-      return await response.text();
+      return await readBodyWithDeadline(response, () => response.text(), 15_000);
     } catch (err) {
       log.debug("failed to read error body", { err: String(err) });
       return "";
@@ -144,6 +145,12 @@ export abstract class AbstractProvider implements BaseProvider {
         },
       );
     }
-    return (await response.json()) as Record<string, unknown>;
+    // The header-phase timeout above no longer applies; give the body read its
+    // own deadline so a mid-body upstream stall can't hang non-streaming calls.
+    return await readBodyWithDeadline(
+      response,
+      () => response.json() as Promise<Record<string, unknown>>,
+      timeoutMs,
+    );
   }
 }

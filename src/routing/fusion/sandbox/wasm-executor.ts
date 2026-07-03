@@ -123,14 +123,14 @@ export class WasmExecutor {
         timeoutPromise,
       ]);
 
-      const exitCode = await proc.exitCode;
+      const exitCode = await proc.exited;
       const durationMs = Math.round(performance.now() - startTime);
 
       return {
         success: exitCode === 0,
         stdout,
         stderr,
-        exitCode: exitCode ?? -1,
+        exitCode,
         durationMs,
       };
     } catch (err) {
@@ -161,16 +161,16 @@ export class WasmExecutor {
         };
 
       case "javascript":
-        // Use Bun to execute JavaScript (Bun is inherently sandboxed via JSC)
+        // Use the current Bun binary (the sandbox PATH may not include it)
         return {
-          command: "bun",
+          command: process.execPath,
           args: ["-e", code],
         };
 
       case "typescript":
-        // Use Bun to execute TypeScript directly
+        // Use the current Bun binary to execute TypeScript directly
         return {
-          command: "bun",
+          command: process.execPath,
           args: ["-e", code],
           // Add a transform to strip type annotations
           inputFilter: code

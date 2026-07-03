@@ -98,30 +98,34 @@ export class FetchShim {
         signal: controller.signal,
       } as RequestInit);
 
-      clearTimeout(timeoutId);
-
       const durationMs = Math.round(performance.now() - startTime);
 
-      // 5. Read body with size limit
+      // 5. Read body with size limit. The timeout stays armed until the body
+      // is fully consumed — a stalled body read would otherwise hang forever
+      // (fetch timeouts only cover the header phase).
       const reader = response.body?.getReader();
       let body = "";
       let totalBytes = 0;
       const decoder = new TextDecoder();
 
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          totalBytes += value.byteLength;
-          if (totalBytes > this.config.maxResponseBytes) {
-            reader.cancel();
-            body += decoder.decode(value.slice(0, this.config.maxResponseBytes - (totalBytes - value.byteLength)));
-            break;
+      try {
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            totalBytes += value.byteLength;
+            if (totalBytes > this.config.maxResponseBytes) {
+              void reader.cancel().catch(() => {});
+              body += decoder.decode(value.slice(0, this.config.maxResponseBytes - (totalBytes - value.byteLength)));
+              break;
+            }
+            body += decoder.decode(value, { stream: true });
           }
-          body += decoder.decode(value, { stream: true });
+        } else {
+          body = await response.text();
         }
-      } else {
-        body = await response.text();
+      } finally {
+        clearTimeout(timeoutId);
       }
 
       log.debug("fetch shim completed", {
