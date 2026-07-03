@@ -8,6 +8,25 @@ const log = createLogger("routing.fusion.task-divider");
 /** Max output tokens for the divider model. */
 const DIVIDER_MAX_TOKENS = 131072;
 
+/** Fallback division budget when task_divider.timeout_seconds is absent. */
+const DEFAULT_DIVIDER_BUDGET_SECONDS = 180;
+
+function mergeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const real = signals.filter((s): s is AbortSignal => s !== undefined);
+  if (real.length === 0) return undefined;
+  if (real.length === 1) return real[0];
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  for (const signal of real) {
+    if (signal.aborted) {
+      controller.abort();
+      break;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+  return controller.signal;
+}
+
 /** Rough token estimate. */
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
@@ -108,25 +127,44 @@ export class TaskDividerAgent {
     const primaryModel = fusionConfig.task_divider.model_routing;
     const maxSubtasks = fusionConfig.task_divider.max_subtasks;
 
-    log.info("dividing task", { primaryModel, maxSubtasks, messageCount: messages.length });
+    // Hard wall-clock budget for the entire division phase. Without this a
+    // slow fallback model (5-min provider timeouts x 3 rounds x N models)
+    // can starve the whole pipeline for 20+ minutes before heuristics kick in.
+    const budgetSeconds = fusionConfig.task_divider.timeout_seconds ?? DEFAULT_DIVIDER_BUDGET_SECONDS;
+    const deadlineAt = Date.now() + budgetSeconds * 1000;
+    const budgetController = new AbortController();
+    const budgetTimer = setTimeout(() => {
+      log.warn("division budget exceeded, aborting in-flight divider calls", { budgetSeconds });
+      budgetController.abort();
+    }, budgetSeconds * 1000);
 
-    // Layer 1: Try with the primary divider model (tool-calling)
-    const subtasks1 = await this.tryDivideWithModel(ctx, primaryModel, maxSubtasks);
-    if (subtasks1.length > 1) {
-      log.info("task division succeeded with primary model", { count: subtasks1.length, model: primaryModel });
-      return subtasks1;
-    }
+    log.info("dividing task", { primaryModel, maxSubtasks, budgetSeconds, messageCount: messages.length });
 
-    // Layer 2: Try with an alternative model if primary failed
-    const altModels = this.dividerFallbackModels(ctx);
-    for (const altModel of altModels) {
-      if (altModel === primaryModel) continue;
-      log.info("trying alternative divider model", { model: altModel });
-      const subtasks2 = await this.tryDivideWithModel(ctx, altModel, maxSubtasks);
-      if (subtasks2.length > 1) {
-        log.info("task division succeeded with alternative model", { count: subtasks2.length, model: altModel });
-        return subtasks2;
+    try {
+      // Layer 1: Try with the primary divider model (tool-calling)
+      const subtasks1 = await this.tryDivideWithModel(ctx, primaryModel, maxSubtasks, deadlineAt, budgetController.signal);
+      if (this.isRealDivision(subtasks1)) {
+        log.info("task division succeeded with primary model", { count: subtasks1.length, model: primaryModel });
+        return subtasks1;
       }
+
+      // Layer 2: Try with an alternative model if primary failed
+      const altModels = this.dividerFallbackModels(ctx);
+      for (const altModel of altModels) {
+        if (altModel === primaryModel) continue;
+        if (Date.now() >= deadlineAt) {
+          log.warn("division budget exhausted before trying alternative models", { budgetSeconds });
+          break;
+        }
+        log.info("trying alternative divider model", { model: altModel });
+        const subtasks2 = await this.tryDivideWithModel(ctx, altModel, maxSubtasks, deadlineAt, budgetController.signal);
+        if (this.isRealDivision(subtasks2)) {
+          log.info("task division succeeded with alternative model", { count: subtasks2.length, model: altModel });
+          return subtasks2;
+        }
+      }
+    } finally {
+      clearTimeout(budgetTimer);
     }
 
     // Layer 3: Heuristic content-based division
@@ -152,8 +190,11 @@ export class TaskDividerAgent {
     ctx: FusionRequestContext,
     modelRouting: string,
     maxSubtasks: number,
+    deadlineAt: number,
+    budgetSignal: AbortSignal,
   ): Promise<SubTask[]> {
-    const { messages, signal } = ctx;
+    const { messages } = ctx;
+    const signal = mergeAbortSignals(ctx.signal, budgetSignal);
     const maxRounds = 3;
 
     const systemPrompt = buildDividerSystemPrompt(
@@ -174,6 +215,10 @@ export class TaskDividerAgent {
     ];
 
     for (let round = 1; round <= maxRounds; round++) {
+      if (Date.now() >= deadlineAt) {
+        log.warn("division budget exhausted mid-loop", { model: modelRouting, round });
+        return [this.createDefaultSubTask(modelRouting)];
+      }
       const forceDivide = round === maxRounds;
       const dividerRequest: Record<string, unknown> = {
         model: modelRouting,
@@ -251,6 +296,12 @@ export class TaskDividerAgent {
     }
 
     return [this.createDefaultSubTask(modelRouting)];
+  }
+
+  /** True when the divider produced an actual division (not the default placeholder). */
+  private isRealDivision(tasks: SubTask[]): boolean {
+    if (tasks.length > 1) return true;
+    return tasks.length === 1 && tasks[0].id !== "default-1";
   }
 
   /** Extract pending search_context tool calls from a divider response. */

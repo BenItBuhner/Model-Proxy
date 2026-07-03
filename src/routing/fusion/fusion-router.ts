@@ -678,6 +678,10 @@ export class FusionRouter {
       status: "started",
       modelRouting: ctx.fusionConfig.task_divider.model_routing,
     });
+    yield* paceReasoningText(
+      ctx,
+      "Breaking the request down into focused research sub-tasks before spawning subagents.\n\n",
+    );
     const divStart = performance.now();
     const subTasks = await this.taskDivider.divide(ctx);
     const divMs = Math.round(performance.now() - divStart);
