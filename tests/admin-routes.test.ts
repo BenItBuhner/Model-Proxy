@@ -69,6 +69,60 @@ describe("admin routes", () => {
     expect(Array.isArray(body["records"])).toBe(true);
   });
 
+  test("mutation guard accepts public https origins behind a reverse proxy", async () => {
+    const res = await app.request("/v1/admin/signup-settings", {
+      method: "PUT",
+      headers: {
+        ...auth(),
+        "content-type": "application/json",
+        origin: "https://infer.techlitnow.com",
+        host: "infer.techlitnow.com",
+        "x-forwarded-host": "infer.techlitnow.com",
+        "x-forwarded-proto": "http",
+      },
+      body: JSON.stringify({ multi_user_enabled: true }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  test("mutation guard accepts configured CORS origins", async () => {
+    const previous = process.env.CORS_ORIGINS;
+    process.env.CORS_ORIGINS = "https://infer.techlitnow.com";
+    try {
+      const res = await app.request("/v1/admin/signup-settings", {
+        method: "PUT",
+        headers: {
+          ...auth(),
+          "content-type": "application/json",
+          origin: "https://infer.techlitnow.com",
+          host: "127.0.0.1:9876",
+        },
+        body: JSON.stringify({ multi_user_enabled: true }),
+      });
+      expect(res.status).toBe(200);
+    } finally {
+      if (previous === undefined) delete process.env.CORS_ORIGINS;
+      else process.env.CORS_ORIGINS = previous;
+    }
+  });
+
+  test("mutation guard rejects unrelated origins", async () => {
+    const res = await app.request("/v1/admin/signup-settings", {
+      method: "PUT",
+      headers: {
+        ...auth(),
+        "content-type": "application/json",
+        origin: "https://evil.example",
+        host: "infer.techlitnow.com",
+        "x-forwarded-host": "infer.techlitnow.com",
+        "x-forwarded-proto": "https",
+      },
+      body: JSON.stringify({ multi_user_enabled: true }),
+    });
+    expect(res.status).toBe(403);
+    expect(await json(res)).toEqual({ error: "Cross-origin mutation denied" });
+  });
+
   test("admin logs paginate runtime request history with totals", async () => {
     resetRequestLogForTests();
     rmSync(join(tmpRoot, ".storage"), { recursive: true, force: true });

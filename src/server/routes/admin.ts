@@ -1021,23 +1021,35 @@ function isSameOriginMutation(c: Context): boolean {
   if (c.req.method === "GET" || c.req.method === "HEAD" || c.req.method === "OPTIONS") return true;
   const origin = c.req.header("origin");
   if (origin === undefined) return true;
-  if (requestOrigins(c).includes(origin)) return true;
+  if (requestOrigins(c).has(normalizeOrigin(origin))) return true;
   return false;
 }
 
-function requestOrigins(c: Context): string[] {
+function requestOrigins(c: Context): Set<string> {
   const origins = new Set<string>();
   try {
     origins.add(new URL(c.req.url).origin);
   } catch {
     // Ignore malformed request URLs; forwarded headers may still be usable.
   }
-  const host = c.req.header("x-forwarded-host") ?? c.req.header("host");
-  const proto = c.req.header("x-forwarded-proto") ?? inferProtocol(c);
-  if (host !== undefined && proto !== undefined) {
-    origins.add(`${proto}://${host}`);
+  for (const origin of configuredCorsOrigins()) {
+    origins.add(origin);
   }
-  return Array.from(origins);
+
+  const hosts = headerValues(c.req.header("x-forwarded-host") ?? c.req.header("host"));
+  const protos = headerValues(c.req.header("x-forwarded-proto"));
+  const inferredProto = inferProtocol(c);
+  const protoCandidates = protos.length > 0 ? protos : inferredProto !== undefined ? [inferredProto] : [];
+  for (const host of hosts) {
+    for (const proto of protoCandidates) {
+      origins.add(normalizeOrigin(`${proto}://${host}`));
+    }
+    // TLS often terminates before the app, so the backend may see http while
+    // browser mutations carry an https Origin. Trust https for forwarded/public
+    // hosts; arbitrary hosts are still constrained by the browser Origin value.
+    origins.add(normalizeOrigin(`https://${host}`));
+  }
+  return origins;
 }
 
 function inferProtocol(c: Context): string | undefined {
@@ -1045,4 +1057,29 @@ function inferProtocol(c: Context): string | undefined {
   if (url.startsWith("https://")) return "https";
   if (url.startsWith("http://")) return "http";
   return undefined;
+}
+
+function configuredCorsOrigins(): string[] {
+  const raw = process.env.CORS_ORIGINS?.trim();
+  if (raw === undefined || raw.length === 0 || raw === "*") return [];
+  return raw
+    .split(",")
+    .map((origin) => normalizeOrigin(origin))
+    .filter((origin) => origin.length > 0);
+}
+
+function headerValues(value: string | undefined): string[] {
+  if (value === undefined) return [];
+  return value
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
+
+function normalizeOrigin(value: string): string {
+  try {
+    return new URL(value.trim()).origin;
+  } catch {
+    return value.trim().replace(/\/+$/, "");
+  }
 }
