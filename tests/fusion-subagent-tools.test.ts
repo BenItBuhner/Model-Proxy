@@ -235,6 +235,34 @@ describe("SubagentExecutor reasoning-only subagents", () => {
     expect(body["max_tokens"]).toBe(16000);
   }, 20000);
 
+  it("truncates an oversized selected message so the packet fits the route budget", async () => {
+    const capturedBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      capturedBodies.push(body);
+      return sseResponse(contentEvents("The oversized context packet was reduced to fit the subagent route budget."));
+    }) as unknown as typeof fetch;
+
+    const oversized = "fallback router retry behavior ".repeat(30_000);
+    const ctx = makeCtx([
+      {
+        role: "user",
+        content: `OVERSIZED_RELEVANT_SENTINEL ${oversized}`,
+      },
+    ]);
+    const results = await executor.execute(ctx, [subTask]);
+
+    expect(results[0].success).toBe(true);
+    expect(results[0].packedContextTokens).toBeLessThanOrEqual(48_000);
+    const body = capturedBodies[0];
+    const messages = body["messages"] as Array<Record<string, unknown>>;
+    const packetText = JSON.stringify(messages);
+    expect(packetText).toContain("OVERSIZED_RELEVANT_SENTINEL");
+    expect(packetText).toContain("context message truncated to fit subagent route budget");
+    expect(packetText.length).toBeLessThan(oversized.length);
+    expect(body["max_tokens"]).toBe(16_000);
+  }, 20000);
+
   it("retries hallucinated tool-call-only output and still gets final analysis", async () => {
     const capturedBodies: Array<Record<string, unknown>> = [];
     globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {

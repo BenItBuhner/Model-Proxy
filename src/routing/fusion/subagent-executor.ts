@@ -790,38 +790,112 @@ Be thorough and complete — do not truncate or trim your analysis.`,
       .sort((a, b) => a - b)
       .map((index) => sanitized[index])
       .filter((message): message is unknown => message !== undefined);
-    let estimatedTokens = estimateMessageTokens(contextMessages);
+    if (contextMessages.length > MAX_CONTEXT_MESSAGES) {
+      contextMessages = contextMessages.slice(contextMessages.length - MAX_CONTEXT_MESSAGES);
+    }
+
+    const relevantExcerpt = this.keywordContextBrief(relevantHits);
+    let droppedMessages = Math.max(0, sanitized.length - contextMessages.length);
+    let briefing = this.buildContextBriefing({
+      logicalContextWindow: ctx.fusionConfig.context_window,
+      tokenBudget,
+      suppliedMessages: contextMessages.length,
+      totalMessages: sanitized.length,
+      firstCount,
+      relevantTarget,
+      anchorTarget,
+      recentTarget,
+      droppedMessages,
+      relevantExcerpt,
+    });
+    let estimatedTokens = this.estimateContextPacketTokens(contextMessages, briefing);
 
     while (estimatedTokens > tokenBudget && contextMessages.length > 1) {
       const firstProtected = contextMessages.length > 4 ? 1 : 0;
       const removeAt = firstProtected + Math.floor((contextMessages.length - firstProtected) / 2);
       contextMessages.splice(removeAt, 1);
-      estimatedTokens = estimateMessageTokens(contextMessages);
+      droppedMessages = Math.max(0, sanitized.length - contextMessages.length);
+      briefing = this.buildContextBriefing({
+        logicalContextWindow: ctx.fusionConfig.context_window,
+        tokenBudget,
+        suppliedMessages: contextMessages.length,
+        totalMessages: sanitized.length,
+        firstCount,
+        relevantTarget,
+        anchorTarget,
+        recentTarget,
+        droppedMessages,
+        relevantExcerpt,
+      });
+      estimatedTokens = this.estimateContextPacketTokens(contextMessages, briefing);
     }
 
-    if (contextMessages.length > MAX_CONTEXT_MESSAGES) {
-      contextMessages = contextMessages.slice(contextMessages.length - MAX_CONTEXT_MESSAGES);
-      estimatedTokens = estimateMessageTokens(contextMessages);
+    if (estimatedTokens > tokenBudget && contextMessages.length > 0) {
+      contextMessages = this.truncateOversizedContextMessages(contextMessages, Math.max(0, tokenBudget - estimateTokens(briefing)));
+      estimatedTokens = this.estimateContextPacketTokens(contextMessages, briefing);
     }
 
-    const relevantExcerpt = this.keywordContextBrief(relevantHits);
-    const droppedMessages = Math.max(0, sanitized.length - contextMessages.length);
-    const briefing = [
+    return { contextMessages, briefing, estimatedTokens, droppedMessages };
+  }
+
+  private buildContextBriefing(args: {
+    logicalContextWindow: number;
+    tokenBudget: number;
+    suppliedMessages: number;
+    totalMessages: number;
+    firstCount: number;
+    relevantTarget: number;
+    anchorTarget: number;
+    recentTarget: number;
+    droppedMessages: number;
+    relevantExcerpt: string;
+  }): string {
+    return [
       "Fusion proxy context briefing for this subagent:",
-      `- Logical Fusion context window: ${ctx.fusionConfig.context_window} tokens.`,
-      `- Your routed model context budget is smaller/adaptive; this packet targets about ${tokenBudget} input tokens.`,
-      `- Conversation messages supplied verbatim: ${contextMessages.length}/${sanitized.length}.`,
-      `- Stratified context mix before final budget pruning: first=${firstCount}, relevant<=${relevantTarget}, middle_anchors<=${anchorTarget}, recent<=${recentTarget}.`,
-      droppedMessages > 0
-        ? `- ${droppedMessages} older or lower-priority messages were omitted to preserve room for reasoning.`
+      `- Logical Fusion context window: ${args.logicalContextWindow} tokens.`,
+      `- Your routed model context budget is smaller/adaptive; this packet targets about ${args.tokenBudget} input tokens.`,
+      `- Conversation messages supplied verbatim: ${args.suppliedMessages}/${args.totalMessages}.`,
+      `- Stratified context mix before final budget pruning: first=${args.firstCount}, relevant<=${args.relevantTarget}, middle_anchors<=${args.anchorTarget}, recent<=${args.recentTarget}.`,
+      args.droppedMessages > 0
+        ? `- ${args.droppedMessages} older or lower-priority messages were omitted to preserve room for reasoning.`
         : "- No messages were omitted from this context packet.",
       "- Relevant excerpts selected by the proxy before your call:",
-      relevantExcerpt,
+      args.relevantExcerpt,
       "",
       "Use only the supplied briefing and message slices. If something is missing, state the uncertainty and recommend what the fusion model should inspect next.",
     ].join("\n");
+  }
 
-    return { contextMessages, briefing, estimatedTokens, droppedMessages };
+  private estimateContextPacketTokens(contextMessages: unknown[], briefing: string): number {
+    return estimateMessageTokens([
+      { role: "user", content: briefing },
+      ...contextMessages,
+    ]);
+  }
+
+  private truncateOversizedContextMessages(messages: unknown[], tokenBudget: number): unknown[] {
+    if (messages.length === 0 || tokenBudget <= 0) return [];
+    const perMessageTokens = Math.max(256, Math.floor(tokenBudget / messages.length));
+    const maxContentChars = Math.max(512, perMessageTokens * 4);
+    return messages.map((message) => this.truncateContextMessage(message, maxContentChars));
+  }
+
+  private truncateContextMessage(message: unknown, maxContentChars: number): unknown {
+    const msg = message as Record<string, unknown>;
+    const content = msg["content"];
+    if (typeof content === "string") {
+      if (content.length <= maxContentChars) return message;
+      return {
+        ...msg,
+        content: `${content.slice(0, maxContentChars)}\n[context message truncated to fit subagent route budget]`,
+      };
+    }
+    const serialized = JSON.stringify(content ?? "");
+    if (serialized.length <= maxContentChars) return message;
+    return {
+      ...msg,
+      content: `${serialized.slice(0, maxContentChars)}\n[context message truncated to fit subagent route budget]`,
+    };
   }
 
   private scoreMessages(messages: unknown[], query: string): Array<{ index: number; role: string; text: string; score: number }> {
