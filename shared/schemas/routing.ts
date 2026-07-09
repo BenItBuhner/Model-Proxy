@@ -1,5 +1,17 @@
 import { z } from "zod";
 import { EnforceToolCallConfigSchema } from "./enforce.ts";
+import { FusionConfigSchema } from "./fusion.ts";
+import { HedgedRoutingConfigSchema } from "./hedged.ts";
+import { PricingConfigSchema } from "./pricing.ts";
+
+export const RouteCapabilitiesSchema = z
+  .object({
+    /** Whether this route can accept image/multimodal chat content. */
+    multimodal: z.boolean().optional(),
+  })
+  .strict();
+
+export type RouteCapabilities = z.infer<typeof RouteCapabilitiesSchema>;
 
 /**
  * Configuration for a single provider route inside a ModelRoutingConfig.
@@ -8,6 +20,8 @@ import { EnforceToolCallConfigSchema } from "./enforce.ts";
 export const RouteConfigSchema = z
   .object({
     wire_protocol: z.enum(["openai", "anthropic"]).optional(),
+    route_id: z.string().min(1).optional(),
+    access_tags: z.array(z.string().min(1)).optional(),
     provider: z.string().min(1),
     model: z.string().min(1),
     base_url: z.string().url().optional(),
@@ -16,10 +30,18 @@ export const RouteConfigSchema = z
     cooldown_seconds: z.number().int().nonnegative().optional(),
     /** Override context window (tokens) when upstream catalog lacks this route's model. */
     context_window: z.number().int().positive().optional(),
+    /** Declared route capabilities used for request-aware preflight routing. */
+    capabilities: RouteCapabilitiesSchema.optional(),
     /** Pin this route to a single egress proxy env var (e.g. OPENCODE_EGRESS_PROXY_1). */
     egress_proxy_env: z.string().min(1).optional(),
     /** Auth mode override for providers like OpenCode Zen (`public` = Bearer public). */
     auth_mode: z.enum(["public", "key"]).optional(),
+    /** Route-level body fields used only when the request omits that OpenAI field. */
+    openai_body_defaults: z.record(z.unknown()).optional(),
+    /** Route-level body fields merged into OpenAI-compatible chat requests. */
+    openai_body_extensions: z.record(z.unknown()).optional(),
+    /** Optional cost assumptions for analytics. */
+    pricing: PricingConfigSchema.optional(),
   })
   .strict();
 
@@ -36,8 +58,17 @@ export const ModelRoutingConfigSchema = z
     timeout_seconds: z.number().int().positive().default(60),
     default_cooldown_seconds: z.number().int().nonnegative().default(180),
     enforce_tool_call: EnforceToolCallConfigSchema.optional(),
+    hedged_routing: HedgedRoutingConfigSchema.optional(),
+    /** When present, the request is dispatched to FusionRouter for multi-model orchestration. */
+    fusion: FusionConfigSchema.optional(),
+    /** Buffer streamed tool-call deltas until the upstream completes the tool call. */
+    buffer_partial_tool_calls: z.boolean().default(false),
     /** Default context window (tokens) for routes that omit `context_window`. */
     context_window: z.number().int().positive().optional(),
+    /** Optional logical-model cost assumptions for analytics. */
+    pricing: PricingConfigSchema.optional(),
+    /** Persist full request/response envelopes for this logical model. Defaults off. */
+    persist_completions: z.boolean().optional(),
     model_routings: z.array(RouteConfigSchema).min(1),
     fallback_model_routings: z.array(z.string().min(1)).default([]),
   })
@@ -64,6 +95,12 @@ export interface ResolvedRoute {
   egressProxyEnvVar?: string;
   /** Extra headers forwarded to the upstream provider (e.g. x-opencode-*). */
   extraHeaders?: Record<string, string>;
+  /** Route-level OpenAI body defaults applied before the client request. */
+  openaiBodyDefaults?: Record<string, unknown>;
+  /** Route-level body fields merged into OpenAI-compatible chat requests. */
+  openaiBodyExtensions?: Record<string, unknown>;
+  /** Avoid exposing half-built streamed tool calls to strict clients. */
+  bufferPartialToolCalls?: boolean;
 }
 
 export interface Attempt {

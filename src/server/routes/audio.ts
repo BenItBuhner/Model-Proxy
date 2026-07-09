@@ -23,17 +23,25 @@ import {
   runWithRequestContext,
 } from "../../observability/request-context.ts";
 import {
+  AccessDeniedError,
+  assertCanUseAudioModel,
+  canUseAudioModel,
+} from "../../policy/access-control.ts";
+import { reserveRequest } from "../../storage/limit-store.ts";
+import {
+  recordRequestAbort,
   recordRequestFinish,
   recordRequestStart,
 } from "../request-log.ts";
-import { requireAuth } from "../auth.ts";
+import { principal, requireAuth } from "../auth.ts";
 
 export function createAudioRoutes(): Hono {
   const app = new Hono();
   app.use("/v1/audio/*", requireAuth({ allowSession: true }));
 
   app.get("/v1/audio/models", (c) => {
-    const data = audioModelConfigLoader.getAvailableModels().map((id) => ({
+    const p = principal(c);
+    const data = audioModelConfigLoader.getAvailableModels().filter((id) => canUseAudioModel(p, id)).map((id) => ({
       id,
       object: "model" as const,
       created: Math.floor(Date.now() / 1000),
@@ -82,6 +90,19 @@ async function handleTranscription(
   }
   const request = parsed.data;
   const isStream = request.stream === true;
+  const p = principal(c);
+  try {
+    assertCanUseAudioModel(p, request.model);
+  } catch (err) {
+    if (err instanceof AccessDeniedError) {
+      return c.json(audioError(`Audio model '${request.model}' not found`, "invalid_request_error"), 404);
+    }
+    throw err;
+  }
+  const limitDecision = reserveRequest(p);
+  if (!limitDecision.allowed) {
+    return c.json(audioError(limitDecision.reason ?? "Rate limit exceeded", "rate_limit_exceeded"), 429);
+  }
 
   try {
     audioModelConfigLoader.loadConfig(request.model);
@@ -112,7 +133,29 @@ async function handleTranscription(
     wireProtocol: "audio",
     isStreaming: isStream,
     enforceMode: false,
+    requestBody: {
+      ...metadata,
+      file:
+        file instanceof Blob
+          ? { name: "name" in file ? String((file as { name?: unknown }).name) : undefined, size: file.size, type: file.type }
+          : undefined,
+    },
+    userId: p?.userId,
+    apiKeyId: p?.apiKeyId,
+    principalRole: p?.role,
+    ownerBypass: p?.ownerBypass,
   });
+  const recordAbort = () => {
+    recordRequestAbort({
+      requestId,
+      responseTimeMs: Math.round(performance.now() - startedAt),
+    });
+  };
+  if (c.req.raw.signal.aborted) {
+    recordAbort();
+  } else {
+    c.req.raw.signal.addEventListener("abort", recordAbort, { once: true });
+  }
 
   const run = async (): Promise<Response> =>
     runWithRequestContext(requestId, async () => {
@@ -134,14 +177,24 @@ async function handleTranscription(
           file: file instanceof Blob ? file : undefined,
           signal: c.req.raw.signal,
         });
+        const responseForStorage = new Response(response.body, {
+          status: response.status,
+          headers: response.headers,
+        });
+        const responseBytes = await responseForStorage.arrayBuffer();
+        const contentType = response.headers.get("content-type") ?? "";
+        const responseBody = contentType.includes("json") || contentType.startsWith("text/")
+          ? new TextDecoder().decode(responseBytes)
+          : { binary: true, bytes: responseBytes.byteLength, contentType };
         const totalMs = Math.round(performance.now() - startedAt);
         emit({ type: "request.finished", at: nowIso(), status: response.status, totalMs });
         recordRequestFinish({
           requestId,
           responseStatus: response.status,
           responseTimeMs: totalMs,
+          responseBody,
         });
-        return new Response(response.body, {
+        return new Response(responseBytes, {
           status: response.status,
           headers: response.headers,
         });
@@ -169,6 +222,7 @@ async function handleTranscription(
           responseTimeMs: totalMs,
           errorMessage: message,
           errorType: err instanceof Error ? err.name : "Unknown",
+          responseBody: audioError(message, type),
         });
         return c.json(audioError(message, type), status);
       }

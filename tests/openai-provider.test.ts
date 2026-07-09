@@ -144,4 +144,14 @@ describe("OpenAIProvider buildPayload: chat_template_kwargs passthrough", () => 
     expect(payload["max_tokens"]).toBe(256);
     expect(payload["chat_template_kwargs"]).toEqual({ enable_thinking: true });
   });
+
+  test("forwards max_completion_tokens when max_tokens is absent", () => {
+    const provider = makeProvider();
+    const payload = provider["buildPayload"](
+      baseArgs({ max_completion_tokens: 1024 }),
+    );
+
+    expect(payload["max_completion_tokens"]).toBe(1024);
+    expect("max_tokens" in payload).toBe(false);
+  });
 });

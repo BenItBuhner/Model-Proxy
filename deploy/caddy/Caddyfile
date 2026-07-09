@@ -1,0 +1,16 @@
+{
+	# Keep Caddy's admin endpoint internal to the container. The deploy script
+	# uses docker compose exec to reload Caddy after flipping active.caddy.
+	admin 127.0.0.1:2019
+	auto_https off
+}
+
+:9876 {
+	# IMPORTANT: host port 9876 belongs to this frontdoor in blue/green mode.
+	# Do not publish backend Model-Proxy containers directly on 9876.
+	header {
+		-Server
+	}
+
+	import /etc/caddy/upstreams/active.caddy
+}

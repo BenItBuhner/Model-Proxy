@@ -6,6 +6,7 @@ import { createLogger } from "../observability/logger.ts";
 import {
   parseRetryAfterFromErrorBody,
   parseRetryAfterHeader,
+  readBodyWithDeadline,
   upstreamFetch,
 } from "./upstream-fetch.ts";
 
@@ -24,6 +25,8 @@ export interface ProviderCallContext {
   egressProxyUrl?: string;
   /** Extra headers forwarded to the upstream provider. */
   extraHeaders?: Record<string, string>;
+  /** Buffer streamed tool-call chunks until upstream emits a completed tool call. */
+  bufferPartialToolCalls?: boolean;
 }
 
 export interface OpenAICallArgs {
@@ -35,6 +38,7 @@ export interface OpenAICallArgs {
   stream?: boolean;
   stop?: string | string[] | undefined;
   max_tokens?: number | undefined;
+  max_completion_tokens?: number | undefined;
   presence_penalty?: number | undefined;
   frequency_penalty?: number | undefined;
   logit_bias?: Record<string, number> | undefined;
@@ -109,7 +113,7 @@ export abstract class AbstractProvider implements BaseProvider {
 
   protected async readErrorBody(response: Response): Promise<string> {
     try {
-      return await response.text();
+      return await readBodyWithDeadline(response, () => response.text(), 15_000);
     } catch (err) {
       log.debug("failed to read error body", { err: String(err) });
       return "";
@@ -121,54 +125,32 @@ export abstract class AbstractProvider implements BaseProvider {
     init: RequestInit,
     ctx: ProviderCallContext,
   ): Promise<Record<string, unknown>> {
-    const controller = new AbortController();
     const timeoutMs = Math.max(1, ctx.timeoutSeconds * 1000);
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    const combinedSignal = mergeSignals(ctx.signal, controller.signal);
-
-    try {
-      const response = await upstreamFetch(url, {
-        ...init,
-        proxy: ctx.egressProxyUrl,
-        timeoutMs,
-        signal: combinedSignal,
-      });
-      if (response.status >= 400) {
-        const body = await this.readErrorBody(response);
-        throw new ProviderAPIError(
-          `${this.providerName} API error ${response.status}: ${body.slice(0, 500)}`,
-          response.status,
-          {
-            body,
-            provider: this.providerName,
-            retryAfterSeconds:
-              parseRetryAfterHeader(response) ?? parseRetryAfterFromErrorBody(body),
-          },
-        );
-      }
-      return (await response.json()) as Record<string, unknown>;
-    } finally {
-      clearTimeout(timer);
+    const response = await upstreamFetch(url, {
+      ...init,
+      proxy: ctx.egressProxyUrl,
+      timeoutMs,
+      signal: ctx.signal,
+    });
+    if (response.status >= 400) {
+      const body = await this.readErrorBody(response);
+      throw new ProviderAPIError(
+        `${this.providerName} API error ${response.status}: ${body.slice(0, 500)}`,
+        response.status,
+        {
+          body,
+          provider: this.providerName,
+          retryAfterSeconds:
+            parseRetryAfterHeader(response) ?? parseRetryAfterFromErrorBody(body),
+        },
+      );
     }
+    // The header-phase timeout above no longer applies; give the body read its
+    // own deadline so a mid-body upstream stall can't hang non-streaming calls.
+    return await readBodyWithDeadline(
+      response,
+      () => response.json() as Promise<Record<string, unknown>>,
+      timeoutMs,
+    );
   }
-}
-
-function mergeSignals(
-  ...signals: Array<AbortSignal | undefined>
-): AbortSignal | undefined {
-  const real = signals.filter((s): s is AbortSignal => s !== undefined);
-  if (real.length === 0) return undefined;
-  if (real.length === 1) return real[0];
-
-  const controller = new AbortController();
-  const onAbort = () => controller.abort();
-  for (const signal of real) {
-    if (signal.aborted) {
-      controller.abort();
-      break;
-    }
-    signal.addEventListener("abort", onAbort, { once: true });
-  }
-  return controller.signal;
 }

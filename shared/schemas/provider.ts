@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PricingConfigSchema } from "./pricing.ts";
 
 const EnvSubstitutedUrlSchema = z.string().min(1).refine(
   (value) => value.includes("${") || z.string().url().safeParse(value).success,
@@ -18,6 +19,7 @@ export const ApiKeyPatternSchema = z
     /** Used when no env vars match (e.g. OpenCode Zen free tier uses `"public"`). */
     default_value: z.string().optional(),
     description: z.string().optional(),
+    pricing_by_env_var: z.record(PricingConfigSchema).optional(),
   })
   .passthrough();
 
@@ -127,6 +129,7 @@ export const ProviderConfigSchema = z
     request_config: RequestConfigSchema.default({}),
     rate_limiting: RateLimitingSchema.default({}),
     models: z.record(z.unknown()).default({}),
+    default_pricing: PricingConfigSchema.optional(),
     error_handling: z.record(ErrorActionSchema).default({}),
     proxy_support: z
       .object({

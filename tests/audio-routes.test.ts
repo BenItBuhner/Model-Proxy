@@ -9,6 +9,8 @@ import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import { resetKeyState } from "../src/providers/api-key-manager.ts";
 import { createApp } from "../src/server/app.ts";
+import { resetRequestLogForTests } from "../src/server/request-log.ts";
+import { setStorageRootForTests } from "../src/storage/storage-paths.ts";
 
 const tmpRoot = join(tmpdir(), `mp-v2-audio-${process.pid}-${Date.now()}`);
 const originalFetch = globalThis.fetch;
@@ -18,6 +20,7 @@ beforeAll(() => {
   mkdirSync(join(tmpRoot, "providers"), { recursive: true });
   mkdirSync(join(tmpRoot, "audio-models"), { recursive: true });
   setPrimaryConfigDirForTests(tmpRoot);
+  setStorageRootForTests(join(tmpRoot, ".storage"));
   (providerConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
   (audioModelConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
 
@@ -71,6 +74,8 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   resetKeyState("fake-audio");
   resetKeyState("fake-nim");
+  resetRequestLogForTests();
+  rmSync(join(tmpRoot, ".storage"), { recursive: true, force: true });
 });
 
 afterAll(() => {
@@ -78,6 +83,7 @@ afterAll(() => {
   delete process.env.CLIENT_API_KEY;
   delete process.env.FAKE_AUDIO_API_KEY;
   setPrimaryConfigDirForTests(undefined);
+  setStorageRootForTests(undefined);
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 

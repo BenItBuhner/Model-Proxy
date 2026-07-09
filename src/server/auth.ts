@@ -4,6 +4,13 @@ import type { Context, MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
 
 import { createLogger } from "../observability/logger.ts";
+import {
+  authenticateApiKey,
+  authenticateSessionToken,
+  legacyOwnerPrincipal,
+  noAuthPrincipal,
+  type Principal,
+} from "../storage/identity-store.ts";
 
 const log = createLogger("auth");
 export const SESSION_COOKIE = "mp_session";
@@ -58,26 +65,53 @@ export function verifyClientApiKey(c: Context): boolean {
   return constantTimeEquals(presented, expected);
 }
 
+export function authenticateRequest(c: Context, options: { allowSession?: boolean } = {}): Principal | undefined {
+  const expected = clientApiKey();
+  if (options.allowSession) {
+    const sessionPrincipal = authenticateSession(c);
+    if (sessionPrincipal !== undefined) return sessionPrincipal;
+  }
+
+  const presented = extractPresented(c);
+  const userPrincipal = authenticateApiKey(presented);
+  if (userPrincipal !== undefined) return userPrincipal;
+
+  if (expected === undefined) {
+    log.warn("CLIENT_API_KEY is unset; auth is DISABLED");
+    return noAuthPrincipal();
+  }
+  if (presented !== undefined && constantTimeEquals(presented, expected)) {
+    return legacyOwnerPrincipal();
+  }
+  return undefined;
+}
+
+function authenticateSession(c: Context): Principal | undefined {
+  const cookie = getCookie(c, SESSION_COOKIE);
+  if (cookie === undefined) return undefined;
+  if (cookie === currentSessionToken()) return legacyOwnerPrincipal();
+  return authenticateSessionToken(cookie);
+}
+
 export function currentSessionToken(): string {
   return clientApiKeyFingerprint() ?? "no-auth";
 }
 
 export function isSessionValid(c: Context): boolean {
   if (!isAuthConfigured()) return true;
-  const cookie = getCookie(c, SESSION_COOKIE);
-  if (cookie === undefined) return false;
-  return cookie === currentSessionToken();
+  return authenticateSession(c) !== undefined;
+}
+
+export function principal(c: Context): Principal | undefined {
+  return c.get("principal");
 }
 
 export function requireAuth(
   options: { allowSession?: boolean } = {},
 ): MiddlewareHandler {
   return async (c, next) => {
-    if (options.allowSession && isSessionValid(c)) {
-      await next();
-      return;
-    }
-    if (!verifyClientApiKey(c)) {
+    const authenticated = authenticateRequest(c, options);
+    if (authenticated === undefined) {
       return c.json(
         {
           error: {
@@ -88,6 +122,7 @@ export function requireAuth(
         401,
       );
     }
+    c.set("principal", authenticated);
     await next();
     return;
   };

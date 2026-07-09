@@ -20,6 +20,7 @@ import { ProviderAPIError } from "../src/providers/errors.ts";
 import { providerRegistry } from "../src/providers/registry.ts";
 import { createApp } from "../src/server/app.ts";
 import { resetRequestLogForTests } from "../src/server/request-log.ts";
+import { setStorageRootForTests } from "../src/storage/storage-paths.ts";
 
 const tmpRoot = join(tmpdir(), `mp-events-${process.pid}-${Date.now()}`);
 
@@ -64,6 +65,7 @@ beforeAll(() => {
   process.env.FAKEE_PROXY_API_KEY = "fakee-proxy-key-zzzz";
   process.env.FAKEE_PROXY_EGRESS_PROXY_1 = "http://proxy-one:8080";
   process.env.FAKEE_PROXY_EGRESS_PROXY_2 = "http://user:pass@proxy-two:8080";
+  setStorageRootForTests(join(tmpRoot, ".storage"));
 
   writeFileSync(
     join(tmpRoot, "providers", "fakee.json"),
@@ -150,6 +152,7 @@ afterAll(() => {
   delete process.env.FAKEE_PROXY_EGRESS_PROXY_1;
   delete process.env.FAKEE_PROXY_EGRESS_PROXY_2;
   setPrimaryConfigDirForTests(undefined);
+  setStorageRootForTests(undefined);
   try {
     rmSync(tmpRoot, { recursive: true, force: true });
   } catch {
@@ -162,6 +165,7 @@ afterEach(() => {
   FakeProvider.calls = [];
   eventSink._resetForTests();
   resetRequestLogForTests();
+  rmSync(join(tmpRoot, ".storage"), { recursive: true, force: true });
 });
 
 const app = createApp();

@@ -2,6 +2,8 @@
  * Proxy-aware upstream fetch wrapper. Uses Bun's native `proxy` fetch option.
  */
 
+import { ProviderTimeoutError } from "./errors.ts";
+
 export type UpstreamFetcher = (input: string | URL | Request, init?: RequestInit & { proxy?: string }) => Promise<Response>;
 
 export interface UpstreamFetchOptions extends RequestInit {
@@ -37,9 +39,13 @@ export async function upstreamFetch(
 
   let timeoutSignal: AbortSignal | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
   if (timeoutMs !== undefined && timeoutMs > 0) {
     const controller = new AbortController();
-    timer = setTimeout(() => controller.abort(), timeoutMs);
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
     timeoutSignal = controller.signal;
   }
 
@@ -57,6 +63,48 @@ export async function upstreamFetch(
       fetchInit.proxy = proxy;
     }
     return await fetcher(url, fetchInit);
+  } catch (err) {
+    if (timedOut && signal?.aborted !== true) {
+      throw new ProviderTimeoutError(
+        `Upstream request timed out after ${timeoutMs}ms`,
+        timeoutMs ?? 0,
+        { cause: err },
+      );
+    }
+    throw err;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
+ * Read a response body with a hard deadline.
+ *
+ * `upstreamFetch`'s timeout only covers the header phase — once a Response is
+ * returned, an upstream that goes silent mid-body would hang `json()`/`text()`
+ * forever. This helper races the body read against a timer and throws
+ * ProviderTimeoutError on stall. (The body cancel is best-effort: a stream
+ * locked by an in-flight `json()` read can't be cancelled and is left for GC.)
+ */
+export async function readBodyWithDeadline<T>(
+  response: Response,
+  read: () => Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      void response.body?.cancel().catch(() => {});
+      reject(
+        new ProviderTimeoutError(
+          `Upstream response body stalled; no completion within ${timeoutMs}ms`,
+          timeoutMs,
+        ),
+      );
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([read(), deadline]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }

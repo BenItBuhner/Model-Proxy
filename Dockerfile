@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.7
-
 # ---------- Stage 1: build the Next.js admin UI ----------
 FROM oven/bun:1.1.38-alpine AS web-build
 WORKDIR /app/web
@@ -27,8 +25,8 @@ COPY tsconfig.json ./
 
 COPY --from=web-build /app/web/out ./web-static
 
-RUN mkdir -p /app/config/providers /app/config/models /app/config/templates \
-    && chown -R bun:bun /app
+RUN mkdir -p /app/config/providers /app/config/models /app/config/templates /app/.storage \
+    && chown -R bun:bun /app/config /app/.storage
 
 USER bun
 

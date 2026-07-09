@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   ApiException,
+  apiFetch,
   getStoredApiKey,
   setStoredApiKey,
   clearStoredApiKey,
@@ -18,6 +19,8 @@ export default function LoginPage(): React.ReactElement {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const [key, setKey] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
 
@@ -61,6 +64,25 @@ export default function LoginPage(): React.ReactElement {
       router.replace("/");
     } catch (err) {
       clearStoredApiKey();
+      if (err instanceof ApiException) setError(err.message);
+      else setError("Unknown error");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleAccountSubmit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    setError(undefined);
+    setSubmitting(true);
+    clearStoredApiKey();
+    try {
+      await apiFetch("/v1/auth/login", {
+        method: "POST",
+        body: { email, password },
+      });
+      router.replace("/");
+    } catch (err) {
       if (err instanceof ApiException) setError(err.message);
       else setError("Unknown error");
     } finally {
@@ -124,6 +146,41 @@ export default function LoginPage(): React.ReactElement {
               <span>zero telemetry</span>
               <span>local only</span>
             </div>
+          </form>
+          <form onSubmit={handleAccountSubmit} className="space-y-4 border-t border-ink-500 p-6">
+            <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-bone-300">
+              account login
+            </div>
+            <div>
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                disabled={submitting}
+              />
+            </div>
+            <div>
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                disabled={submitting}
+              />
+            </div>
+            <Button
+              type="submit"
+              size="lg"
+              disabled={submitting || email.trim().length === 0 || password.length === 0}
+              className="w-full"
+            >
+              sign in with account
+            </Button>
           </form>
         </div>
       </div>

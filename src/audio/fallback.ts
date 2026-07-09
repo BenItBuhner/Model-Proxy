@@ -7,7 +7,7 @@ import {
 import type { AudioTranscriptionRequest } from "../../shared/schemas/audio-wire.ts";
 import { audioModelConfigLoader } from "../config/audio-model-loader.ts";
 import { providerConfigLoader } from "../config/provider-loader.ts";
-import { emit, nowIso } from "../observability/request-context.ts";
+import { currentRequestId, emit, nowIso } from "../observability/request-context.ts";
 import {
   KeyCycleTracker,
   type ErrorAction,
@@ -19,8 +19,22 @@ import {
   AudioProviderUpstreamError,
 } from "./base.ts";
 import { getAudioProviderAdapter } from "./registry.ts";
+import { recordRequestProgress } from "../server/request-log.ts";
 
 const log = createLogger("audio.fallback");
+
+function recordAudioRouteProgress(route: ResolvedAudioRoute, attempt: number): void {
+  const requestId = currentRequestId();
+  if (requestId === undefined) return;
+  recordRequestProgress({
+    requestId,
+    resolvedProvider: route.provider,
+    resolvedModel: route.model,
+    apiKeyEnvVar: route.apiKeyEnvVar,
+    keyHint: keyHint(route.apiKey),
+    retryCount: Math.max(0, attempt - 1),
+  });
+}
 
 interface RouteTuple {
   routeConfig: AudioRouteConfig;
@@ -62,6 +76,7 @@ export class AudioFallbackRouter {
           keyInfo.envVar,
           modelConfig,
         );
+        recordAudioRouteProgress(route, attempt);
         const started = Date.now();
         emit({
           type: "route.attempted",

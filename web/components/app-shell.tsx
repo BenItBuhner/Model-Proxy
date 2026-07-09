@@ -6,9 +6,11 @@ import { useEffect, useState } from "react";
 import { clearStoredApiKey } from "@/lib/api";
 import {
   authStatus,
+  getMe,
   getHealth,
   logout as logoutRequest,
   type HealthDetailed,
+  type PrincipalInfo,
 } from "@/lib/endpoints";
 import { StatusDot } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -16,7 +18,7 @@ import { cn } from "@/lib/utils";
 interface NavItem {
   label: string;
   href: string;
-  code: string;
+  audience: "admin" | "user" | "all";
 }
 
 const THEME_STORAGE_KEY = "model-proxy.theme";
@@ -26,13 +28,17 @@ type ThemePreference = (typeof THEME_OPTIONS)[number];
 type ResolvedTheme = Exclude<ThemePreference, "system">;
 
 const NAV: NavItem[] = [
-  { code: "01", label: "Overview", href: "/" },
-  { code: "02", label: "Models", href: "/models" },
-  { code: "03", label: "Providers", href: "/providers" },
-  { code: "04", label: "Config", href: "/config" },
-  { code: "05", label: "Test environment", href: "/test-environment" },
-  { code: "06", label: "Logs", href: "/logs" },
-  { code: "07", label: "Proxies", href: "/proxies" },
+  { label: "Overview", href: "/", audience: "all" },
+  { label: "Models", href: "/models", audience: "admin" },
+  { label: "Providers", href: "/providers", audience: "admin" },
+  { label: "Config", href: "/config", audience: "admin" },
+  { label: "Test environment", href: "/test-environment", audience: "admin" },
+  { label: "Observability", href: "/observability", audience: "admin" },
+  { label: "Proxies", href: "/proxies", audience: "admin" },
+  { label: "Users", href: "/users", audience: "admin" },
+  { label: "Invites", href: "/invites", audience: "admin" },
+  { label: "Account", href: "/account", audience: "user" },
+  { label: "Docs", href: "/docs", audience: "user" },
 ];
 
 function isNavActive(pathname: string, item: NavItem): boolean {
@@ -88,6 +94,7 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
   const router = useRouter();
   const [health, setHealth] = useState<HealthDetailed | undefined>(undefined);
   const [healthErr, setHealthErr] = useState<string | undefined>(undefined);
+  const [principal, setPrincipal] = useState<PrincipalInfo | undefined>(undefined);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [themePreference, setThemePreference] = useState<ThemePreference | undefined>(undefined);
 
@@ -96,7 +103,9 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
     const load = async () => {
       try {
         await authStatus();
+        const me = await getMe();
         const detail = await getHealth();
+        if (!cancelled) setPrincipal(me.principal);
         if (!cancelled) setHealth(detail);
       } catch (err) {
         if (!cancelled) setHealthErr((err as Error).message);
@@ -170,6 +179,7 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
         onLogout={handleLogout}
         onThemePreferenceChange={setThemePreference}
         pathname={pathname}
+        principal={principal}
         themePreference={themePreference ?? "system"}
       />
       <div className="mx-auto flex min-h-screen max-w-[1400px] flex-col px-4 py-4 lg:flex-row lg:px-6 lg:py-8">
@@ -198,6 +208,7 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
             onLogout={handleLogout}
             onThemePreferenceChange={setThemePreference}
             pathname={pathname}
+            principal={principal}
             themePreference={themePreference ?? "system"}
           />
         </aside>
@@ -218,6 +229,7 @@ function MobileSiderail({
   onLogout,
   onThemePreferenceChange,
   pathname,
+  principal,
   themePreference,
 }: {
   health: HealthDetailed | undefined;
@@ -227,6 +239,7 @@ function MobileSiderail({
   onLogout: () => void;
   onThemePreferenceChange: (next: ThemePreference) => void;
   pathname: string;
+  principal: PrincipalInfo | undefined;
   themePreference: ThemePreference;
 }): React.ReactElement {
   return (
@@ -275,6 +288,7 @@ function MobileSiderail({
           onNavigate={onClose}
           onThemePreferenceChange={onThemePreferenceChange}
           pathname={pathname}
+          principal={principal}
           themePreference={themePreference}
         />
       </aside>
@@ -332,6 +346,7 @@ function SideRailContent({
   onNavigate,
   onThemePreferenceChange,
   pathname,
+  principal,
   themePreference,
 }: {
   action?: React.ReactNode;
@@ -341,12 +356,14 @@ function SideRailContent({
   onNavigate?: () => void;
   onThemePreferenceChange: (next: ThemePreference) => void;
   pathname: string;
+  principal: PrincipalInfo | undefined;
   themePreference: ThemePreference;
 }): React.ReactElement {
   const handleLogoutClick = (): void => {
     onNavigate?.();
     void onLogout();
   };
+  const visibleNavItems = NAV.filter((item) => isVisibleNavItem(item, principal));
 
   return (
     <>
@@ -355,11 +372,12 @@ function SideRailContent({
         {action}
       </div>
       <nav className="flex flex-col gap-1">
-        {NAV.map((item) => {
+        {visibleNavItems.map((item, index) => {
           const active = isNavActive(pathname, item);
+          const code = String(index + 1).padStart(2, "0");
           return (
             <Link
-              key={item.code}
+              key={item.href}
               href={item.href}
               onClick={onNavigate}
               className={cn(
@@ -376,7 +394,7 @@ function SideRailContent({
                     active && "text-phosphor-500",
                   )}
                 >
-                  {item.code}
+                  {code}
                 </span>
                 {item.label}
               </span>
@@ -398,6 +416,14 @@ function SideRailContent({
       </div>
     </>
   );
+}
+
+function isVisibleNavItem(item: NavItem, principal: PrincipalInfo | undefined): boolean {
+  if (item.audience === "all") return true;
+  if (principal === undefined) return false;
+  const role = principal?.role;
+  const isAdmin = principal?.isOwner === true || role === "owner" || role === "admin";
+  return item.audience === "admin" ? isAdmin : !isAdmin;
 }
 
 function BrandMark(): React.ReactElement {

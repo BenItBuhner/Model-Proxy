@@ -8,6 +8,13 @@ import { modelConfigLoader } from "../src/config/model-loader.ts";
 import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { createApp } from "../src/server/app.ts";
+import {
+  recordRequestFinish,
+  recordRequestProgress,
+  recordRequestStart,
+  resetRequestLogForTests,
+} from "../src/server/request-log.ts";
+import { setStorageRootForTests } from "../src/storage/storage-paths.ts";
 
 const tmpRoot = join(tmpdir(), `mp-v2-admin-${process.pid}-${Date.now()}`);
 
@@ -24,12 +31,14 @@ setPrimaryConfigDirForTests(tmpRoot);
 beforeAll(() => {
   process.env.CLIENT_API_KEY = "admin-test-key";
   process.env.MODEL_PROXY_ENV_FILE = join(tmpRoot, ".env");
+  setStorageRootForTests(join(tmpRoot, ".storage"));
 });
 
 afterAll(() => {
   delete process.env.CLIENT_API_KEY;
   delete process.env.MODEL_PROXY_ENV_FILE;
   setPrimaryConfigDirForTests(undefined);
+  setStorageRootForTests(undefined);
   try {
     rmSync(tmpRoot, { recursive: true, force: true });
   } catch {
@@ -58,6 +67,156 @@ describe("admin routes", () => {
     expect(res.status).toBe(200);
     const body = (await json(res)) as Record<string, unknown>;
     expect(Array.isArray(body["records"])).toBe(true);
+  });
+
+  test("mutation guard accepts public https origins behind a reverse proxy", async () => {
+    const res = await app.request("/v1/admin/signup-settings", {
+      method: "PUT",
+      headers: {
+        ...auth(),
+        "content-type": "application/json",
+        origin: "https://infer.techlitnow.com",
+        host: "infer.techlitnow.com",
+        "x-forwarded-host": "infer.techlitnow.com",
+        "x-forwarded-proto": "http",
+      },
+      body: JSON.stringify({ multi_user_enabled: true }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  test("mutation guard accepts configured CORS origins", async () => {
+    const previous = process.env.CORS_ORIGINS;
+    process.env.CORS_ORIGINS = "https://infer.techlitnow.com";
+    try {
+      const res = await app.request("/v1/admin/signup-settings", {
+        method: "PUT",
+        headers: {
+          ...auth(),
+          "content-type": "application/json",
+          origin: "https://infer.techlitnow.com",
+          host: "127.0.0.1:9876",
+        },
+        body: JSON.stringify({ multi_user_enabled: true }),
+      });
+      expect(res.status).toBe(200);
+    } finally {
+      if (previous === undefined) delete process.env.CORS_ORIGINS;
+      else process.env.CORS_ORIGINS = previous;
+    }
+  });
+
+  test("mutation guard rejects unrelated origins", async () => {
+    const res = await app.request("/v1/admin/signup-settings", {
+      method: "PUT",
+      headers: {
+        ...auth(),
+        "content-type": "application/json",
+        origin: "https://evil.example",
+        host: "infer.techlitnow.com",
+        "x-forwarded-host": "infer.techlitnow.com",
+        "x-forwarded-proto": "https",
+      },
+      body: JSON.stringify({ multi_user_enabled: true }),
+    });
+    expect(res.status).toBe(403);
+    expect(await json(res)).toEqual({ error: "Cross-origin mutation denied" });
+  });
+
+  test("admin logs paginate runtime request history with totals", async () => {
+    resetRequestLogForTests();
+    rmSync(join(tmpRoot, ".storage"), { recursive: true, force: true });
+    for (let i = 0; i < 3; i++) {
+      const requestId = `paginated-${i}`;
+      recordRequestStart({
+        requestId,
+        endpoint: "/v1/chat/completions",
+        method: "POST",
+        requestedModel: "demo-model",
+        resolvedModel: "demo-backend",
+        resolvedProvider: "demo",
+        wireProtocol: "openai",
+        isStreaming: false,
+        enforceMode: false,
+      });
+      recordRequestFinish({
+        requestId,
+        responseStatus: 200,
+        responseTimeMs: 10 + i,
+      });
+    }
+
+    const res = await app.request("/v1/admin/logs?limit=2&offset=1", { headers: auth() });
+    expect(res.status).toBe(200);
+    const body = (await json(res)) as {
+      count: number;
+      limit: number;
+      offset: number;
+      total: number;
+      total_completed: number;
+      active_count: number;
+      has_more: boolean;
+      records: Array<{ requestId: string }>;
+    };
+    expect(body.count).toBe(2);
+    expect(body.limit).toBe(2);
+    expect(body.offset).toBe(1);
+    expect(body.total).toBe(3);
+    expect(body.total_completed).toBe(3);
+    expect(body.active_count).toBe(0);
+    expect(body.has_more).toBe(false);
+    expect(body.records.map((record) => record.requestId)).toEqual([
+      "paginated-1",
+      "paginated-0",
+    ]);
+    resetRequestLogForTests();
+    rmSync(join(tmpRoot, ".storage"), { recursive: true, force: true });
+  });
+
+  test("admin analytics summarizes persisted requests and log filters", async () => {
+    resetRequestLogForTests();
+    rmSync(join(tmpRoot, ".storage"), { recursive: true, force: true });
+    recordRequestStart({
+      requestId: "analytics-route-1",
+      endpoint: "/v1/chat/completions",
+      method: "POST",
+      requestedModel: "demo-model",
+      resolvedModel: "demo-backend",
+      resolvedProvider: "demo",
+      wireProtocol: "openai",
+      isStreaming: false,
+      enforceMode: false,
+      requestBody: { model: "demo-model", messages: [{ role: "user", content: "hello" }] },
+      persistCompletions: true,
+    });
+    recordRequestProgress({
+      requestId: "analytics-route-1",
+      resolvedProvider: "demo",
+      resolvedModel: "demo-backend",
+      apiKeyEnvVar: "DEMO_API_KEY",
+      keyHint: "...demo",
+    });
+    recordRequestFinish({
+      requestId: "analytics-route-1",
+      responseStatus: 200,
+      responseTimeMs: 25,
+      responseBody: { usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 } },
+    });
+
+    const analyticsRes = await app.request("/v1/admin/analytics", { headers: auth() });
+    expect(analyticsRes.status).toBe(200);
+    const analytics = (await json(analyticsRes)) as {
+      summary: { completedRequests: number; totalTokens: number };
+    };
+    expect(analytics.summary.completedRequests).toBe(1);
+    expect(analytics.summary.totalTokens).toBe(10);
+
+    const logsRes = await app.request("/v1/admin/logs?provider=demo", { headers: auth() });
+    const logs = (await json(logsRes)) as { total_completed: number; records: Array<{ requestId: string }> };
+    expect(logs.total_completed).toBe(1);
+    expect(logs.records[0]?.requestId).toBe("analytics-route-1");
+    resetRequestLogForTests();
+    rmSync(join(tmpRoot, ".storage"), { recursive: true, force: true });
   });
 
   test("model config create -> get -> patch -> delete lifecycle", async () => {
@@ -240,7 +399,7 @@ describe("admin routes", () => {
     expect(res.status).toBe(401);
   });
 
-  test("proxy discovery endpoint returns a structured report", async () => {
+  test("proxy discovery endpoint starts a background job and status exposes the report", async () => {
     const res = await app.request("/v1/admin/proxies/discover", {
       method: "POST",
       headers: { ...auth(), "content-type": "application/json" },
@@ -252,10 +411,48 @@ describe("admin routes", () => {
         persist: false,
       }),
     });
+    expect(res.status).toBe(202);
+    const body = (await json(res)) as { job: { status: string; id: string } };
+    expect(body.job.status).toBe("running");
+
+    let statusBody:
+      | {
+          discovery_job?: {
+            status: string;
+            report?: { accepted: Array<{ url: string }>; candidatesTested: number };
+          };
+        }
+      | undefined;
+    for (let i = 0; i < 20; i++) {
+      const statusRes = await app.request("/v1/admin/proxies", { headers: auth() });
+      statusBody = await json(statusRes) as typeof statusBody;
+      if (statusBody?.discovery_job?.status === "completed") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(statusBody?.discovery_job?.status).toBe("completed");
+    expect(statusBody?.discovery_job?.report?.accepted[0]?.url).toBe("http://127.0.0.1:8888");
+    expect(statusBody?.discovery_job?.report?.candidatesTested).toBe(1);
+  });
+
+  test("admin mutations accept forwarded same-origin tunnel requests", async () => {
+    const res = await app.request("/v1/admin/signup-settings", {
+      method: "PUT",
+      headers: {
+        ...auth(),
+        "content-type": "application/json",
+        origin: "https://infer.techlitnow.com",
+        "x-forwarded-host": "infer.techlitnow.com",
+        "x-forwarded-proto": "https",
+      },
+      body: JSON.stringify({
+        multi_user_enabled: true,
+        invite_signup_enabled: true,
+        open_signup_enabled: false,
+      }),
+    });
     expect(res.status).toBe(200);
-    const body = (await json(res)) as { report: { accepted: Array<{ url: string }>; candidatesTested: number } };
-    expect(body.report.accepted[0]?.url).toBe("http://127.0.0.1:8888");
-    expect(body.report.candidatesTested).toBe(1);
+    const body = (await json(res)) as { signup: { inviteSignupEnabled: boolean } };
+    expect(body.signup.inviteSignupEnabled).toBe(true);
   });
 
 });

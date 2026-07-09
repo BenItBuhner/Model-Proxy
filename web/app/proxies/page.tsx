@@ -9,7 +9,13 @@ import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { Badge, StatusDot } from "@/components/ui/badge";
 import { Table, Thead, Tr, Th, Td, EmptyRow } from "@/components/ui/table";
-import { discoverProxies, getProxyStatus, type ProxyDiscoveryReport, type ProxyProviderStatus } from "@/lib/endpoints";
+import {
+  discoverProxies,
+  getProxyStatus,
+  type ProxyDiscoveryJob,
+  type ProxyDiscoveryReport,
+  type ProxyProviderStatus,
+} from "@/lib/endpoints";
 
 export default function ProxiesPage(): React.ReactElement {
   return (
@@ -25,7 +31,8 @@ function ProxiesBody(): React.ReactElement {
   const [providers, setProviders] = useState<ProxyProviderStatus[]>([]);
   const [shared, setShared] = useState<string[]>([]);
   const [report, setReport] = useState<ProxyDiscoveryReport | undefined>(undefined);
-  const [target, setTarget] = useState("50");
+  const [job, setJob] = useState<ProxyDiscoveryJob | undefined>(undefined);
+  const [target, setTarget] = useState("1000");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
 
@@ -35,7 +42,13 @@ function ProxiesBody(): React.ReactElement {
       setProviders(result.status.providers);
       setShared(result.status.shared);
       setReport(result.last_discovery);
-      setError(undefined);
+      setJob(result.discovery_job);
+      setRunning(result.discovery_job?.status === "running");
+      if (result.discovery_job?.status === "failed") {
+        setError(result.discovery_job.error ?? "Proxy discovery failed");
+      } else {
+        setError(undefined);
+      }
     } catch (err) {
       setError((err as Error).message);
     }
@@ -45,21 +58,32 @@ function ProxiesBody(): React.ReactElement {
     reload();
   }, [reload]);
 
+  useEffect(() => {
+    if (!running) return;
+    const timer = window.setInterval(() => {
+      void reload();
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [reload, running]);
+
   async function runDiscovery(): Promise<void> {
     setRunning(true);
     setError(undefined);
     try {
       const result = await discoverProxies({
         target_count: Number.parseInt(target, 10) || 50,
-        providers: ["opencode", "nvidia"],
         persist: true,
+        concurrency: 500,
+        source_limit: 50000,
+        timeout_ms: 2000,
       });
-      setReport(result.report);
+      setJob(result.job);
+      setRunning(result.job.status === "running");
       await reload();
     } catch (err) {
       setError((err as Error).message);
     } finally {
-      setRunning(false);
+      // Status polling owns the final running=false transition.
     }
   }
 
@@ -92,6 +116,15 @@ function ProxiesBody(): React.ReactElement {
             <div className="font-mono text-[11px] uppercase tracking-[0.16em] text-bone-500">
               shared pool · {shared.length}
             </div>
+            {job !== undefined ? (
+              <div className="font-mono text-[11px] uppercase tracking-[0.16em] text-bone-500">
+                job · {job.status}
+                {job.report !== undefined ? ` · accepted ${job.report.accepted.length}` : ""}
+                {job.progress !== undefined
+                  ? ` · ${job.progress.accepted}/${job.progress.targetCount} accepted · ${job.progress.candidatesTested}/${job.progress.candidatesFetched} tested`
+                  : ""}
+              </div>
+            ) : null}
           </PanelBody>
         </Panel>
 

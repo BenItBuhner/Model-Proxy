@@ -21,7 +21,7 @@ export function corsMiddleware(): MiddlewareHandler {
     if (origin !== undefined) {
       let allowHeader: string | undefined;
       if (allowed === "*") {
-        allowHeader = "*";
+        allowHeader = origin;
       } else if (allowed.includes(origin)) {
         allowHeader = origin;
       }

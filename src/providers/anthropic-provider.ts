@@ -6,6 +6,7 @@ import {
   type ProviderCallContext,
 } from "./base.ts";
 import { ProviderAPIError } from "./errors.ts";
+import { upstreamFetch } from "./upstream-fetch.ts";
 import { readSSELines } from "./openai-provider.ts";
 
 const log = createLogger("provider.anthropic");
@@ -46,21 +47,20 @@ export class AnthropicProvider extends AbstractProvider {
   ): AsyncGenerator<string, void, unknown> {
     const payload = this.buildPayload({ ...args, stream: true });
     const url = this.endpointUrl(ctx, "streaming");
+    const timeoutMs = Math.max(1, ctx.timeoutSeconds * 1000);
 
-    const controller = new AbortController();
-    const timer = setTimeout(
-      () => controller.abort(),
-      Math.max(1, ctx.timeoutSeconds * 1000),
-    );
-    const externalSignal = ctx.signal;
-    const onExternalAbort = () => controller.abort();
-    if (externalSignal !== undefined) {
-      if (externalSignal.aborted) controller.abort();
-      else externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+    // Own the connection: aborting is the only reliable way to release a
+    // partially-consumed streaming body out of Bun's per-host pool (see
+    // streamOpenAI for the full story).
+    const connController = new AbortController();
+    const onCallerAbort = () => connController.abort();
+    if (ctx.signal !== undefined) {
+      if (ctx.signal.aborted) connController.abort();
+      else ctx.signal.addEventListener("abort", onCallerAbort, { once: true });
     }
 
     try {
-      const response = await fetch(url, {
+      const response = await upstreamFetch(url, {
         method: "POST",
         headers: {
           ...this.authHeaders(ctx),
@@ -68,7 +68,9 @@ export class AnthropicProvider extends AbstractProvider {
           Accept: "text/event-stream",
         },
         body: JSON.stringify(payload),
-        signal: controller.signal,
+        proxy: ctx.egressProxyUrl,
+        timeoutMs,
+        signal: connController.signal,
       });
 
       if (response.status >= 400) {
@@ -93,10 +95,8 @@ export class AnthropicProvider extends AbstractProvider {
         yield `${line}\n\n`;
       }
     } finally {
-      clearTimeout(timer);
-      if (externalSignal !== undefined) {
-        externalSignal.removeEventListener("abort", onExternalAbort);
-      }
+      ctx.signal?.removeEventListener("abort", onCallerAbort);
+      connController.abort();
     }
   }
 

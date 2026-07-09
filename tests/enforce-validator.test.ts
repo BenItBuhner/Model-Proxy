@@ -54,6 +54,54 @@ describe("validateOpenAIResponse", () => {
     expect(result.valid).toBe(false);
   });
 
+  test("tool_calls with malformed non-empty arguments → invalid", () => {
+    const result = validateOpenAIResponse(
+      {
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  id: "t1",
+                  type: "function",
+                  function: { name: "write", arguments: "<tool_call>" },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      FLAG,
+    );
+    expect(result.valid).toBe(false);
+  });
+
+  test("tool_calls with empty arguments remain valid", () => {
+    const result = validateOpenAIResponse(
+      {
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  id: "t1",
+                  type: "function",
+                  function: { name: "noop", arguments: "" },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      FLAG,
+    );
+    expect(result.valid).toBe(true);
+  });
+
   test("termination flag in content → termination", () => {
     const result = validateOpenAIResponse(
       {

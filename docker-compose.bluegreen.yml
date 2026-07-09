@@ -1,0 +1,78 @@
+# Zero-downtime deployment topology.
+#
+# In this mode, host port 9876 is owned by the Caddy frontdoor. The backend
+# Model-Proxy containers are never published directly on 9876; they only expose
+# loopback debug ports so the deploy script can health-check the inactive color
+# before switching traffic.
+services:
+  frontdoor:
+    image: caddy:2-alpine
+    container_name: model-proxy-frontdoor
+    restart: unless-stopped
+    ports:
+      - "9876:9876"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/caddy/upstreams:/etc/caddy/upstreams:ro
+    networks:
+      - model-proxy
+
+  proxy-blue:
+    image: ${MODEL_PROXY_IMAGE:-model-proxy:v2}
+    container_name: model-proxy-blue
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9877:9876"
+    volumes:
+      - ./config:/app/config
+      - ./.env:/app/.env
+      - ./.storage:/app/.storage
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      MODEL_PROXY_INSTANCE_COLOR: blue
+      MODEL_PROXY_BUILD_ID: ${MODEL_PROXY_BUILD_ID:-local}
+      MODEL_PROXY_STORAGE_DIR: /app/.storage
+      MODEL_PROXY_DRAIN_TIMEOUT_MS: ${MODEL_PROXY_DRAIN_TIMEOUT_MS:-300000}
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:9876/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    stop_grace_period: 300s
+    networks:
+      - model-proxy
+
+  proxy-green:
+    image: ${MODEL_PROXY_IMAGE:-model-proxy:v2}
+    container_name: model-proxy-green
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9878:9876"
+    volumes:
+      - ./config:/app/config
+      - ./.env:/app/.env
+      - ./.storage:/app/.storage
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      MODEL_PROXY_INSTANCE_COLOR: green
+      MODEL_PROXY_BUILD_ID: ${MODEL_PROXY_BUILD_ID:-local}
+      MODEL_PROXY_STORAGE_DIR: /app/.storage
+      MODEL_PROXY_DRAIN_TIMEOUT_MS: ${MODEL_PROXY_DRAIN_TIMEOUT_MS:-300000}
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:9876/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    stop_grace_period: 300s
+    networks:
+      - model-proxy
+
+networks:
+  model-proxy:
+    name: model-proxy-bluegreen

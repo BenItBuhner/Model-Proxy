@@ -11,6 +11,7 @@ import {
   RouteConfigSchema,
 } from "../shared/schemas/routing.ts";
 import { EnforceToolCallConfigSchema } from "../shared/schemas/enforce.ts";
+import { HedgedRoutingConfigSchema } from "../shared/schemas/hedged.ts";
 
 const tmpRoot = join(
   tmpdir(),
@@ -77,6 +78,26 @@ describe("zod schemas", () => {
     ).toMatchObject({ enabled: true });
   });
 
+  test("HedgedRoutingConfig applies conservative defaults", () => {
+    expect(HedgedRoutingConfigSchema.parse({ enabled: true })).toMatchObject({
+      enabled: true,
+      min_parallel: 2,
+      max_parallel: 8,
+      primary_bias: 0.65,
+      winner_policy: "first_meaningful_event",
+      cancel_losers: true,
+    });
+  });
+
+  test("HedgedRoutingConfig rejects inverted parallel bounds", () => {
+    const result = HedgedRoutingConfigSchema.safeParse({
+      enabled: true,
+      min_parallel: 10,
+      max_parallel: 2,
+    });
+    expect(result.success).toBe(false);
+  });
+
   test("RouteConfig requires provider + model", () => {
     const result = RouteConfigSchema.safeParse({ provider: "groq" });
     expect(result.success).toBe(false);
@@ -104,11 +125,58 @@ describe("zod schemas", () => {
     expect(result.success).toBe(true);
   });
 
+  test("RouteConfig accepts OpenAI body extensions", () => {
+    const result = RouteConfigSchema.safeParse({
+      provider: "nvidia",
+      model: "z-ai/glm-5.1",
+      openai_body_extensions: {
+        chat_template_kwargs: {
+          enable_thinking: true,
+          clear_thinking: false,
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.openai_body_extensions).toEqual({
+        chat_template_kwargs: {
+          enable_thinking: true,
+          clear_thinking: false,
+        },
+      });
+    }
+  });
+
   test("RouteConfig rejects non-positive context_window", () => {
     const result = RouteConfigSchema.safeParse({
       provider: "groq",
       model: "llama-3.1-70b",
       context_window: 0,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test("RouteConfig accepts route capabilities", () => {
+    const result = RouteConfigSchema.safeParse({
+      provider: "nahcrof",
+      model: "glm-5.2",
+      capabilities: {
+        multimodal: false,
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.capabilities?.multimodal).toBe(false);
+    }
+  });
+
+  test("RouteConfig rejects malformed route capabilities", () => {
+    const result = RouteConfigSchema.safeParse({
+      provider: "nahcrof",
+      model: "glm-5.2",
+      capabilities: {
+        multimodal: "nope",
+      },
     });
     expect(result.success).toBe(false);
   });
@@ -122,6 +190,35 @@ describe("zod schemas", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.context_window).toBe(200000);
+    }
+  });
+
+  test("ModelRoutingConfig accepts model-level partial tool-call buffering", () => {
+    const result = ModelRoutingConfigSchema.safeParse({
+      logical_name: "x",
+      buffer_partial_tool_calls: true,
+      model_routings: [{ provider: "a", model: "b" }],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.buffer_partial_tool_calls).toBe(true);
+    }
+  });
+
+  test("ModelRoutingConfig accepts hedged routing config", () => {
+    const result = ModelRoutingConfigSchema.safeParse({
+      logical_name: "x",
+      hedged_routing: {
+        enabled: true,
+        min_parallel: 2,
+        max_parallel: 4,
+        stagger_ms: 100,
+      },
+      model_routings: [{ provider: "a", model: "b" }],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.hedged_routing?.max_parallel).toBe(4);
     }
   });
 

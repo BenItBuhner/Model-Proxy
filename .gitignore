@@ -42,6 +42,7 @@ config/providers/
 # Logs
 *.log
 logs/
+.storage/
 
 # Editor / OS
 .vscode/
@@ -70,8 +71,12 @@ __pycache__/
 uv.lock
 sql_app.db
 
+# Compiled server binary (bun build output)
+/app
+
 # Wizard progress + state
 .model-proxy-setup-progress
+deploy/bluegreen-state.env
 
 # Keep these tracked (negations):
 !config/providers/.gitkeep

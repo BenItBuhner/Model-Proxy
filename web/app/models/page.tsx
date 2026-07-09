@@ -39,11 +39,27 @@ interface EnforceConfig {
   stream_chunk_delay_ms?: number;
 }
 
+interface HedgedRoutingConfig {
+  enabled?: boolean;
+  min_parallel?: number;
+  max_parallel?: number;
+  max_parallel_jitter?: number;
+  stagger_ms?: number;
+  stagger_jitter_ms?: number;
+  primary_bias?: number;
+  include_fallback_model_routings?: boolean;
+  winner_policy?: "first_meaningful_event";
+  stream_min_content_chars?: number;
+  cancel_losers?: boolean;
+}
+
 interface ModelDraft {
   logical_name: string;
   timeout_seconds: number;
   default_cooldown_seconds: number;
   enforce_tool_call: EnforceConfig | undefined;
+  hedged_routing: HedgedRoutingConfig | undefined;
+  buffer_partial_tool_calls: boolean;
   model_routings: Array<Record<string, unknown>>;
   fallback_model_routings: string[];
   raw: string;
@@ -55,6 +71,8 @@ function emptyModel(name: string): ModelDraft {
     timeout_seconds: 60,
     default_cooldown_seconds: 180,
     enforce_tool_call: undefined,
+    hedged_routing: undefined,
+    buffer_partial_tool_calls: false,
     model_routings: [{ provider: "groq", model: "", wire_protocol: "openai" }],
     fallback_model_routings: [],
     raw: "",
@@ -96,6 +114,8 @@ function ModelsBody(): React.ReactElement {
         timeout_seconds: Number(payload["timeout_seconds"] ?? 60),
         default_cooldown_seconds: Number(payload["default_cooldown_seconds"] ?? 180),
         enforce_tool_call: (payload["enforce_tool_call"] as EnforceConfig | undefined) ?? undefined,
+        hedged_routing: (payload["hedged_routing"] as HedgedRoutingConfig | undefined) ?? undefined,
+        buffer_partial_tool_calls: payload["buffer_partial_tool_calls"] === true,
         model_routings: (payload["model_routings"] as Array<Record<string, unknown>>) ?? [],
         fallback_model_routings:
           (payload["fallback_model_routings"] as string[] | undefined) ?? [],
@@ -186,8 +206,68 @@ function ModelsBody(): React.ReactElement {
     setDraft({ ...draft, raw: JSON.stringify(parsed, null, 2) });
   }
 
+  function toggleHedged(enabled: boolean): void {
+    if (draft === undefined) return;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(draft.raw) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+    const existing = (parsed["hedged_routing"] as HedgedRoutingConfig | undefined) ?? {};
+    parsed["hedged_routing"] = enabled
+      ? {
+          enabled: true,
+          min_parallel: existing.min_parallel ?? 2,
+          max_parallel: existing.max_parallel ?? 8,
+          max_parallel_jitter: existing.max_parallel_jitter ?? 0,
+          stagger_ms: existing.stagger_ms ?? 250,
+          stagger_jitter_ms: existing.stagger_jitter_ms ?? 0,
+          primary_bias: existing.primary_bias ?? 0.65,
+          include_fallback_model_routings:
+            existing.include_fallback_model_routings ?? true,
+          winner_policy: "first_meaningful_event",
+          stream_min_content_chars: existing.stream_min_content_chars ?? 1,
+          cancel_losers: existing.cancel_losers ?? true,
+        }
+      : { ...existing, enabled: false };
+    setDraft({ ...draft, raw: JSON.stringify(parsed, null, 2) });
+  }
+
+  function patchHedged(patch: Partial<HedgedRoutingConfig>): void {
+    if (draft === undefined) return;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(draft.raw) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+    const existing = (parsed["hedged_routing"] as HedgedRoutingConfig | undefined) ?? {};
+    parsed["hedged_routing"] = { ...existing, ...patch };
+    setDraft({ ...draft, raw: JSON.stringify(parsed, null, 2) });
+  }
+
+  function togglePartialToolCallBuffering(enabled: boolean): void {
+    if (draft === undefined) return;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(draft.raw) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+    parsed["buffer_partial_tool_calls"] = enabled;
+    setDraft({
+      ...draft,
+      buffer_partial_tool_calls: enabled,
+      raw: JSON.stringify(parsed, null, 2),
+    });
+  }
+
   const activeDraft = draft;
   const enforceConfig = activeDraft !== undefined ? parseEnforce(activeDraft.raw) : undefined;
+  const hedgedConfig = activeDraft !== undefined ? parseHedged(activeDraft.raw) : undefined;
+  const bufferPartialToolCalls =
+    activeDraft !== undefined ? parseBufferPartialToolCalls(activeDraft.raw) : false;
 
   return (
     <>
@@ -299,6 +379,105 @@ function ModelsBody(): React.ReactElement {
                 ) : null}
               </div>
 
+              <div className="corners bg-ink-700 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-bone-900">
+                      Partial tool-call buffering
+                    </div>
+                    <p className="mt-1 text-xs text-bone-500 max-w-[60ch]">
+                      Buffers streamed tool-call deltas until the provider emits
+                      a completed tool call. Keep this off for normal models and
+                      enable only for strict-client compatibility problems.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={bufferPartialToolCalls}
+                    onChange={togglePartialToolCallBuffering}
+                    label={bufferPartialToolCalls ? "on" : "off"}
+                  />
+                </div>
+              </div>
+
+              <div className="corners bg-ink-700 p-4">
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <div>
+                    <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-bone-900">
+                      Hedged routing
+                    </div>
+                    <p className="mt-1 text-xs text-bone-500 max-w-[60ch]">
+                      Races a biased random spread of provider/key/proxy attempts
+                      and keeps the first usable response. Earlier model routes are
+                      preferred, while secondary routes can win when faster.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={hedgedConfig?.enabled === true}
+                    onChange={toggleHedged}
+                    label={hedgedConfig?.enabled === true ? "on" : "off"}
+                  />
+                </div>
+                {hedgedConfig?.enabled === true ? (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <HedgedNumberField
+                      label="min_parallel"
+                      value={hedgedConfig.min_parallel ?? 2}
+                      min={1}
+                      max={30}
+                      onChange={(value) => patchHedged({ min_parallel: value })}
+                    />
+                    <HedgedNumberField
+                      label="max_parallel"
+                      value={hedgedConfig.max_parallel ?? 8}
+                      min={1}
+                      max={30}
+                      onChange={(value) => patchHedged({ max_parallel: value })}
+                    />
+                    <HedgedNumberField
+                      label="max_parallel_jitter"
+                      value={hedgedConfig.max_parallel_jitter ?? 0}
+                      min={0}
+                      max={20}
+                      onChange={(value) => patchHedged({ max_parallel_jitter: value })}
+                    />
+                    <HedgedNumberField
+                      label="stagger_ms"
+                      value={hedgedConfig.stagger_ms ?? 250}
+                      min={0}
+                      max={30000}
+                      onChange={(value) => patchHedged({ stagger_ms: value })}
+                    />
+                    <HedgedNumberField
+                      label="stagger_jitter_ms"
+                      value={hedgedConfig.stagger_jitter_ms ?? 0}
+                      min={0}
+                      max={30000}
+                      onChange={(value) => patchHedged({ stagger_jitter_ms: value })}
+                    />
+                    <HedgedNumberField
+                      label="primary_bias"
+                      value={hedgedConfig.primary_bias ?? 0.65}
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      onChange={(value) => patchHedged({ primary_bias: value })}
+                    />
+                    <div className="flex items-center justify-between gap-3 bg-ink-600 px-3 py-2 md:col-span-2">
+                      <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-bone-300">
+                        include_fallback_model_routings
+                      </span>
+                      <Switch
+                        checked={hedgedConfig.include_fallback_model_routings !== false}
+                        onChange={(value) =>
+                          patchHedged({ include_fallback_model_routings: value })
+                        }
+                        label={hedgedConfig.include_fallback_model_routings !== false ? "yes" : "no"}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
               <div>
                 <Label htmlFor="model-json" hint="direct JSON · validated on save">
                   Model JSON
@@ -335,6 +514,61 @@ function parseEnforce(raw: string): EnforceConfig | undefined {
   } catch {
     return undefined;
   }
+}
+
+function parseHedged(raw: string): HedgedRoutingConfig | undefined {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const value = parsed["hedged_routing"];
+    if (value === undefined || value === null) return undefined;
+    return value as HedgedRoutingConfig;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseBufferPartialToolCalls(raw: string): boolean {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return parsed["buffer_partial_tool_calls"] === true;
+  } catch {
+    return false;
+  }
+}
+
+function HedgedNumberField({
+  label,
+  value,
+  min,
+  max,
+  step = 1,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onChange: (value: number) => void;
+}): React.ReactElement {
+  return (
+    <div>
+      <Label htmlFor={`hedged-${label}`}>{label}</Label>
+      <Input
+        id={`hedged-${label}`}
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        monospace
+        onChange={(event) => {
+          const next = Number(event.target.value);
+          if (Number.isFinite(next)) onChange(next);
+        }}
+      />
+    </div>
+  );
 }
 
 function KV({
