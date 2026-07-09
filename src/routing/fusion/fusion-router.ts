@@ -23,11 +23,14 @@ import { currentRequestId } from "../../observability/request-context.ts";
 import { modelConfigLoader } from "../../config/model-loader.ts";
 import {
   finishFusionRun,
+  finishFusionSubagentRun,
   hashFusionValue,
   makeFusionRunId,
+  makeFusionSubagentRunId,
   recordFusionConversationTurn,
   resolveFusionIdentity,
   startFusionRun,
+  startFusionSubagentRun,
 } from "../../storage/fusion-store.ts";
 
 const log = createLogger("routing.fusion");
@@ -1226,6 +1229,7 @@ export class FusionRouter {
     cacheKey: string,
     extraDetail?: Record<string, unknown>,
   ): void {
+    this.recordReusedSubagentRuns(ctx, results, cacheKind, cacheKey, extraDetail);
     emitFusion(ctx, {
       type: "fusion.subtasks",
       at: nowIso(),
@@ -1275,6 +1279,58 @@ export class FusionRouter {
           ...extraDetail,
         },
       });
+    }
+  }
+
+  private recordReusedSubagentRuns(
+    ctx: FusionRequestContext,
+    results: SubagentResult[],
+    cacheKind: "request" | "conversation" | "subtask",
+    cacheKey: string,
+    extraDetail?: Record<string, unknown>,
+  ): void {
+    if (!ctx.fusionRunId) return;
+    for (const result of results) {
+      const subagentRunId = makeFusionSubagentRunId(ctx.fusionRunId, result.subTask.id);
+      try {
+        startFusionSubagentRun({
+          subagentRunId,
+          fusionRunId: ctx.fusionRunId,
+          parentRunId: ctx.execution?.parentRunId,
+          subtaskId: result.subTask.id,
+          focusArea: result.subTask.focus_area,
+          descriptionHash: hashFusionValue(result.subTask.description),
+          modelRouting: result.usedModelRouting,
+          metadata: {
+            depth: ctx.execution?.depth ?? 0,
+            cacheKind,
+            cacheKey,
+            reusedFromSubagentRunId: result.subagentRunId,
+            ...extraDetail,
+          },
+        });
+        finishFusionSubagentRun({
+          subagentRunId,
+          status: "cached",
+          attemptCount: 0,
+          durationMs: 0,
+          outputHash: result.content ? hashFusionValue(result.content) : undefined,
+          metadata: {
+            cacheKind,
+            cacheKey,
+            reusedFromSubagentRunId: result.subagentRunId,
+            contextPack: result.contextPack,
+            ...extraDetail,
+          },
+        });
+      } catch (err) {
+        log.warn("failed to record reused fusion subagent run", {
+          fusionRunId: ctx.fusionRunId,
+          subagentRunId,
+          cacheKind,
+          error: String(err),
+        });
+      }
     }
   }
 

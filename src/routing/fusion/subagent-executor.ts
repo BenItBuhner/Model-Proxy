@@ -323,7 +323,7 @@ export class SubagentExecutor {
             packedContextTokens: messagePack.packedContextTokens,
             durationMs,
           });
-          this.finishRun(subagentRunId, "completed", attempts, durationMs, content);
+          this.finishRun(subagentRunId, "completed", attempts, durationMs, content, undefined, messagePack.contextPack);
           emitFusion(ctx, {
             type: "fusion.subagent",
             at: nowIso(),
@@ -406,6 +406,7 @@ export class SubagentExecutor {
       durationMs,
       allContent,
       lastError,
+      lastMessagePack?.contextPack,
     );
     emitFusion(ctx, {
       type: "fusion.subagent",
@@ -1200,6 +1201,7 @@ Be thorough and complete — do not truncate or trim your analysis.`,
     durationMs: number,
     content: string,
     error?: string,
+    contextPack?: SubagentResult["contextPack"],
   ): void {
     if (!subagentRunId) return;
     try {
@@ -1209,7 +1211,10 @@ Be thorough and complete — do not truncate or trim your analysis.`,
         attemptCount,
         durationMs,
         outputHash: content ? hashFusionValue(content) : undefined,
-        metadata: error ? { error } : undefined,
+        metadata: {
+          ...(error ? { error } : {}),
+          ...(contextPack ? { contextPack } : {}),
+        },
       });
     } catch (err) {
       log.warn("failed to finish fusion subagent run", { subagentRunId, error: String(err) });

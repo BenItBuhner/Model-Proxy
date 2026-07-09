@@ -321,9 +321,15 @@ describe("Fusion complex scenarios", () => {
     const persistedSubagents = db
       .query("SELECT COUNT(*) AS count FROM fusion_subagent_runs WHERE fusion_run_id = ?")
       .get(fusionRunId as string) as { count: number } | undefined;
+    const persistedSubagentMetadata = db
+      .query("SELECT metadata_json AS metadataJson FROM fusion_subagent_runs WHERE fusion_run_id = ? ORDER BY subtask_id LIMIT 1")
+      .get(fusionRunId as string) as { metadataJson: string } | undefined;
+    const persistedContextPack = JSON.parse(persistedSubagentMetadata?.metadataJson ?? "{}")["contextPack"] as Record<string, unknown> | undefined;
     expect(persistedRun?.status).toBe("completed");
     expect(persistedRun?.cacheHit).toBe(0);
     expect(persistedSubagents?.count).toBe(2);
+    expect(persistedContextPack?.["logicalContextWindow"]).toBe(10_000_000);
+    expect(persistedContextPack?.["selectedRanges"]).toBe("1-3");
     expect(captured.divider).toHaveLength(1);
     expect(captured.subagent).toHaveLength(2);
     expect(captured.fuser).toHaveLength(1);
@@ -345,6 +351,12 @@ describe("Fusion complex scenarios", () => {
     expect(second.fusionTrace?.cacheHit).toBe(true);
     expect(second.fusionTrace?.subTasks?.map((task) => task.focus)).toEqual(["repository", "testing"]);
     expect(second.fusionTrace?.steps.some((step) => step.label === "Pre-Divider Cache Lookup")).toBe(true);
+    const cachedFusionRunId = second.fusionTrace?.fusionRunId;
+    const cachedSubagentRows = db
+      .query("SELECT status, metadata_json AS metadataJson FROM fusion_subagent_runs WHERE fusion_run_id = ? ORDER BY subtask_id")
+      .all(cachedFusionRunId as string) as Array<{ status: string; metadataJson: string }>;
+    expect(cachedSubagentRows.map((row) => row.status)).toEqual(["cached", "cached"]);
+    expect(JSON.parse(cachedSubagentRows[0]?.metadataJson ?? "{}")["cacheKind"]).toBe("request");
     expect(captured.divider).toHaveLength(1);
     expect(captured.subagent).toHaveLength(2);
     expect(captured.fuser).toHaveLength(2);
