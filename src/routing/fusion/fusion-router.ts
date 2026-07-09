@@ -38,7 +38,32 @@ const log = createLogger("routing.fusion");
 interface SubagentNeedDecision {
   useSubagents: boolean;
   reason: string;
-  signals: Record<string, unknown>;
+  signals: SubagentDecisionSignals;
+}
+
+interface SubagentDecisionSignals {
+  runtimeEffort: number;
+  fusionEffort?: string;
+  tokenCount: number;
+  messageCount: number;
+  toolCount: number;
+  toolUseAllowed: boolean;
+  declaredFusionContextWindow: number;
+  activeFusionContextWindow: number;
+  largeContextThreshold: number;
+  contextLoadPercent: number;
+  largeContext: boolean;
+  manyTools: boolean;
+  longConversation: boolean;
+  hasToolResults: boolean;
+  significantToolResults: boolean;
+  toolResultReason?: string;
+  hasCodeOrFileWork: boolean;
+  hasLargeEditIntent: boolean;
+  referencedFileCount: number;
+  images: boolean;
+  activeTriggers: string[];
+  suppressors: string[];
 }
 
 function usageSnapshotFromCounts(counts: {
@@ -1164,7 +1189,7 @@ export class FusionRouter {
     const explicitHigh = ctx.resolvedFusionEffort === "F3";
     const images = ctx.hadImages === true || (ctx.imageDescriptions?.length ?? 0) > 0;
 
-    const signals = {
+    const signals = this.buildSubagentDecisionSignals({
       runtimeEffort,
       fusionEffort: ctx.resolvedFusionEffort,
       tokenCount: score.tokenCount,
@@ -1184,7 +1209,7 @@ export class FusionRouter {
       hasLargeEditIntent,
       referencedFileCount: referencedFiles.length,
       images,
-    };
+    });
 
     if (runtimeEffort <= 1) {
       return { useSubagents: false, reason: "fast-path effort does not use subagents", signals };
@@ -1215,6 +1240,72 @@ export class FusionRouter {
       useSubagents: false,
       reason: "moderate request is within synthesis model context; subagents would add latency without clear benefit",
       signals,
+    };
+  }
+
+  private buildSubagentDecisionSignals(args: {
+    runtimeEffort: number;
+    fusionEffort?: string;
+    tokenCount: number;
+    messageCount: number;
+    toolCount: number;
+    toolUseAllowed: boolean;
+    declaredFusionContextWindow: number;
+    activeFusionContextWindow: number;
+    largeContextThreshold: number;
+    largeContext: boolean;
+    manyTools: boolean;
+    longConversation: boolean;
+    hasToolResults: boolean;
+    significantToolResults: boolean;
+    toolResultReason?: string;
+    hasCodeOrFileWork: boolean;
+    hasLargeEditIntent: boolean;
+    referencedFileCount: number;
+    images: boolean;
+  }): SubagentDecisionSignals {
+    const activeTriggers: string[] = [];
+    const suppressors: string[] = [];
+
+    if (args.runtimeEffort <= 1) suppressors.push("fast-path effort");
+    if (args.fusionEffort === "F3") activeTriggers.push("F3 high effort");
+    if (args.images) activeTriggers.push("image context");
+    if (args.largeContext) activeTriggers.push("large context");
+    if (args.manyTools) activeTriggers.push("large tool surface");
+    if (args.hasCodeOrFileWork && args.hasLargeEditIntent) activeTriggers.push("large implementation intent");
+    if (args.significantToolResults) activeTriggers.push("significant tool results");
+    if (args.longConversation && args.hasCodeOrFileWork) activeTriggers.push("multi-turn implementation context");
+
+    if (!args.largeContext) suppressors.push("context fits synthesis route");
+    if (args.toolCount > 0 && !args.toolUseAllowed) suppressors.push("tool use disabled");
+    if (args.toolCount > 0 && args.toolUseAllowed && !args.manyTools) suppressors.push("tool surface below parallel threshold");
+    if (args.hasToolResults && !args.significantToolResults) suppressors.push("tool results are trivial");
+    if (args.hasCodeOrFileWork && !args.hasLargeEditIntent && !args.longConversation) suppressors.push("implementation scope is local");
+    if (activeTriggers.length === 0 && args.runtimeEffort > 1) suppressors.push("no strong parallel-reasoning trigger");
+
+    return {
+      runtimeEffort: args.runtimeEffort,
+      fusionEffort: args.fusionEffort,
+      tokenCount: args.tokenCount,
+      messageCount: args.messageCount,
+      toolCount: args.toolCount,
+      toolUseAllowed: args.toolUseAllowed,
+      declaredFusionContextWindow: args.declaredFusionContextWindow,
+      activeFusionContextWindow: args.activeFusionContextWindow,
+      largeContextThreshold: args.largeContextThreshold,
+      contextLoadPercent: Math.round((args.tokenCount / Math.max(1, args.largeContextThreshold)) * 1000) / 10,
+      largeContext: args.largeContext,
+      manyTools: args.manyTools,
+      longConversation: args.longConversation,
+      hasToolResults: args.hasToolResults,
+      significantToolResults: args.significantToolResults,
+      toolResultReason: args.toolResultReason,
+      hasCodeOrFileWork: args.hasCodeOrFileWork,
+      hasLargeEditIntent: args.hasLargeEditIntent,
+      referencedFileCount: args.referencedFileCount,
+      images: args.images,
+      activeTriggers,
+      suppressors: [...new Set(suppressors)],
     };
   }
 

@@ -305,6 +305,9 @@ function SubagentDecisionPanel({ phase }: { phase: PhaseState }): React.ReactEle
   const manyTools = typeof detail["manyTools"] === "boolean" ? detail["manyTools"] : undefined;
   const toolUseAllowed = typeof detail["toolUseAllowed"] === "boolean" ? detail["toolUseAllowed"] : undefined;
   const hasLargeEditIntent = typeof detail["hasLargeEditIntent"] === "boolean" ? detail["hasLargeEditIntent"] : undefined;
+  const contextLoadPercent = asNumber(detail["contextLoadPercent"]);
+  const activeTriggers = asStringArray(detail["activeTriggers"]);
+  const suppressors = asStringArray(detail["suppressors"]);
 
   const hasDecisionMetrics =
     useSubagents !== undefined ||
@@ -319,7 +322,10 @@ function SubagentDecisionPanel({ phase }: { phase: PhaseState }): React.ReactEle
     largeContext !== undefined ||
     manyTools !== undefined ||
     toolUseAllowed !== undefined ||
-    hasLargeEditIntent !== undefined;
+    hasLargeEditIntent !== undefined ||
+    contextLoadPercent !== undefined ||
+    activeTriggers.length > 0 ||
+    suppressors.length > 0;
   if (!hasDecisionMetrics) return null;
 
   return (
@@ -351,6 +357,38 @@ function SubagentDecisionPanel({ phase }: { phase: PhaseState }): React.ReactEle
         {toolCount !== undefined ? <MiniStat label="tools" value={formatCount(toolCount)} /> : null}
         {toolUseAllowed !== undefined ? <MiniStat label="tool use" value={toolUseAllowed ? "allowed" : "disabled"} /> : null}
         {referencedFileCount !== undefined ? <MiniStat label="files" value={formatCount(referencedFileCount)} /> : null}
+        {contextLoadPercent !== undefined ? <MiniStat label="load" value={`${contextLoadPercent}%`} /> : null}
+      </div>
+      {activeTriggers.length > 0 || suppressors.length > 0 ? (
+        <div className="grid gap-2 border-t border-ink-700 pt-2 md:grid-cols-2">
+          {activeTriggers.length > 0 ? (
+            <DecisionSignalList title="triggers" tone="phosphor" items={activeTriggers} />
+          ) : null}
+          {suppressors.length > 0 ? (
+            <DecisionSignalList title="suppressors" tone="muted" items={suppressors} />
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DecisionSignalList({
+  title,
+  tone,
+  items,
+}: {
+  title: string;
+  tone: BadgeTone;
+  items: string[];
+}): React.ReactElement {
+  return (
+    <div className="space-y-1">
+      <div className="font-mono text-[8px] uppercase tracking-[0.14em] text-bone-300">{title}</div>
+      <div className="flex flex-wrap gap-1.5">
+        {items.map((item) => (
+          <Badge key={item} tone={tone}>{item}</Badge>
+        ))}
       </div>
     </div>
   );
@@ -589,4 +627,8 @@ function asNumber(value: unknown): number | undefined {
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null ? value as Record<string, unknown> : undefined;
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }

@@ -250,6 +250,8 @@ describe("FusionRouter", () => {
     expect(decision.reason).toContain("large implementation plan");
     expect(decision.signals["hasLargeEditIntent"]).toBe(true);
     expect(decision.signals["referencedFileCount"]).toBeGreaterThanOrEqual(3);
+    expect(decision.signals["activeTriggers"]).toContain("large implementation intent");
+    expect(decision.signals["contextLoadPercent"]).toBeGreaterThan(0);
   });
 
   it("scales large-context subagent gating against the active fusion context window", () => {
@@ -349,6 +351,9 @@ describe("FusionRouter", () => {
     expect(decision.signals["toolCount"]).toBe(12);
     expect(decision.signals["toolUseAllowed"]).toBe(false);
     expect(decision.signals["manyTools"]).toBe(false);
+    expect(decision.signals["activeTriggers"]).toEqual([]);
+    expect(decision.signals["suppressors"]).toContain("tool use disabled");
+    expect(decision.signals["suppressors"]).toContain("no strong parallel-reasoning trigger");
   });
 
   it("does not spawn subagents for trivial tool confirmations", () => {
@@ -391,6 +396,7 @@ describe("FusionRouter", () => {
     expect(decision.signals["hasToolResults"]).toBe(true);
     expect(decision.signals["significantToolResults"]).toBe(false);
     expect(decision.signals["toolResultReason"]).toContain("trivial updates");
+    expect(decision.signals["suppressors"]).toContain("tool results are trivial");
   });
 
   it("uses subagents when tool results add substantial implementation context", () => {
@@ -436,5 +442,6 @@ describe("FusionRouter", () => {
     expect(decision.reason).toContain("tool results");
     expect(decision.signals["significantToolResults"]).toBe(true);
     expect(decision.signals["toolResultReason"]).toContain("read_file");
+    expect(decision.signals["activeTriggers"]).toContain("significant tool results");
   });
 });
