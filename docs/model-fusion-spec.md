@@ -52,16 +52,22 @@ Implement the full 5-layer Model Fusion architecture in Model-Proxy-ts, enabling
 
 ## Definition of Done
 - [x] Plan saved to `docs/model-fusion-plan.md`
-- [ ] Step 1: Fusion config schema created, exported, integrated into ModelRoutingConfig
-- [ ] Step 2: FusionRouter shell dispatches Effort 1 to FallbackRouter
-- [ ] Step 3: ComplexityScorer correctly ranks tasks
-- [ ] Step 4: TaskDividerAgent uses tool-calling to divide tasks
-- [ ] Step 5: SubagentExecutor runs parallel reasoning-only subagents referencing existing model routings, with no tools or execution surface
-- [ ] Step 6: ResponseFuser appends sequentially and feeds fusion model
-- [ ] Step 7: ReasoningCache stores/retrieves subagent outputs permanently
-- [ ] Step 8: Subagent tool/sandbox backend removed; context is pre-packed by the proxy
-- [ ] Step 9: Goalpost-triggered SSE streaming works
+- [x] Step 1: Fusion config schema created, exported, integrated into ModelRoutingConfig
+- [x] Step 2: FusionRouter shell dispatches Effort 1 to FallbackRouter
+- [x] Step 3: ComplexityScorer correctly ranks tasks
+- [x] Step 4: TaskDividerAgent uses tool-calling to divide tasks
+- [x] Step 5: SubagentExecutor runs parallel reasoning-only subagents referencing existing model routings, with no tools or execution surface
+- [x] Step 6: ResponseFuser appends sequentially and feeds fusion model
+- [x] Step 7: ReasoningCache stores/retrieves subagent outputs permanently
+- [x] Step 8: Subagent tool/sandbox backend removed; context is pre-packed by the proxy
+- [x] Step 9: Goalpost-triggered SSE streaming works
 - [x] Step 10: Admin UI Fusion tab visible
 - [x] Step 11: Both OpenAI and Anthropic wire protocols supported
-- [ ] Step 12: Edge cases handled, all tests pass
-- [ ] End-to-end: `fusion-beta` model responds to chat completions
+- [x] Step 12: Edge cases handled, all tests pass
+- [x] End-to-end: `fusion-beta` model responds to chat completions
+
+## Completion Audit
+- Step 1 is covered by `shared/schemas/fusion.ts` and the routing schema's `fusion` config field.
+- Steps 2-9 are covered by `src/routing/fusion/*`, OpenAI/Anthropic route integration, and the focused Fusion test suites listed in the scratchpad.
+- Steps 10-11 are covered by `web/app/fusion/page.tsx`, navigation wiring, and OpenAI/Anthropic admin event regressions.
+- Step 12 and end-to-end behavior are covered by the full validation suite plus HTTP-level `fusion-beta` route tests in `tests/admin-events.test.ts`.

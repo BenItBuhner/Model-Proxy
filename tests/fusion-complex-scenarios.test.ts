@@ -363,6 +363,133 @@ describe("Fusion complex scenarios", () => {
     expect(captured.fuser).toHaveLength(2);
   }, 60_000);
 
+  it("handles ambiguous hundred-tool turns while keeping subagents sealed and cache-reused", async () => {
+    const hundredTools = Array.from({ length: 150 }, (_, index) => ({
+      type: "function",
+      function: {
+        name: `large_surface_tool_${index + 1}`,
+        description: `Final synthesis tool ${index + 1} for broad agent harness stress testing.`,
+        parameters: {
+          type: "object",
+          properties: {
+            target: { type: "string" },
+            confidence: { type: "number" },
+          },
+          required: ["target"],
+        },
+      },
+    }));
+    const captured: {
+      divider: Array<Record<string, unknown>>;
+      subagent: Array<Record<string, unknown>>;
+      fuser: Array<Record<string, unknown>>;
+    } = { divider: [], subagent: [], fuser: [] };
+
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const tools = Array.isArray(body["tools"]) ? body["tools"] : [];
+      const messages = Array.isArray(body["messages"]) ? body["messages"] : [];
+      const promptText = extractMessageText(messages);
+
+      if (tools.some((tool) => JSON.stringify(tool).includes("divide_task"))) {
+        captured.divider.push(body);
+        return chatResponse({
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: "call_divide_hundred_tools",
+            type: "function",
+            function: {
+              name: "divide_task",
+              arguments: JSON.stringify({
+                sub_tasks: [
+                  {
+                    id: "agent-surface-risk",
+                    description: "Analyze whether the large tool surface changes subagent isolation or final-tool routing.",
+                    focus_area: "tool surface",
+                    suggested_model_routing: "glm-5.2",
+                  },
+                  {
+                    id: "synthesis-quality",
+                    description: "Analyze how to preserve coherent final synthesis from ambiguous advisory reasoning.",
+                    focus_area: "synthesis",
+                    suggested_model_routing: "glm-5.2",
+                  },
+                ],
+              }),
+            },
+          }],
+        }, body["model"]);
+      }
+
+      if (body["stream"] === true && body["tool_choice"] === "none") {
+        captured.subagent.push(body);
+        const label = promptText.includes("large tool surface") ? "tool-surface" : "synthesis";
+        return streamContentResponse([
+          `${label} advisory: I created a file and ran tests.\n`,
+          "Recommendation: keep all real tools reserved for the final synthesis model. ",
+          "<tool_call>{\"name\":\"large_surface_tool_1\",\"arguments\":{\"target\":\"subagent\"}}</tool_call>",
+        ]);
+      }
+
+      captured.fuser.push(body);
+      const finalPrompt = extractMessageText(messages);
+      expect(tools).toHaveLength(150);
+      expect(finalPrompt).toContain("Advisory note 1");
+      expect(finalPrompt).toContain("Focus: tool surface");
+      expect(finalPrompt).toContain("Focus: synthesis");
+      expect(finalPrompt).toContain("real tools reserved for the final synthesis model");
+      expect(finalPrompt).not.toContain("I created a file");
+      expect(finalPrompt).not.toContain("ran tests");
+      expect(finalPrompt).not.toContain("<tool_call>");
+      expect(finalPrompt).not.toContain("large_surface_tool_1");
+      return chatResponse({
+        role: "assistant",
+        content: captured.fuser.length === 1
+          ? "Fresh coherent final plan with final-model tool authority preserved."
+          : "Cached coherent final plan with final-model tool authority preserved.",
+      }, body["model"]);
+    }) as unknown as typeof fetch;
+
+    const firstCtx = makeCtx();
+    firstCtx.requestData = {
+      ...firstCtx.requestData,
+      tools: hundredTools,
+      tool_choice: "auto",
+    };
+    const first = await router.route(firstCtx);
+
+    expect(first.content).toContain("Fresh coherent final plan");
+    expect(first.cacheHit).toBe(false);
+    expect(first.subagentResults).toHaveLength(2);
+    expect(first.fusionTrace?.subTaskCount).toBe(2);
+    expect(first.fusionTrace?.subTasks?.map((task) => task.focus)).toEqual(["tool surface", "synthesis"]);
+    expect(first.fusionTrace?.steps.some((step) => step.label === "Subagent Decision")).toBe(true);
+    expect(first.fusionTrace?.subagentDetails?.[0]?.contextPack?.logicalContextWindow).toBe(10_000_000);
+
+    for (const request of captured.subagent) {
+      expect(request["tools"]).toBeUndefined();
+      expect(request["tool_choice"]).toBe("none");
+      expect(extractMessageText(request["messages"] as unknown[])).toContain("You have NO tools");
+    }
+
+    const secondCtx = makeCtx();
+    secondCtx.requestData = {
+      ...secondCtx.requestData,
+      tools: hundredTools,
+      tool_choice: "auto",
+    };
+    const second = await router.route(secondCtx);
+
+    expect(second.content).toContain("Cached coherent final plan");
+    expect(second.cacheHit).toBe(true);
+    expect(second.cacheKey).toBe(first.cacheKey);
+    expect(second.fusionTrace?.cacheHit).toBe(true);
+    expect(captured.divider).toHaveLength(1);
+    expect(captured.subagent).toHaveLength(2);
+    expect(captured.fuser).toHaveLength(2);
+  }, 60_000);
+
   it("does not cache incomplete subagent result sets", async () => {
     const captured: {
       divider: Array<Record<string, unknown>>;
