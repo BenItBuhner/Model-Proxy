@@ -517,12 +517,6 @@ Your job:
     };
 
     const systemTokens = estimateTokens(JSON.stringify(systemPrompt));
-    const fusionPrompt = {
-      role: "user",
-      content: hasSubagentOutputs
-        ? `The following is the sequential output from ${successfulResults.length} parallel research subagents, each working on a different aspect of the original request:\n\n${appendedContent}\n\nPlease synthesize these into a coherent, comprehensive final response that addresses the original request. If the appropriate next step is to invoke tools, emit the structured tool call(s) directly instead of a text answer.`
-        : "Please answer the current user request directly from the conversation context. If the appropriate next step is to invoke tools, emit the structured tool call(s) directly instead of a text answer.",
-    };
 
     // Image context
     const hadImgsFromCtx = !!ctx?.hadImages;
@@ -552,6 +546,16 @@ Your job:
           outputBudgetTokens: Math.floor(SYSTEM_DEFAULT_CONTEXT_WINDOW * MAX_OUTPUT_RESERVE_RATIO),
         });
     const imageTokens = estimateTokens(JSON.stringify(imageContext));
+    const maxAdvisoryTokens = this.maxAdvisoryAppendTokens(activeBudget.inputBudgetTokens);
+    const boundedAppendedContent = hasSubagentOutputs
+      ? this.truncateAdvisoryAppend(appendedContent, maxAdvisoryTokens)
+      : "";
+    const fusionPrompt = {
+      role: "user",
+      content: hasSubagentOutputs
+        ? `The following is the bounded advisory output from ${successfulResults.length} parallel research subagents, each working on a different aspect of the original request:\n\n${boundedAppendedContent}\n\nPlease synthesize these into a coherent, comprehensive final response that addresses the original request. If the appropriate next step is to invoke tools, emit the structured tool call(s) directly instead of a text answer.`
+        : "Please answer the current user request directly from the conversation context. If the appropriate next step is to invoke tools, emit the structured tool call(s) directly instead of a text answer.",
+    };
     const promptTokens = systemTokens + estimateTokens(JSON.stringify(fusionPrompt)) + imageTokens;
     const contextBudget = Math.max(
       MIN_SYNTHESIS_INPUT_TOKENS,
@@ -568,7 +572,8 @@ Your job:
       inputBudgetTokens: activeBudget.inputBudgetTokens,
       outputBudgetTokens: activeBudget.outputBudgetTokens,
       mix: pack.mix,
-      appendedContentLength: appendedContent.length,
+      appendedContentLength: boundedAppendedContent.length,
+      rawAppendedContentLength: appendedContent.length,
     });
 
     return [
@@ -577,6 +582,28 @@ Your job:
       ...imageContext,
       fusionPrompt,
     ];
+  }
+
+  private maxAdvisoryAppendTokens(inputBudgetTokens: number): number {
+    return Math.max(2_000, Math.floor(inputBudgetTokens * 0.4));
+  }
+
+  private truncateAdvisoryAppend(content: string, maxTokens: number): string {
+    const maxChars = Math.max(1_000, maxTokens * 4);
+    if (estimateTokens(content) <= maxTokens || content.length <= maxChars) return content;
+
+    const omittedChars = content.length - maxChars;
+    const headChars = Math.floor(maxChars * 0.7);
+    const tailChars = Math.max(0, maxChars - headChars);
+    const head = content.slice(0, headChars).replace(/\s+\S*$/, "").trimEnd();
+    const tail = content.slice(content.length - tailChars).replace(/^\S*\s+/, "").trimStart();
+    return [
+      head,
+      "",
+      `[fusion advisory excerpt truncated: omitted about ${Math.ceil(omittedChars / 4)} tokens of subagent analysis to preserve synthesis context budget]`,
+      "",
+      tail,
+    ].join("\n");
   }
 
   private synthesisContextBudget(ctx: FusionRequestContext, modelRouting: string): SynthesisContextBudget {
