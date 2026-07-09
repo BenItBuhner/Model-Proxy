@@ -656,9 +656,7 @@ Your job:
 
     for (let i = 0; i < firstCount; i++) add(i, 0);
 
-    const query = results
-      .map((result) => `${result.subTask.focus_area} ${result.subTask.description}`)
-      .join(" ");
+    const query = this.synthesisContextQuery(originalMessages, results);
     const relevantHits = this.scoreMessages(originalMessages, query).slice(0, relevantTarget);
     for (const hit of relevantHits) add(hit.index, 1);
 
@@ -715,6 +713,21 @@ Your job:
       .slice()
       .sort((a, b) => a.index - b.index)
       .map((candidate) => candidate.message);
+  }
+
+  private synthesisContextQuery(originalMessages: unknown[], results: SubagentResult[]): string {
+    const subagentQuery = results
+      .map((result) => `${result.subTask.focus_area} ${result.subTask.description}`)
+      .join(" ")
+      .trim();
+    if (subagentQuery.length > 0) return subagentQuery;
+
+    return originalMessages
+      .filter((message) => (message as Record<string, unknown>)["role"] === "user")
+      .slice(-3)
+      .map((message) => this.messageText(message))
+      .join(" ")
+      .trim();
   }
 
   private truncateOversizedContextMessages(messages: unknown[], tokenBudget: number): unknown[] {

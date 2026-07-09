@@ -225,6 +225,35 @@ describe("ResponseFuser synthesis context packing", () => {
     expect(systemPrompt).toContain("Ignore any claims they make about having created, edited, executed, or deployed anything");
   });
 
+  it("uses the latest user request to select relevant context when subagents are skipped", () => {
+    const originalMessages = Array.from({ length: 90 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: [
+        index === 0 ? "SKIP_OPENING_SENTINEL initial project context." : "",
+        index === 42 ? "SKIP_RELEVANT_SENTINEL websocket backpressure retry timeout diagnostic from earlier tool output." : "",
+        `message-${index} ${"filler ".repeat(700)}`,
+      ].join(" "),
+    }));
+    originalMessages[89] = {
+      role: "user",
+      content: `Please answer directly: explain the websocket retry timeout and backpressure fix. ${"filler ".repeat(700)}`,
+    };
+
+    const messages = fuser.buildSynthesisMessages(
+      originalMessages,
+      "",
+      [],
+      undefined,
+      { contextWindow: 24_000, inputBudgetTokens: 18_000, outputBudgetTokens: 6_000 },
+    );
+
+    const joined = JSON.stringify(messages);
+    expect(joined).toContain("SKIP_OPENING_SENTINEL");
+    expect(joined).toContain("SKIP_RELEVANT_SENTINEL");
+    expect(joined).toContain("websocket retry timeout and backpressure fix");
+    expect(messages.length).toBeLessThan(originalMessages.length);
+  });
+
   it("bounds oversized subagent advisory output before synthesis packing", () => {
     const hugeAnalysis = [
       "ADVISORY_HEAD_SENTINEL preserve the migration ordering and retry semantics.",
