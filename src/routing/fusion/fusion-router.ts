@@ -357,6 +357,7 @@ export class FusionRouter {
       emitFusion(ctx, { type: "fusion.cache", at: nowIso(), kind: "request", hit: !!cachedByRequest });
       if (cachedByRequest) {
         log.info("pre-divider cache hit — reusing subagent results", { requestCacheKey });
+        this.emitReusedSubagentEvents(ctx, cachedByRequest.subagentResults, "request", cachedByRequest.key);
         const result = await this.responseFuser.fuse(ctx, [...imageResults, ...cachedByRequest.subagentResults], steps, costs);
         result.cacheHit = true;
         result.cacheKey = cachedByRequest.key;
@@ -387,6 +388,10 @@ export class FusionRouter {
         if (requestCacheKey !== undefined) {
           this.reasoningCache.linkRequestKey(requestCacheKey, reuse.entry.key);
         }
+        this.emitReusedSubagentEvents(ctx, reuse.entry.subagentResults, "conversation", reuse.entry.key, {
+          deltaCount: reuse.deltaCount,
+          reason: reuse.reason,
+        });
         const result = await this.responseFuser.fuse(ctx, [...imageResults, ...reuse.entry.subagentResults], steps, costs);
         result.cacheHit = true;
         result.cacheKey = reuse.entry.key;
@@ -492,6 +497,7 @@ export class FusionRouter {
       log.info("cache hit — reconstructing subagent results", { key: cacheKey });
       steps[steps.length - 1].details = { ...steps[steps.length - 1].details as Record<string, unknown>, hit: true };
       const base = cachedEntry.subagentResults;
+      this.emitReusedSubagentEvents(ctx, base, "subtask", cachedEntry.key);
       const result = await this.responseFuser.fuse(ctx, [...imageResults, ...base], steps, costs);
       result.cacheHit = true;
       result.cacheKey = cachedEntry.key;
@@ -672,6 +678,7 @@ export class FusionRouter {
       });
       if (cachedByRequest) {
         log.info("pre-divider stream cache hit — reusing subagent results", { requestCacheKey });
+        this.emitReusedSubagentEvents(ctx, cachedByRequest.subagentResults, "request", cachedByRequest.key);
         const combined = [...imageResults, ...cachedByRequest.subagentResults];
         streamSteps.push({ type: "cache_lookup", label: "Pre-Divider Cache Hit", durationMs: 0 });
         yield* paceReasoningText(
@@ -714,6 +721,10 @@ export class FusionRouter {
         if (requestCacheKey !== undefined) {
           this.reasoningCache.linkRequestKey(requestCacheKey, reuse.entry.key);
         }
+        this.emitReusedSubagentEvents(ctx, reuse.entry.subagentResults, "conversation", reuse.entry.key, {
+          deltaCount: reuse.deltaCount,
+          reason: reuse.reason,
+        });
         const combined = [...imageResults, ...reuse.entry.subagentResults];
         streamSteps.push({ type: "cache_lookup", label: "Conversation Reuse", durationMs: 0 });
         yield* paceReasoningText(
@@ -839,6 +850,7 @@ export class FusionRouter {
       log.info("cache hit — reconstructing subagent results", { key: cacheKey });
       subagentResults = cachedEntry.subagentResults;
       streamSteps.push({ type: "cache_lookup", label: "Sub-task Cache Hit", durationMs: 0 });
+      this.emitReusedSubagentEvents(ctx, subagentResults, "subtask", cachedEntry.key);
       yield* paceReasoningText(
         ctx,
         `Recalling ${subagentResults.length} cached deep-reasoning result(s); skipping duplicate subagent execution.\n\n`,
@@ -1170,6 +1182,64 @@ export class FusionRouter {
 
   private activeFusionContextWindow(ctx: FusionRequestContext, declaredContextWindow: number): number {
     return Math.max(4096, Math.min(ctx.fusionConfig.context_window, declaredContextWindow));
+  }
+
+  private emitReusedSubagentEvents(
+    ctx: FusionRequestContext,
+    results: SubagentResult[],
+    cacheKind: "request" | "conversation" | "subtask",
+    cacheKey: string,
+    extraDetail?: Record<string, unknown>,
+  ): void {
+    emitFusion(ctx, {
+      type: "fusion.subtasks",
+      at: nowIso(),
+      subTasks: results.map((r) => ({
+        id: r.subTask.id,
+        focus: r.subTask.focus_area,
+        model: r.usedModelRouting,
+        description: r.subTask.description.slice(0, 200),
+      })),
+    });
+    emitFusion(ctx, {
+      type: "fusion.phase",
+      at: nowIso(),
+      phase: "subagent_execution",
+      status: "completed",
+      detail: {
+        decision: "reuse",
+        cacheKind,
+        cacheKey,
+        total: results.length,
+        succeeded: results.filter((r) => r.success).length,
+        ...extraDetail,
+      },
+    });
+    for (const result of results) {
+      emitFusion(ctx, {
+        type: "fusion.subagent",
+        at: nowIso(),
+        id: result.subTask.id,
+        focus: result.subTask.focus_area,
+        model: result.usedModelRouting,
+        status: result.success ? "completed" : "failed",
+        chars: result.content.length,
+        durationMs: result.durationMs,
+        error: result.error,
+        detail: {
+          stage: "cache_reused",
+          cacheKind,
+          cacheKey,
+          contextWindow: result.contextWindow,
+          inputBudgetTokens: result.inputBudgetTokens,
+          outputBudgetTokens: result.outputBudgetTokens,
+          contextMessageCount: result.contextMessageCount,
+          droppedMessageCount: result.droppedMessageCount,
+          packedContextTokens: result.packedContextTokens,
+          ...extraDetail,
+        },
+      });
+    }
   }
 
   private largeContextThreshold(activeContextWindow: number): number {

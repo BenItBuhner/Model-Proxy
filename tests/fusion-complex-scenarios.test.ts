@@ -541,5 +541,18 @@ describe("Fusion complex scenarios", () => {
       const evt = event as Record<string, unknown>;
       return evt["type"] === "fusion.cache" && evt["kind"] === "request" && evt["hit"] === true;
     })).toBe(true);
+    expect(secondEvents.some((event) => {
+      const evt = event as Record<string, unknown>;
+      return evt["type"] === "fusion.phase" &&
+        evt["phase"] === "subagent_execution" &&
+        (evt["detail"] as Record<string, unknown> | undefined)?.["decision"] === "reuse";
+    })).toBe(true);
+    const reusedSubagentEvents = secondEvents.filter((event) => {
+      const evt = event as Record<string, unknown>;
+      return evt["type"] === "fusion.subagent" &&
+        (evt["detail"] as Record<string, unknown> | undefined)?.["stage"] === "cache_reused";
+    });
+    expect(reusedSubagentEvents).toHaveLength(2);
+    expect((reusedSubagentEvents[0] as Record<string, unknown>)["status"]).toBe("completed");
   }, 60_000);
 });

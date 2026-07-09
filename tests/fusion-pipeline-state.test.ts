@@ -113,6 +113,51 @@ describe("fusion pipeline state derivation", () => {
     expect(state.subagents[0]?.detail?.["packedContextTokens"]).toBe(11_819);
   });
 
+  it("renders cached subagent reuse as completed live lanes", () => {
+    const events: RequestEvent[] = [
+      {
+        type: "fusion.phase",
+        at: "2026-07-09T00:00:00.100Z",
+        phase: "subagent_execution",
+        status: "completed",
+        detail: {
+          decision: "reuse",
+          cacheKind: "request",
+          cacheKey: "cache-123",
+          total: 1,
+          succeeded: 1,
+        },
+      },
+      {
+        type: "fusion.subagent",
+        at: "2026-07-09T00:00:00.200Z",
+        id: "research-1",
+        focus: "repository",
+        model: "glm-5.2",
+        status: "completed",
+        chars: 1200,
+        durationMs: 830,
+        detail: {
+          stage: "cache_reused",
+          cacheKind: "request",
+          cacheKey: "cache-123",
+          contextWindow: 64_000,
+          inputBudgetTokens: 48_000,
+          outputBudgetTokens: 16_000,
+        },
+      },
+    ];
+
+    const state = derivePipelineState(events);
+
+    expect(state.phases[0]?.detail?.["decision"]).toBe("reuse");
+    expect(state.phases[0]?.detail?.["cacheKind"]).toBe("request");
+    expect(state.subagents[0]?.status).toBe("completed");
+    expect(state.subagents[0]?.detail?.["stage"]).toBe("cache_reused");
+    expect(state.subagents[0]?.detail?.["cacheKey"]).toBe("cache-123");
+    expect(state.subagents[0]?.detail?.["inputBudgetTokens"]).toBe(48_000);
+  });
+
   it("reconstructs completed trace details for historical dashboard views", () => {
     const trace: FusionTraceLike = {
       effort: 2,
