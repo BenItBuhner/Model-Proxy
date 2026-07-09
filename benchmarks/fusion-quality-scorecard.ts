@@ -1,5 +1,8 @@
 import { scoreFusionQuality, type FusionQualityScorecardInput } from "../src/routing/fusion/quality-scorecard.ts";
 
+const startedAt = performance.now();
+const startRss = process.memoryUsage.rss();
+
 const fixture: FusionQualityScorecardInput = {
   subtasks: [
     {
@@ -69,8 +72,25 @@ const fixture: FusionQualityScorecardInput = {
 };
 
 const scorecard = scoreFusionQuality(fixture);
-console.log(JSON.stringify(scorecard, null, 2));
+const elapsedMs = Math.round((performance.now() - startedAt) * 100) / 100;
+const rssDeltaMb = Math.round(((process.memoryUsage.rss() - startRss) / 1024 / 1024) * 100) / 100;
+const report = {
+  scorecard,
+  resource: {
+    elapsedMs,
+    rssDeltaMb,
+    maxElapsedMs: 1000,
+    maxRssDeltaMb: 64,
+  },
+};
 
-if (scorecard.overall < 0.95 || scorecard.details.failedChecks.length > 0) {
+console.log(JSON.stringify(report, null, 2));
+
+if (
+  scorecard.overall < 0.95 ||
+  scorecard.details.failedChecks.length > 0 ||
+  elapsedMs > report.resource.maxElapsedMs ||
+  rssDeltaMb > report.resource.maxRssDeltaMb
+) {
   process.exitCode = 1;
 }

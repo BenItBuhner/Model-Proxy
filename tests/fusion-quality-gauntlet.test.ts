@@ -5,6 +5,7 @@ import { modelConfigLoader } from "../src/config/model-loader.ts";
 import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { resetKeyState } from "../src/providers/api-key-manager.ts";
 import { closeOperationalDbForTests } from "../src/storage/operational-db.ts";
+import { scoreFusionQuality } from "../src/routing/fusion/quality-scorecard.ts";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -242,7 +243,8 @@ describe("Fusion quality gauntlet", () => {
       divider: Array<Record<string, unknown>>;
       subagent: Array<Record<string, unknown>>;
       fuser: Array<Record<string, unknown>>;
-    } = { divider: [], subagent: [], fuser: [] };
+      finalPrompt: string;
+    } = { divider: [], subagent: [], fuser: [], finalPrompt: "" };
 
     globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
@@ -310,6 +312,7 @@ describe("Fusion quality gauntlet", () => {
 
       captured.fuser.push(body);
       const finalPrompt = extractMessageText(messages);
+      captured.finalPrompt = finalPrompt;
       expect(tools).toHaveLength(64);
       expect(finalPrompt.length).toBeLessThan(9_000);
       expect(finalPrompt).toContain("Focus: software architecture");
@@ -353,6 +356,33 @@ describe("Fusion quality gauntlet", () => {
     ]);
     expect(result.fusionTrace?.subagentDetails?.every((detail) =>
       detail.contextPack?.logicalContextWindow === 10_000_000)).toBe(true);
+    const scorecard = scoreFusionQuality({
+      subtasks: result.subagentResults.map((item) => ({
+        focus: item.subTask.focus_area,
+        model: item.usedModelRouting,
+        description: item.subTask.description,
+      })),
+      advisories: result.subagentResults.map((item) => ({
+        focus: item.subTask.focus_area,
+        model: item.usedModelRouting,
+        content: item.content,
+        contextCoveragePercent: item.contextPack?.coveragePercent,
+      })),
+      finalPrompt: captured.finalPrompt,
+      finalToolCount: finalTools.length,
+      subagentRequests: captured.subagent.map((request) => ({
+        hasTools: request["tools"] !== undefined,
+        toolChoice: typeof request["tool_choice"] === "string" ? request["tool_choice"] : undefined,
+        stream: request["stream"] === true,
+      })),
+    });
+    expect(scorecard.overall).toBeGreaterThanOrEqual(0.95);
+    expect(scorecard.domainCoverage).toBe(1);
+    expect(scorecard.modelDiversity).toBe(1);
+    expect(scorecard.terseHandoff).toBe(1);
+    expect(scorecard.safety).toBe(1);
+    expect(scorecard.finalToolAuthority).toBe(1);
+    expect(scorecard.details.failedChecks).toEqual([]);
     expect(captured.divider).toHaveLength(1);
     expect(captured.subagent).toHaveLength(4);
     expect(captured.fuser).toHaveLength(1);
