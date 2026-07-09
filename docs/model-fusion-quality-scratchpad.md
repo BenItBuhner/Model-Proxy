@@ -27,7 +27,8 @@ Validate the deterministic scorecard against actual mocked Fusion gauntlet outpu
 - `src/routing/fusion/quality-scorecard.ts` adds a deterministic scorecard over domain coverage, model diversity, terse handoff, safety, and final-tool authority.
 - `bun run eval:fusion-scorecard` emits JSON suitable for quick review without live model calls; current fixture scored overall 1.0 with 596 prompt chars, max 97 advisory chars, four domains, four unique models, and no failed checks.
 - The live mocked gauntlet output now feeds the same scorecard and asserts overall >= 0.95 plus perfect domain coverage, model diversity, terse handoff, safety, final-tool authority, and no failed checks.
-- The scorecard benchmark reports resource budget evidence; the latest focused run completed in 5.06 ms with 1.63 MB RSS delta against limits of 1000 ms and 64 MB.
+- The scorecard benchmark now runs three deterministic hard-case fixtures: TypeScript scheduler proof/rollout, Rust async backpressure proof, and symbolic math kernel correctness.
+- The latest scorecard suite run scored minOverall 1.0 / averageOverall 1.0 with no failed cases, completing in 3.71 ms with 1.88 MB RSS delta against limits of 1000 ms and 64 MB.
 
 ## Test Results
 - 2026-07-09: `bun test tests/fusion-complexity-scorer.test.ts tests/fusion-quality-gauntlet.test.ts` passed, 8 tests / 59 assertions.
@@ -35,6 +36,11 @@ Validate the deterministic scorecard against actual mocked Fusion gauntlet outpu
 - 2026-07-09: `bun test tests/fusion-complex-scenarios.test.ts` passed, 4 tests / 136 assertions.
 - 2026-07-09: `bun test tests/multi-user-auth.test.ts` passed, 4 tests / 22 assertions after a transient full-suite timeout.
 - 2026-07-09: `bun test` passed, 358 tests / 1409 assertions.
+- 2026-07-09: `bun run typecheck` passed.
+- 2026-07-09: `bun run build` passed.
+- 2026-07-09: `git diff --check` passed.
+- 2026-07-09: Expanded `bun run eval:fusion-scorecard` suite passed 3 cases with minOverall 1.0, averageOverall 1.0, elapsedMs 3.71, and rssDeltaMb 1.88.
+- 2026-07-09: `bun run eval:fusion-quality` passed, 10 tests / 78 assertions after expanding the scorecard suite.
 - 2026-07-09: `bun run typecheck` passed.
 - 2026-07-09: `bun run build` passed.
 - 2026-07-09: `git diff --check` passed.

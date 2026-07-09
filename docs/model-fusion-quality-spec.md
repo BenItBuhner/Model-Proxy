@@ -37,4 +37,4 @@ Push `fusion-beta` beyond plumbing correctness by measuring whether it produces 
 - [x] Scorecard evaluator reports measurable SWE/math/diversity/safety/terse-handoff scores.
 - [x] Scorecard has a low-resource command and regression tests.
 - [x] Scorecard is applied to the live mocked Fusion gauntlet output.
-- [x] Scorecard command reports elapsed time and RSS delta budget checks.
+- [x] Scorecard command reports elapsed time and RSS delta budget checks across multiple hard-case fixtures.
