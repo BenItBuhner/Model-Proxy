@@ -162,4 +162,68 @@ describe("fusion pipeline state derivation", () => {
     expect(state.subagents[0]?.detail?.["contextMessageCount"]).toBe(38);
     expect(state.subagents[0]?.detail?.["droppedMessageCount"]).toBe(102);
   });
+
+  it("preserves streaming trace step detail in historical dashboard views", () => {
+    const trace: FusionTraceLike = {
+      effort: 2,
+      fusionEffort: "F2",
+      complexityScore: 0.39,
+      complexityReason: "resolved within synthesis context",
+      subTaskCount: 0,
+      cacheHit: false,
+      totalTokens: 80,
+      fusedByModelRouting: "glm-5.2",
+      steps: [
+        {
+          type: "subagent_execution",
+          label: "Subagent Execution Skipped",
+          durationMs: 0,
+          detail: {
+            useSubagents: false,
+            reason: "moderate request is within synthesis model context",
+            largeContext: false,
+          },
+        },
+      ],
+    };
+
+    const state = stateFromTrace(trace);
+
+    expect(state.phases[0]?.key).toBe("subagent_execution");
+    expect(state.phases[0]?.detail?.["useSubagents"]).toBe(false);
+    expect(state.phases[0]?.detail?.["reason"]).toBe("moderate request is within synthesis model context");
+  });
+
+  it("reconstructs cache lookup steps as cache phases instead of scoring phases", () => {
+    const trace: FusionTraceLike = {
+      effort: 3,
+      fusionEffort: "F3",
+      complexityScore: 0.82,
+      complexityReason: "large tool-heavy request",
+      subTaskCount: 2,
+      cacheHit: true,
+      cacheKey: "abc123",
+      totalTokens: 200,
+      fusedByModelRouting: "glm-5.2",
+      steps: [
+        {
+          type: "cache_lookup",
+          label: "Conversation Reuse",
+          durationMs: 0,
+          detail: {
+            hit: true,
+            deltaCount: 1,
+            reason: "assistant-only continuation",
+          },
+        },
+      ],
+    };
+
+    const state = stateFromTrace(trace);
+
+    expect(state.phases[0]?.key).toBe("cache_lookup");
+    expect(state.phases[0]?.detail?.["hit"]).toBe(true);
+    expect(state.phases[0]?.detail?.["reason"]).toBe("assistant-only continuation");
+    expect(state.caches[0]?.hit).toBe(true);
+  });
 });

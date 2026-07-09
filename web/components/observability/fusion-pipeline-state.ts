@@ -3,6 +3,7 @@ import type { RequestEvent } from "../../lib/test-events";
 export type PhaseKey =
   | "image_preprocessing"
   | "complexity_scoring"
+  | "cache_lookup"
   | "task_division"
   | "subagent_execution"
   | "synthesis"
@@ -11,6 +12,7 @@ export type PhaseKey =
 export const PHASE_LABEL: Record<PhaseKey, string> = {
   image_preprocessing: "images",
   complexity_scoring: "scoring",
+  cache_lookup: "cache",
   task_division: "task division",
   subagent_execution: "subagents",
   synthesis: "synthesis",
@@ -67,6 +69,7 @@ export interface FusionTraceLike {
     label: string;
     durationMs: number;
     modelRouting?: string;
+    detail?: Record<string, unknown>;
     details?: Record<string, unknown>;
   }>;
   subagentDetails?: Array<{
@@ -228,7 +231,7 @@ export function stateFromTrace(trace: FusionTraceLike): PipelineState {
     status: step.label.toLowerCase().includes("failed") ? "failed" : "completed",
     durationMs: step.durationMs,
     modelRouting: step.modelRouting,
-    detail: step.details,
+    detail: step.details ?? step.detail,
     at: "",
   }));
   return {
@@ -275,6 +278,7 @@ export function normalizeStepType(type: string): PhaseKey {
   switch (type) {
     case "image_preprocessing":
     case "complexity_scoring":
+    case "cache_lookup":
     case "task_division":
     case "subagent_execution":
     case "synthesis":
