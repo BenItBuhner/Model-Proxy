@@ -386,4 +386,40 @@ describe("searchConversationContext", () => {
     expect(result).toContain("websocket handler");
     expect(result).toContain("role=user");
   });
+
+  it("returns coverage metadata and stratified recent matches for large conversations", () => {
+    const messages = Array.from({ length: 30 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message-${index} unrelated deployment notes`,
+    }));
+    messages[2] = { role: "user", content: "EARLY_SENTINEL websocket frame buffer backpressure details" };
+    messages[14] = { role: "assistant", content: "MIDDLE_SENTINEL websocket frames retry queue analysis" };
+    messages[29] = { role: "user", content: "RECENT_SENTINEL frames still drop under websocket load" };
+
+    const result = searchConversationContext(messages, "websocket frames");
+
+    expect(result).toContain("Coverage: 3/30 messages matched");
+    expect(result).toContain("Matched roles:");
+    expect(result).toContain("Returning 3 stratified excerpt");
+    expect(result).toContain("EARLY_SENTINEL");
+    expect(result).toContain("MIDDLE_SENTINEL");
+    expect(result).toContain("RECENT_SENTINEL");
+  });
+
+  it("extracts searchable text from structured message content", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Structured payload mentions fallback retries." },
+          { type: "image_url", image_url: { url: "data:image/png;base64,abc" } },
+        ],
+      },
+    ];
+
+    const result = searchConversationContext(messages, "fallback retries");
+
+    expect(result).toContain("Structured payload mentions fallback retries");
+    expect(result).toContain("[message 1/1, role=user");
+  });
 });
