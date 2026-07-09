@@ -152,6 +152,7 @@ describe("SubagentExecutor reasoning-only subagents", () => {
 
   it("does not declare tools upstream and supplies a pre-triaged context briefing", async () => {
     const capturedBodies: Array<Record<string, unknown>> = [];
+    const emitted: Array<Record<string, unknown>> = [];
     globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
       capturedBodies.push(body);
@@ -161,11 +162,22 @@ describe("SubagentExecutor reasoning-only subagents", () => {
     const ctx = makeCtx([
       { role: "user", content: "The fallback router retry behavior seems wrong when providers time out." },
     ]);
+    ctx.obsEmit = (event) => emitted.push(event as Record<string, unknown>);
     const results = await executor.execute(ctx, [subTask]);
 
     expect(results.length).toBe(1);
     expect(results[0].success).toBe(true);
     expect(results[0].content).toContain("exponential backoff");
+    const completed = emitted.find((event) =>
+      event["type"] === "fusion.subagent" && event["status"] === "completed");
+    const completedDetail = completed?.["detail"] as Record<string, unknown> | undefined;
+    expect(completedDetail?.["stage"]).toBe("completed");
+    expect(completedDetail?.["contextWindow"]).toBe(64_000);
+    expect(completedDetail?.["inputBudgetTokens"]).toBe(48_000);
+    expect(completedDetail?.["outputBudgetTokens"]).toBe(16_000);
+    expect(completedDetail?.["contextMessageCount"]).toBe(1);
+    expect(completedDetail?.["droppedMessageCount"]).toBe(0);
+    expect(completedDetail?.["packedContextTokens"]).toBeGreaterThan(0);
 
     const firstBody = capturedBodies[0];
     expect("tools" in firstBody).toBe(false);

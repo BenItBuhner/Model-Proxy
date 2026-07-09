@@ -238,12 +238,16 @@ export class SubagentExecutor {
     let allContent = "";
     let attempts = 0;
     let nudgeNoTools = false;
+    let lastBudget: SubagentContextBudget | undefined;
+    let lastMessagePack: SubagentMessagePack | undefined;
 
     for (let attempt = 1; attempt <= MAX_SUBAGENT_RETRIES; attempt++) {
       attempts = attempt;
       try {
         const budget = this.subagentContextBudget(ctx, modelRouting);
         const messagePack = this.buildSubagentMessages(ctx, subTask, modelRouting, budget, attempt, nudgeNoTools);
+        lastBudget = budget;
+        lastMessagePack = messagePack;
         emitFusion(ctx, {
           type: "fusion.subagent",
           at: nowIso(),
@@ -318,6 +322,15 @@ export class SubagentExecutor {
             attempt,
             chars: content.length,
             durationMs,
+            detail: {
+              stage: "completed",
+              contextWindow: budget.contextWindow,
+              inputBudgetTokens: budget.inputBudgetTokens,
+              outputBudgetTokens: budget.outputBudgetTokens,
+              contextMessageCount: messagePack.contextMessageCount,
+              droppedMessageCount: messagePack.droppedMessageCount,
+              packedContextTokens: messagePack.packedContextTokens,
+            },
           });
 
           return {
@@ -391,6 +404,7 @@ export class SubagentExecutor {
       chars: allContent.length,
       durationMs,
       error: lastError,
+      detail: this.subagentTerminalDetail("failed", lastBudget, lastMessagePack),
     });
     return {
       subTask,
@@ -400,6 +414,29 @@ export class SubagentExecutor {
       content: allContent,
       error: lastError,
       durationMs,
+      contextWindow: lastBudget?.contextWindow,
+      inputBudgetTokens: lastBudget?.inputBudgetTokens,
+      outputBudgetTokens: lastBudget?.outputBudgetTokens,
+      contextMessageCount: lastMessagePack?.contextMessageCount,
+      droppedMessageCount: lastMessagePack?.droppedMessageCount,
+      packedContextTokens: lastMessagePack?.packedContextTokens,
+    };
+  }
+
+  private subagentTerminalDetail(
+    stage: "completed" | "failed",
+    budget: SubagentContextBudget | undefined,
+    messagePack: SubagentMessagePack | undefined,
+  ): Record<string, unknown> | undefined {
+    if (budget === undefined || messagePack === undefined) return undefined;
+    return {
+      stage,
+      contextWindow: budget.contextWindow,
+      inputBudgetTokens: budget.inputBudgetTokens,
+      outputBudgetTokens: budget.outputBudgetTokens,
+      contextMessageCount: messagePack.contextMessageCount,
+      droppedMessageCount: messagePack.droppedMessageCount,
+      packedContextTokens: messagePack.packedContextTokens,
     };
   }
 

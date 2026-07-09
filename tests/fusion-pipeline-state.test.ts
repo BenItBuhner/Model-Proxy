@@ -80,6 +80,39 @@ describe("fusion pipeline state derivation", () => {
     expect(state.subagents[0]?.chars).toBe(800);
   });
 
+  it("keeps context metrics when only the terminal subagent event is available", () => {
+    const events: RequestEvent[] = [
+      {
+        type: "fusion.subagent",
+        at: "2026-07-09T00:00:01.000Z",
+        id: "research-1",
+        focus: "repository",
+        model: "glm-5.2",
+        status: "completed",
+        attempt: 1,
+        chars: 800,
+        durationMs: 800,
+        detail: {
+          stage: "completed",
+          contextWindow: 64_000,
+          inputBudgetTokens: 48_000,
+          outputBudgetTokens: 16_000,
+          contextMessageCount: 38,
+          droppedMessageCount: 102,
+          packedContextTokens: 11_819,
+        },
+      },
+    ];
+
+    const state = derivePipelineState(events);
+
+    expect(state.subagents[0]?.status).toBe("completed");
+    expect(state.subagents[0]?.detail?.["stage"]).toBe("completed");
+    expect(state.subagents[0]?.detail?.["contextWindow"]).toBe(64_000);
+    expect(state.subagents[0]?.detail?.["droppedMessageCount"]).toBe(102);
+    expect(state.subagents[0]?.detail?.["packedContextTokens"]).toBe(11_819);
+  });
+
   it("reconstructs completed trace details for historical dashboard views", () => {
     const trace: FusionTraceLike = {
       effort: 2,
