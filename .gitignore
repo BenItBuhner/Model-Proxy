@@ -36,8 +36,8 @@ tsconfig.tsbuildinfo
 config/models.json
 
 # Per-model user-editable configs (tracked on the server, not in git)
-config/models/
-config/providers/
+config/models/*
+config/providers/*
 
 # Logs
 *.log
