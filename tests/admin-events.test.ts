@@ -420,6 +420,121 @@ describe("request-scoped event tracing", () => {
     expect(finished?.fusionTrace?.["fusionRunId"]).toBe(body.fusion_trace?.fusionRunId);
   });
 
+  test("streaming fusion request snapshot preserves completed live pipeline trace", async () => {
+    FakeProvider.responses = [
+      {
+        id: "divide-stream-1",
+        object: "chat.completion",
+        choices: [{
+          index: 0,
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: "call_divide_stream",
+              type: "function",
+              function: {
+                name: "divide_task",
+                arguments: JSON.stringify({
+                  sub_tasks: [
+                    {
+                      id: "stream-repo-context",
+                      description: "Analyze repository context during streaming Fusion.",
+                      focus_area: "repository",
+                      suggested_model_routing: "fakee-model",
+                    },
+                    {
+                      id: "stream-dashboard",
+                      description: "Analyze live dashboard event coverage during streaming Fusion.",
+                      focus_area: "observability",
+                      suggested_model_routing: "fakee-model",
+                    },
+                  ],
+                }),
+              },
+            }],
+          },
+          finish_reason: "tool_calls",
+        }],
+      },
+    ];
+    FakeProvider.streamResponses = [
+      "Streaming repository context analysis only.",
+      "Streaming dashboard event analysis only.",
+      "Streaming final fused answer from HTTP-level Fusion.",
+    ];
+    const tools = Array.from({ length: 9 }, (_, index) => ({
+      type: "function",
+      function: {
+        name: `stream_final_tool_${index + 1}`,
+        description: "Tool for the streaming final model only.",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+    }));
+
+    const id = "test-req-fusion-stream-e2e";
+    const inferRes = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json", "x-request-id": id },
+      body: JSON.stringify({
+        model: "fusion-e2e",
+        messages: [
+          { role: "system", content: "You are testing streaming Fusion observability." },
+          {
+            role: "user",
+            content: "Stream a complex Fusion verification pass with many possible final tools.",
+          },
+        ],
+        stream: true,
+        tools,
+        tool_choice: "auto",
+        fusion_effort: "high",
+      }),
+    });
+    expect(inferRes.status).toBe(200);
+    const streamText = await inferRes.text();
+    expect(streamText).toContain("Streaming final fused answer from HTTP-level Fusion.");
+    expect(streamText.trim().endsWith("data: [DONE]")).toBe(true);
+
+    expect(FakeProvider.streamCalls).toHaveLength(3);
+    for (const call of FakeProvider.streamCalls.slice(0, 2)) {
+      expect(call.args.tools).toBeUndefined();
+      expect(call.args.tool_choice).toBe("none");
+      expect(call.args.stream).toBe(true);
+    }
+    expect(FakeProvider.streamCalls[2]?.args.tools).toHaveLength(9);
+    expect(FakeProvider.streamCalls[2]?.args.tool_choice).toBe("auto");
+
+    const snapRes = await app.request(`/v1/admin/events/${encodeURIComponent(id)}`, { headers: auth });
+    expect(snapRes.status).toBe(200);
+    const snap = (await snapRes.json()) as {
+      finished: boolean;
+      events: Array<{
+        type: string;
+        status?: string;
+        fusionTrace?: Record<string, unknown>;
+        trace?: Record<string, unknown>;
+        detail?: Record<string, unknown>;
+      }>;
+    };
+    expect(snap.finished).toBe(true);
+    const types = snap.events.map((event) => event.type);
+    expect(types).toContain("fusion.pipeline.started");
+    expect(types).toContain("fusion.subagent");
+    expect(types).toContain("fusion.pipeline.completed");
+    expect(types).toContain("route.succeeded");
+    expect(types[types.length - 1]).toBe("request.finished");
+    const completed = snap.events.find((event) => event.type === "fusion.pipeline.completed");
+    const finished = snap.events.find((event) => event.type === "request.finished");
+    expect(completed?.trace?.["subTaskCount"]).toBe(2);
+    expect(completed?.trace?.["cacheHit"]).toBe(false);
+    expect(finished?.fusionTrace?.["subTaskCount"]).toBe(2);
+    expect(finished?.fusionTrace?.["fusionRunId"]).toBe(completed?.trace?.["fusionRunId"]);
+    const terminalSubagent = snap.events.find((event) =>
+      event.type === "fusion.subagent" && event.status === "completed" && event.detail?.["stage"] === "completed");
+    expect(terminalSubagent?.detail?.["contextWindow"]).toBe(128_000);
+  });
+
   test("snapshot 404s for unknown requestId", async () => {
     const res = await app.request("/v1/admin/events/never-existed", {
       headers: auth,
