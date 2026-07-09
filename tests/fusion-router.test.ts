@@ -252,6 +252,64 @@ describe("FusionRouter", () => {
     expect(decision.signals["referencedFileCount"]).toBeGreaterThanOrEqual(3);
   });
 
+  it("scales large-context subagent gating against the active fusion context window", () => {
+    const message = "Analyze this long but focused transcript without code changes.";
+    const baseCtx: FusionRequestContext = {
+      logicalModel: "fusion-beta",
+      fusionConfig: {
+        ...testFusionConfig,
+        context_window: 1_000_000,
+        fusion: { ...testFusionConfig.fusion, model_routing: "__missing-large-window-test-model__" },
+      },
+      requestData: {
+        messages: [{ role: "user", content: message }],
+      },
+      clientProtocol: "openai",
+      messages: [{ role: "user", content: message }],
+      runtimeEffort: 2,
+      resolvedFusionEffort: "F2",
+    };
+    const score: ComplexityScore = {
+      score: 0.45,
+      effort: 2,
+      fusionEffort: "F2",
+      reason: "long focused transcript",
+      tokenCount: 30_000,
+    };
+
+    const largeWindowDecision = (router as unknown as {
+      evaluateSubagentNeed: (ctx: FusionRequestContext, score: ComplexityScore) => {
+        useSubagents: boolean;
+        signals: Record<string, unknown>;
+      };
+    }).evaluateSubagentNeed(baseCtx, score);
+
+    expect(largeWindowDecision.useSubagents).toBe(false);
+    expect(largeWindowDecision.signals["declaredFusionContextWindow"]).toBe(128_000);
+    expect(largeWindowDecision.signals["activeFusionContextWindow"]).toBe(128_000);
+    expect(largeWindowDecision.signals["largeContextThreshold"]).toBeGreaterThan(score.tokenCount);
+
+    const smallWindowCtx: FusionRequestContext = {
+      ...baseCtx,
+      fusionConfig: {
+        ...baseCtx.fusionConfig,
+        context_window: 16_000,
+      },
+    };
+    const smallWindowDecision = (router as unknown as {
+      evaluateSubagentNeed: (ctx: FusionRequestContext, score: ComplexityScore) => {
+        useSubagents: boolean;
+        reason: string;
+        signals: Record<string, unknown>;
+      };
+    }).evaluateSubagentNeed(smallWindowCtx, score);
+
+    expect(smallWindowDecision.useSubagents).toBe(true);
+    expect(smallWindowDecision.reason).toContain("large context");
+    expect(smallWindowDecision.signals["activeFusionContextWindow"]).toBe(16_000);
+    expect(smallWindowDecision.signals["largeContextThreshold"]).toBe(8_000);
+  });
+
   it("does not spawn subagents for a disabled tool surface alone", () => {
     const tools = Array.from({ length: 12 }, (_, i) => ({
       type: "function",

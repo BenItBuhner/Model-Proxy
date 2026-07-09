@@ -20,6 +20,7 @@ import { ImagePreprocessor } from "./image-preprocessor.ts";
 import { captureFusionEmitter, emitFusion, nowIso } from "./fusion-events.ts";
 import { resolvePricing, calculateCosts } from "../../observability/pricing.ts";
 import { currentRequestId } from "../../observability/request-context.ts";
+import { modelConfigLoader } from "../../config/model-loader.ts";
 import {
   finishFusionRun,
   hashFusionValue,
@@ -1106,7 +1107,10 @@ export class FusionRouter {
         (Array.isArray((msg as Record<string, unknown>)["content"]) &&
           ((msg as Record<string, unknown>)["content"] as unknown[]).some((part) =>
             typeof part === "object" && part !== null && (part as Record<string, unknown>)["type"] === "tool_result"))));
-    const largeContext = score.tokenCount >= 24_000;
+    const declaredFusionContextWindow = this.resolveDeclaredContextWindow(ctx.fusionConfig.fusion.model_routing);
+    const activeFusionContextWindow = this.activeFusionContextWindow(ctx, declaredFusionContextWindow);
+    const largeContextThreshold = this.largeContextThreshold(activeFusionContextWindow);
+    const largeContext = score.tokenCount >= largeContextThreshold;
     const manyTools = toolUseAllowed && tools.length >= 8;
     const longConversation = messageCount >= 10;
     const explicitHigh = ctx.resolvedFusionEffort === "F3";
@@ -1119,6 +1123,9 @@ export class FusionRouter {
       messageCount,
       toolCount: tools.length,
       toolUseAllowed,
+      declaredFusionContextWindow,
+      activeFusionContextWindow,
+      largeContextThreshold,
       largeContext,
       manyTools,
       longConversation,
@@ -1159,6 +1166,24 @@ export class FusionRouter {
       reason: "moderate request is within synthesis model context; subagents would add latency without clear benefit",
       signals,
     };
+  }
+
+  private activeFusionContextWindow(ctx: FusionRequestContext, declaredContextWindow: number): number {
+    return Math.max(4096, Math.min(ctx.fusionConfig.context_window, declaredContextWindow));
+  }
+
+  private largeContextThreshold(activeContextWindow: number): number {
+    return Math.max(8_000, Math.min(160_000, Math.floor(activeContextWindow * 0.35)));
+  }
+
+  private resolveDeclaredContextWindow(modelRouting: string): number {
+    try {
+      const cfg = modelConfigLoader.loadConfig(modelRouting);
+      const primary = cfg.model_routings[0];
+      return primary?.context_window ?? cfg.context_window ?? 128_000;
+    } catch {
+      return 128_000;
+    }
   }
 
   private shouldCacheSubagentResults(results: SubagentResult[]): boolean {
