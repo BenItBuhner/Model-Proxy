@@ -62,6 +62,6 @@ Implement the full 5-layer Model Fusion architecture in Model-Proxy-ts, enabling
 - [ ] Step 8: Subagent tool/sandbox backend removed; context is pre-packed by the proxy
 - [ ] Step 9: Goalpost-triggered SSE streaming works
 - [ ] Step 10: Admin UI Fusion tab visible
-- [ ] Step 11: Both OpenAI and Anthropic wire protocols supported
+- [x] Step 11: Both OpenAI and Anthropic wire protocols supported
 - [ ] Step 12: Edge cases handled, all tests pass
 - [ ] End-to-end: `fusion-beta` model responds to chat completions

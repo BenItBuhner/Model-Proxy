@@ -519,6 +519,10 @@ async function handleAnthropicFusionRequest({
       enforceEnabled: false,
     });
     try {
+      if (isStream) {
+        return handleAnthropicFusionStream(fusionRouter, fusionCtx, requestId, startedAt);
+      }
+
       const result = await fusionRouter.route(fusionCtx);
       const response = anthropicFusionResponse(requestId, logicalModel, result);
       const totalMs = Math.round(performance.now() - startedAt);
@@ -536,15 +540,7 @@ async function handleAnthropicFusionRequest({
         resolvedModel: result.fusedByModelRouting,
       });
       emit({ type: "request.finished", at: nowIso(), status: 200, totalMs, fusionTrace: result.fusionTrace } as any);
-      if (!isStream) return c.json(response);
-      return new Response(anthropicFusionStream(response), {
-        headers: {
-          "Content-Type": "text/event-stream; charset=utf-8",
-          "Cache-Control": "no-cache, no-transform",
-          Connection: "keep-alive",
-          "X-Accel-Buffering": "no",
-        },
-      });
+      return c.json(response);
     } catch (err) {
       const totalMs = Math.round(performance.now() - startedAt);
       const message = err instanceof Error ? err.message : String(err);
@@ -561,6 +557,104 @@ async function handleAnthropicFusionRequest({
       emit({ type: "request.finished", at: nowIso(), status: 500, totalMs, errorType, errorMessage: message });
       return c.json(errorPayload, 500);
     }
+  });
+}
+
+function handleAnthropicFusionStream(
+  fusionRouter: FusionRouter,
+  fusionCtx: FusionRequestContext,
+  requestId: string,
+  startedAt: number,
+): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const encoder = new TextEncoder();
+      let clientGone = false;
+      let lastWrite = Date.now();
+      const safeEnqueue = (text: string): boolean => {
+        if (clientGone) return false;
+        try {
+          controller.enqueue(encoder.encode(text));
+          lastWrite = Date.now();
+          return true;
+        } catch {
+          clientGone = true;
+          return false;
+        }
+      };
+
+      const heartbeat = setInterval(() => {
+        if (Date.now() - lastWrite < STREAM_HEARTBEAT_MS) return;
+        if (!safeEnqueue(`: keep-alive ${Date.now()}\n\n`)) clearInterval(heartbeat);
+      }, Math.max(1_000, Math.floor(STREAM_HEARTBEAT_MS / 2)));
+
+      let status = 200;
+      try {
+        for await (const event of fusionRouter.stream(fusionCtx)) {
+          if (!safeEnqueue(event)) break;
+        }
+      } catch (err) {
+        status = 500;
+        const message = err instanceof Error ? err.message : String(err);
+        const payload = { type: "error", error: { type: "api_error", message: `Fusion error: ${message}` } };
+        safeEnqueue(`event: error\ndata: ${JSON.stringify(payload)}\n\n`);
+      } finally {
+        clearInterval(heartbeat);
+        try {
+          controller.close();
+        } catch {
+          // stream already errored/cancelled
+        }
+      }
+
+      const totalMs = Math.round(performance.now() - startedAt);
+      emit({
+        type: "route.attempted",
+        at: nowIso(),
+        attempt: 1,
+        provider: "fusion",
+        model: "fusion-stream",
+        wireProtocol: "anthropic",
+        isFallback: false,
+        keyHint: "fusion",
+      });
+      if (status === 200) {
+        emit({
+          type: "route.succeeded",
+          at: nowIso(),
+          attempt: 1,
+          provider: "fusion",
+          model: "fusion-stream",
+          latencyMs: totalMs,
+        });
+      }
+      recordRequestFinish({
+        requestId,
+        responseStatus: status,
+        responseTimeMs: totalMs,
+        resolvedModel: "fusion-stream",
+        resolvedProvider: "fusion",
+      });
+      const finishEvent: Record<string, unknown> = {
+        type: "request.finished",
+        at: nowIso(),
+        status,
+        totalMs,
+      };
+      if (fusionCtx.streamFusionTrace !== undefined) {
+        finishEvent["fusionTrace"] = fusionCtx.streamFusionTrace;
+      }
+      emit(finishEvent as never);
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
   });
 }
 
@@ -621,56 +715,4 @@ function anthropicFusionResponse(
   }
   if (result.fusionTrace !== undefined) response["fusion_trace"] = result.fusionTrace;
   return response;
-}
-
-function anthropicFusionStream(response: Record<string, unknown>): ReadableStream<Uint8Array> {
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      const encoder = new TextEncoder();
-      const send = (event: string, payload: Record<string, unknown>) =>
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`));
-
-      const content = (response["content"] as Array<Record<string, unknown>>) ?? [];
-      const usage = response["usage"] ?? { input_tokens: 0, output_tokens: 0 };
-      const message = { ...response, content: [], stop_reason: null, stop_sequence: null };
-      send("message_start", { type: "message_start", message });
-
-      for (let index = 0; index < content.length; index++) {
-        const block = content[index];
-        if (block["type"] === "tool_use") {
-          send("content_block_start", {
-            type: "content_block_start",
-            index,
-            content_block: { type: "tool_use", id: block["id"], name: block["name"], input: {} },
-          });
-          send("content_block_delta", {
-            type: "content_block_delta",
-            index,
-            delta: { type: "input_json_delta", partial_json: JSON.stringify(block["input"] ?? {}) },
-          });
-        } else {
-          const text = typeof block["text"] === "string" ? (block["text"] as string) : "";
-          send("content_block_start", {
-            type: "content_block_start",
-            index,
-            content_block: { type: "text", text: "" },
-          });
-          send("content_block_delta", {
-            type: "content_block_delta",
-            index,
-            delta: { type: "text_delta", text },
-          });
-        }
-        send("content_block_stop", { type: "content_block_stop", index });
-      }
-
-      send("message_delta", {
-        type: "message_delta",
-        delta: { stop_reason: response["stop_reason"], stop_sequence: null },
-        usage,
-      });
-      send("message_stop", { type: "message_stop" });
-      controller.close();
-    },
-  });
 }

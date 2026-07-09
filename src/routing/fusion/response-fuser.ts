@@ -298,10 +298,13 @@ export class ResponseFuser {
         }
       }
 
+      const targetProtocol = wireProtocol === "anthropic"
+        ? this.resolveAnthropicSynthesisStreamTarget(fusionModel)
+        : "openai";
       const streamGen = this.fallbackRouter.streamWithFallback({
         logicalModel: fusionModel,
         requestData: fusionRequestData,
-        targetProtocol: wireProtocol === "anthropic" ? "anthropic" : "openai",
+        targetProtocol,
         signal,
         principal: ctx.principal,
         extraHeaders: ctx.extraHeaders,
@@ -309,6 +312,8 @@ export class ResponseFuser {
 
       if (wireProtocol !== "anthropic" && this.summarizer.isEnabled(ctx)) {
         yield* this.streamWithReasoningSummaries(ctx, streamGen);
+      } else if (wireProtocol === "anthropic" && targetProtocol === "openai") {
+        yield* this.openAIStreamToAnthropic(ctx, streamGen);
       } else {
         for await (const chunk of streamGen) {
           yield chunk;
@@ -333,19 +338,203 @@ export class ResponseFuser {
         modelRouting: fusionModel,
         detail: { error: String(err) },
       });
-      const fallbackChunk = {
-        id: `chatcmpl-fallback-${Date.now()}`,
-        object: "chat.completion.chunk",
-        created: Math.floor(Date.now() / 1000),
-        model: fusionModel,
-        choices: [{
-          index: 0,
-          delta: { role: "assistant", content: appendedContent || "[Fusion synthesis failed]" },
-          finish_reason: "stop",
-        }],
-      };
-      yield `data: ${JSON.stringify(fallbackChunk)}\n\n`;
+      if (wireProtocol === "anthropic") {
+        yield* this.anthropicTextStream(ctx, fusionModel, appendedContent || "[Fusion synthesis failed]", "end_turn");
+      } else {
+        const fallbackChunk = {
+          id: `chatcmpl-fallback-${Date.now()}`,
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model: fusionModel,
+          choices: [{
+            index: 0,
+            delta: { role: "assistant", content: appendedContent || "[Fusion synthesis failed]" },
+            finish_reason: "stop",
+          }],
+        };
+        yield `data: ${JSON.stringify(fallbackChunk)}\n\n`;
+      }
     }
+  }
+
+  private async *openAIStreamToAnthropic(
+    ctx: FusionRequestContext,
+    streamGen: AsyncGenerator<string, void, unknown>,
+  ): AsyncGenerator<string, void, unknown> {
+    const messageId = `msg-${ctx.requestId ?? Date.now()}`;
+    const model = ctx.logicalModel;
+    let textStarted = false;
+    let blockIndex = 0;
+    const toolBlockIndexes = new Map<number, number>();
+    let stopped = false;
+    const formatEvent = (event: string, payload: Record<string, unknown>) => this.anthropicEvent(event, payload);
+
+    yield this.anthropicEvent("message_start", {
+      type: "message_start",
+      message: {
+        id: messageId,
+        type: "message",
+        role: "assistant",
+        model,
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 0, output_tokens: 0 },
+      },
+    });
+
+    const ensureTextBlock = function* (): Generator<string, void, unknown> {
+      if (textStarted) return;
+      textStarted = true;
+      yield formatEvent("content_block_start", {
+        type: "content_block_start",
+        index: blockIndex,
+        content_block: { type: "text", text: "" },
+      });
+    }.bind(this);
+
+    const stopTextBlock = function* (): Generator<string, void, unknown> {
+      if (!textStarted) return;
+      yield formatEvent("content_block_stop", { type: "content_block_stop", index: blockIndex });
+      blockIndex++;
+      textStarted = false;
+    }.bind(this);
+
+    for await (const raw of streamGen) {
+      for (const event of splitSseEvents(raw)) {
+        const parsed = parseOpenAIDelta(event);
+        if (parsed === null) continue;
+
+        if (parsed.content.length > 0) {
+          yield* ensureTextBlock();
+          yield this.anthropicEvent("content_block_delta", {
+            type: "content_block_delta",
+            index: blockIndex,
+            delta: { type: "text_delta", text: parsed.content },
+          });
+        }
+
+        for (const toolDelta of parsed.toolCallDeltas) {
+          const toolIndex = typeof toolDelta["index"] === "number" ? toolDelta["index"] as number : 0;
+          let toolBlockIndex = toolBlockIndexes.get(toolIndex);
+          if (toolBlockIndex === undefined) {
+            yield* stopTextBlock();
+            toolBlockIndex = blockIndex++;
+            toolBlockIndexes.set(toolIndex, toolBlockIndex);
+            const fn = toolDelta["function"] as Record<string, unknown> | undefined;
+            yield this.anthropicEvent("content_block_start", {
+              type: "content_block_start",
+              index: toolBlockIndex,
+              content_block: {
+                type: "tool_use",
+                id: String(toolDelta["id"] ?? `toolu-${messageId}-${toolIndex}`),
+                name: typeof fn?.["name"] === "string" ? fn["name"] : `tool_${toolIndex}`,
+                input: {},
+              },
+            });
+          }
+          const fn = toolDelta["function"] as Record<string, unknown> | undefined;
+          const partialJson = typeof fn?.["arguments"] === "string" ? fn["arguments"] : "";
+          if (partialJson.length > 0) {
+            yield this.anthropicEvent("content_block_delta", {
+              type: "content_block_delta",
+              index: toolBlockIndex,
+              delta: { type: "input_json_delta", partial_json: partialJson },
+            });
+          }
+        }
+
+        if (parsed.finishReason !== undefined && !stopped) {
+          yield* stopTextBlock();
+          for (const index of toolBlockIndexes.values()) {
+            yield this.anthropicEvent("content_block_stop", { type: "content_block_stop", index });
+          }
+          stopped = true;
+          yield this.anthropicEvent("message_delta", {
+            type: "message_delta",
+            delta: { stop_reason: this.openAIFinishReasonToAnthropic(parsed.finishReason), stop_sequence: null },
+            usage: { output_tokens: 0 },
+          });
+          yield this.anthropicEvent("message_stop", { type: "message_stop" });
+        }
+      }
+    }
+
+    if (!stopped) {
+      yield* stopTextBlock();
+      for (const index of toolBlockIndexes.values()) {
+        yield this.anthropicEvent("content_block_stop", { type: "content_block_stop", index });
+      }
+      yield this.anthropicEvent("message_delta", {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { output_tokens: 0 },
+      });
+      yield this.anthropicEvent("message_stop", { type: "message_stop" });
+    }
+  }
+
+  private async *anthropicTextStream(
+    ctx: FusionRequestContext,
+    model: string,
+    text: string,
+    stopReason: string,
+  ): AsyncGenerator<string, void, unknown> {
+    yield this.anthropicEvent("message_start", {
+      type: "message_start",
+      message: {
+        id: `msg-${ctx.requestId ?? Date.now()}`,
+        type: "message",
+        role: "assistant",
+        model,
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 0, output_tokens: 0 },
+      },
+    });
+    yield this.anthropicEvent("content_block_start", {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "text", text: "" },
+    });
+    yield this.anthropicEvent("content_block_delta", {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text },
+    });
+    yield this.anthropicEvent("content_block_stop", { type: "content_block_stop", index: 0 });
+    yield this.anthropicEvent("message_delta", {
+      type: "message_delta",
+      delta: { stop_reason: stopReason, stop_sequence: null },
+      usage: { output_tokens: 0 },
+    });
+    yield this.anthropicEvent("message_stop", { type: "message_stop" });
+  }
+
+  private anthropicEvent(event: string, payload: Record<string, unknown>): string {
+    return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
+  }
+
+  private openAIFinishReasonToAnthropic(reason: string): string {
+    if (reason === "tool_calls" || reason === "function_call") return "tool_use";
+    if (reason === "length") return "max_tokens";
+    if (reason === "content_filter") return "stop_sequence";
+    return "end_turn";
+  }
+
+  private resolveAnthropicSynthesisStreamTarget(fusionModel: string): "openai" | "anthropic" {
+    try {
+      const config = modelConfigLoader.loadConfig(fusionModel);
+      const routes = config.model_routings ?? [];
+      if (routes.length > 0 && routes.every((route) => route.wire_protocol === "anthropic")) {
+        return "anthropic";
+      }
+    } catch {
+      // Fall back to OpenAI-compatible internal chunks; that is the common path
+      // for the local providers and lets the fuser translate at the edge.
+    }
+    return "openai";
   }
 
   /**

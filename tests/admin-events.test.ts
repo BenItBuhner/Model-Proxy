@@ -568,6 +568,111 @@ describe("request-scoped event tracing", () => {
     expect(terminalSubagent?.detail?.["contextWindow"]).toBe(128_000);
   });
 
+  test("anthropic streaming fusion request uses live pipeline stream and completed trace", async () => {
+    FakeProvider.responses = [
+      {
+        id: "divide-anthropic-stream-1",
+        object: "chat.completion",
+        choices: [{
+          index: 0,
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: "call_divide_anthropic_stream",
+              type: "function",
+              function: {
+                name: "divide_task",
+                arguments: JSON.stringify({
+                  sub_tasks: [
+                    {
+                      id: "anthropic-stream-repo",
+                      description: "Analyze repository readiness through Anthropic streaming Fusion.",
+                      focus_area: "repository",
+                      suggested_model_routing: "fakee-model",
+                    },
+                    {
+                      id: "anthropic-stream-dashboard",
+                      description: "Analyze Anthropic streaming dashboard trace coverage.",
+                      focus_area: "observability",
+                      suggested_model_routing: "fakee-model",
+                    },
+                  ],
+                }),
+              },
+            }],
+          },
+          finish_reason: "tool_calls",
+        }],
+      },
+    ];
+    FakeProvider.streamResponses = [
+      "Anthropic repository context analysis only.",
+      "Anthropic dashboard event analysis only.",
+      "Anthropic final fused answer from live Fusion streaming.",
+    ];
+    const tools = Array.from({ length: 9 }, (_, index) => ({
+      name: `anthropic_stream_tool_${index + 1}`,
+      description: "Tool for the final Anthropic streaming model only.",
+      input_schema: { type: "object", properties: { query: { type: "string" } } },
+    }));
+
+    const id = "test-req-fusion-anthropic-stream-e2e";
+    const inferRes = await app.request("/v1/messages", {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json", "x-request-id": id },
+      body: JSON.stringify({
+        model: "fusion-e2e",
+        max_tokens: 1024,
+        stream: true,
+        system: "You are testing Anthropic streaming Fusion observability.",
+        messages: [{
+          role: "user",
+          content: "Stream a complex Fusion verification pass through the Anthropic messages API.",
+        }],
+        tools,
+        tool_choice: { type: "auto" },
+        fusion_effort: "high",
+      }),
+    });
+    expect(inferRes.status).toBe(200);
+    const streamText = await inferRes.text();
+    expect(streamText).toContain("event: message_start");
+    expect(streamText).toContain("event: content_block_delta");
+    expect(streamText).toContain("Anthropic final fused answer from live Fusion streaming.");
+    expect(streamText).toContain("event: message_stop");
+    expect(streamText).not.toContain("data: [DONE]");
+
+    expect(FakeProvider.streamCalls).toHaveLength(3);
+    for (const call of FakeProvider.streamCalls.slice(0, 2)) {
+      expect(call.args.tools).toBeUndefined();
+      expect(call.args.tool_choice).toBe("none");
+      expect(call.args.stream).toBe(true);
+    }
+    expect(FakeProvider.streamCalls[2]?.args.stream).toBe(true);
+
+    const snapRes = await app.request(`/v1/admin/events/${encodeURIComponent(id)}`, { headers: auth });
+    expect(snapRes.status).toBe(200);
+    const snap = (await snapRes.json()) as {
+      finished: boolean;
+      events: Array<{
+        type: string;
+        status?: string;
+        protocol?: string;
+        fusionTrace?: Record<string, unknown>;
+        trace?: Record<string, unknown>;
+      }>;
+    };
+    expect(snap.finished).toBe(true);
+    const started = snap.events.find((event) => event.type === "request.started");
+    expect(started?.protocol).toBe("anthropic");
+    const completed = snap.events.find((event) => event.type === "fusion.pipeline.completed");
+    const finished = snap.events.find((event) => event.type === "request.finished");
+    expect(completed?.trace?.["subTaskCount"]).toBe(2);
+    expect(finished?.fusionTrace?.["subTaskCount"]).toBe(2);
+    expect(snap.events.at(-1)?.type).toBe("request.finished");
+  });
+
   test("streaming fusion request snapshot includes live summary events", async () => {
     FakeProvider.responses = [
       {
