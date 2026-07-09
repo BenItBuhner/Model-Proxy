@@ -170,7 +170,7 @@ export class OpenAIProvider extends AbstractProvider {
     }
 
     const streamId = `chatcmpl-${Date.now()}`;
-    const normalizeState: StreamNormalizeState = { toolCallIds: new Map() };
+    const normalizeState = createStreamNormalizeState();
     const bufferPartialToolCalls = ctx.bufferPartialToolCalls === true;
     let bufferedToolCallChunks: string[] = [];
     const flushBufferedToolCallChunks = function* () {
@@ -464,15 +464,27 @@ function normalizeStreamChunk(
   state: StreamNormalizeState,
 ): Record<string, unknown> {
   const normalized: Record<string, unknown> = { ...chunk };
-  if (typeof normalized["id"] !== "string" || normalized["id"].length === 0) {
-    normalized["id"] = fallbackId;
+  // The OpenAI streaming contract uses ONE id and ONE created timestamp for
+  // every chunk of a completion. Some upstreams (nahcrof) mint a fresh id per
+  // chunk, which strict clients may interpret as thousands of separate
+  // completions — adopt the first chunk's identity and pin it for the stream.
+  if (state.canonicalId === undefined) {
+    state.canonicalId =
+      typeof normalized["id"] === "string" && normalized["id"].length > 0
+        ? normalized["id"]
+        : fallbackId;
   }
+  normalized["id"] = state.canonicalId;
   if (typeof normalized["object"] !== "string" || normalized["object"].length === 0) {
     normalized["object"] = "chat.completion.chunk";
   }
-  if (typeof normalized["created"] !== "number" || !Number.isFinite(normalized["created"])) {
-    normalized["created"] = Math.floor(Date.now() / 1000);
+  if (state.canonicalCreated === undefined) {
+    state.canonicalCreated =
+      typeof normalized["created"] === "number" && Number.isFinite(normalized["created"])
+        ? normalized["created"]
+        : Math.floor(Date.now() / 1000);
   }
+  normalized["created"] = state.canonicalCreated;
   if (typeof normalized["model"] !== "string" || normalized["model"].length === 0) {
     normalized["model"] = model;
   }
@@ -506,8 +518,28 @@ function streamChunkFinishesToolCalls(chunk: Record<string, unknown>): boolean {
   });
 }
 
+interface ToolCallSlot {
+  /** Index emitted downstream for this logical tool call. */
+  outIndex: number;
+  /** Stable id emitted downstream for this logical tool call. */
+  id: string;
+}
+
 interface StreamNormalizeState {
-  toolCallIds: Map<string, string>;
+  /** Provider slot key (`choice:index`) -> current logical tool call. */
+  slots: Map<string, ToolCallSlot>;
+  /** Next unused downstream tool-call index, per choice. */
+  nextOutIndex: Map<number, number>;
+  /** Canonical completion id adopted from the first chunk (spec: one id per stream). */
+  canonicalId?: string;
+  /** Canonical created timestamp adopted from the first chunk. */
+  canonicalCreated?: number;
+  /** Choices whose delta already carried `role` (spec: role on first delta only). */
+  roleEmitted: Set<number>;
+}
+
+function createStreamNormalizeState(): StreamNormalizeState {
+  return { slots: new Map(), nextOutIndex: new Map(), roleEmitted: new Set() };
 }
 
 function normalizeStreamChoice(
@@ -526,6 +558,11 @@ function normalizeStreamChoice(
   } else if (delta !== undefined) {
     normalized["delta"] = {};
   }
+  // OpenAI includes `finish_reason` (null until the terminal chunk) on every
+  // streamed choice; some upstreams omit the key entirely on non-final chunks.
+  if (!("finish_reason" in normalized)) {
+    normalized["finish_reason"] = null;
+  }
   return normalized;
 }
 
@@ -535,9 +572,29 @@ function normalizeStreamDelta(
   state: StreamNormalizeState,
 ): Record<string, unknown> {
   const normalized: Record<string, unknown> = { ...delta };
+  // OpenAI sends `role` exactly once, on the first delta of each choice. Some
+  // upstreams (nahcrof) repeat `role: "assistant"` on every chunk, which
+  // strict accumulators can misread as the start of a brand-new assistant
+  // message mid-stream.
+  const role = normalized["role"];
+  if (typeof role === "string" && role.length > 0) {
+    if (state.roleEmitted.has(choiceIndex)) {
+      delete normalized["role"];
+    } else {
+      state.roleEmitted.add(choiceIndex);
+    }
+  } else if ("role" in normalized) {
+    delete normalized["role"];
+  }
   const content = normalized["content"];
   if (content !== undefined && typeof content !== "string") {
     normalized["content"] = "";
+  }
+  // Canonical deltas only carry `content` when there is content to add (or on
+  // the role-bearing first delta). Upstreams that stamp `content: ""` onto
+  // every tool-call/reasoning chunk produce thousands of empty text parts.
+  if (normalized["content"] === "" && !("role" in normalized)) {
+    delete normalized["content"];
   }
   // Coerce malformed (non-string) reasoning fields, but otherwise pass reasoning
   // deltas through untouched: clients accumulate them into a single thinking
@@ -554,6 +611,10 @@ function normalizeStreamDelta(
       choiceIndex,
       state,
     );
+  } else if ("tool_calls" in normalized) {
+    // Some upstreams emit `tool_calls: null` on non-tool deltas; the OpenAI
+    // contract omits the key entirely.
+    delete normalized["tool_calls"];
   }
   return normalized;
 }
@@ -561,7 +622,7 @@ function normalizeStreamDelta(
 function normalizeStreamToolCalls(
   toolCalls: unknown[],
   choiceIndex = 0,
-  state: StreamNormalizeState = { toolCallIds: new Map() },
+  state: StreamNormalizeState = createStreamNormalizeState(),
 ): Array<Record<string, unknown>> {
   return toolCalls
     .filter((toolCall): toolCall is Record<string, unknown> =>
@@ -570,45 +631,82 @@ function normalizeStreamToolCalls(
     .map((toolCall, fallbackIndex) => {
       const normalized: Record<string, unknown> = { ...toolCall };
       const indexValue = normalized["index"];
-      const index =
+      const providerIndex =
         typeof indexValue === "number" && Number.isFinite(indexValue)
           ? indexValue
           : fallbackIndex;
-      normalized["index"] = index;
 
-      const idKey = `${choiceIndex}:${index}`;
       const incomingId =
         typeof normalized["id"] === "string" && normalized["id"].length > 0
           ? normalized["id"]
           : undefined;
-      const stableId =
-        state.toolCallIds.get(idKey) ??
-        incomingId ??
-        (choiceIndex === 0 ? `call_${index}` : `call_${choiceIndex}_${index}`);
-      state.toolCallIds.set(idKey, stableId);
-      if (incomingId !== undefined && incomingId !== stableId) {
-        normalized["provider_id"] = incomingId;
-      }
-      normalized["id"] = stableId;
-      if (typeof normalized["type"] !== "string" || normalized["type"].length === 0) {
-        normalized["type"] = "function";
-      }
-
       const fn = normalized["function"];
-      if (typeof fn === "object" && fn !== null && !Array.isArray(fn)) {
-        const normalizedFn: Record<string, unknown> = { ...(fn as Record<string, unknown>) };
-        if (typeof normalizedFn["name"] !== "string") {
-          normalizedFn["name"] = "";
-        }
-        if (typeof normalizedFn["arguments"] !== "string") {
-          normalizedFn["arguments"] = stringifyArguments(normalizedFn["arguments"]);
-        }
-        normalized["function"] = normalizedFn;
+      const fnObj =
+        typeof fn === "object" && fn !== null && !Array.isArray(fn)
+          ? (fn as Record<string, unknown>)
+          : undefined;
+      const incomingName = fnObj?.["name"];
+      const hasName = typeof incomingName === "string" && incomingName.length > 0;
+
+      const slotKey = `${choiceIndex}:${providerIndex}`;
+      const existingSlot = state.slots.get(slotKey);
+
+      // A fresh id together with a function name marks the START of a new
+      // logical tool call, even when the upstream reuses the same delta
+      // index (GLM-family providers reset index to 0 for every call, and
+      // some omit it entirely). Without this split, downstream clients
+      // accumulate two calls' argument fragments into one buffer and the
+      // resulting JSON is unparseable. Arguments-only deltas with a flaky
+      // id still merge into the current call.
+      const isNewCall =
+        existingSlot === undefined ||
+        (incomingId !== undefined && incomingId !== existingSlot.id && hasName);
+
+      let slot: ToolCallSlot;
+      if (isNewCall) {
+        const reservedNext = state.nextOutIndex.get(choiceIndex) ?? 0;
+        const outIndex =
+          existingSlot === undefined ? Math.max(providerIndex, reservedNext) : reservedNext;
+        const stableId =
+          incomingId ??
+          (choiceIndex === 0 ? `call_${outIndex}` : `call_${choiceIndex}_${outIndex}`);
+        slot = { outIndex, id: stableId };
+        state.slots.set(slotKey, slot);
+        state.nextOutIndex.set(choiceIndex, outIndex + 1);
       } else {
-        normalized["function"] = { name: "", arguments: "" };
+        slot = existingSlot;
       }
 
-      return normalized;
+      const argumentsText =
+        typeof fnObj?.["arguments"] === "string"
+          ? (fnObj["arguments"] as string)
+          : stringifyArguments(fnObj?.["arguments"]);
+
+      // Canonical OpenAI fragment shape. The first fragment of a logical call
+      // carries id/type/name; continuations carry ONLY index + arguments.
+      // Upstreams like nahcrof re-send the id plus an empty name on every
+      // fragment, which strict client accumulators can misread as the start
+      // of a new call; stripping the repetition removes that ambiguity.
+      if (isNewCall) {
+        const name = hasName ? (incomingName as string) : "";
+        return {
+          index: slot.outIndex,
+          id: slot.id,
+          type:
+            typeof normalized["type"] === "string" && normalized["type"].length > 0
+              ? normalized["type"]
+              : "function",
+          function: { name, arguments: argumentsText },
+        };
+      }
+      return {
+        index: slot.outIndex,
+        // Preserve non-empty continuation names (rare upstreams stream the
+        // name in pieces); empty-string name spam is dropped.
+        function: hasName
+          ? { name: incomingName as string, arguments: argumentsText }
+          : { arguments: argumentsText },
+      };
     });
 }
 
