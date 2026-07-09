@@ -38,7 +38,9 @@ class FakeProvider implements BaseProvider {
   readonly config = {} as BaseProvider["config"];
 
   static responses: Array<Record<string, unknown> | Promise<Record<string, unknown>> | Error> = [];
+  static streamResponses: Array<string | Error> = [];
   static calls: Array<{ args: OpenAICallArgs; ctx: ProviderCallContext }> = [];
+  static streamCalls: Array<{ args: OpenAICallArgs; ctx: ProviderCallContext }> = [];
 
   async callOpenAI(
     args: OpenAICallArgs,
@@ -49,6 +51,33 @@ class FakeProvider implements BaseProvider {
     if (next === undefined) throw new Error("no response queued");
     if (next instanceof Error) throw next;
     return await next;
+  }
+
+  async *streamOpenAI(
+    args: OpenAICallArgs,
+    ctx: ProviderCallContext,
+  ): AsyncGenerator<string, void, unknown> {
+    FakeProvider.streamCalls.push({ args, ctx });
+    const next = FakeProvider.streamResponses.shift();
+    if (next === undefined) throw new Error("no stream response queued");
+    if (next instanceof Error) throw next;
+    const chunk = {
+      id: `chatcmpl-stream-${FakeProvider.streamCalls.length}`,
+      object: "chat.completion.chunk",
+      created: Math.floor(Date.now() / 1000),
+      model: args.model,
+      choices: [{ index: 0, delta: { content: next }, finish_reason: null }],
+    };
+    const done = {
+      id: `chatcmpl-stream-${FakeProvider.streamCalls.length}`,
+      object: "chat.completion.chunk",
+      created: Math.floor(Date.now() / 1000),
+      model: args.model,
+      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+    };
+    yield `data: ${JSON.stringify(chunk)}\n\n`;
+    yield `data: ${JSON.stringify(done)}\n\n`;
+    yield "data: [DONE]\n\n";
   }
 
   async callAnthropic(
@@ -136,6 +165,33 @@ beforeAll(() => {
     }),
   );
 
+  writeFileSync(
+    join(tmpRoot, "models", "fusion-e2e.json"),
+    JSON.stringify({
+      logical_name: "fusion-e2e",
+      timeout_seconds: 5,
+      default_cooldown_seconds: 0,
+      model_routings: [
+        { provider: "fakee", model: "fakee-fusion-placeholder", wire_protocol: "openai" },
+      ],
+      fusion: {
+        enabled: true,
+        context_window: 10_000_000,
+        complexity_scoring: { effort_1_threshold: 0.2, effort_2_threshold: 0.55 },
+        task_divider: { model_routing: "fakee-model", timeout_seconds: 5, max_subtasks: 2 },
+        effort_levels: {
+          1: { model_routing: "fakee-model" },
+          2: { subagent_count: { min: 2, max: 2 }, model_routings: ["fakee-model"], tools: [] },
+          3: { subagent_count: { min: 2, max: 2 }, model_routings: ["fakee-model"], tools: [] },
+        },
+        fusion: { model_routing: "fakee-model", strategy: "sequential_append", wire_protocol: "openai" },
+        summarizer: { enabled: false, model_routing: "fakee-model", segment_chars: 1400, max_summary_tokens: 256 },
+        cache: { enabled: false, scope: "permanent" },
+        scheduler: { allow_nested_fusion: false, max_depth: 0, max_leaf_calls: 8, max_wall_ms: 120000 },
+      },
+    }),
+  );
+
   providerRegistry.registerProvider("fakee", () => new FakeProvider());
   providerRegistry.registerProvider("fakee-proxy", () => new FakeProvider());
 });
@@ -162,7 +218,9 @@ afterAll(() => {
 
 afterEach(() => {
   FakeProvider.responses = [];
+  FakeProvider.streamResponses = [];
   FakeProvider.calls = [];
+  FakeProvider.streamCalls = [];
   eventSink._resetForTests();
   resetRequestLogForTests();
   rmSync(join(tmpRoot, ".storage"), { recursive: true, force: true });
@@ -223,6 +281,143 @@ describe("request-scoped event tracing", () => {
     const routeAttempt = snap.events.find((e) => e.type === "route.attempted");
     expect(routeAttempt?.keyHint).toBe("...aaaa");
     expect(routeAttempt?.apiKeyEnvVar).toBe("(auto)");
+  });
+
+  test("fusion request snapshot preserves live pipeline events and completed trace", async () => {
+    FakeProvider.responses = [
+      {
+        id: "divide-1",
+        object: "chat.completion",
+        choices: [{
+          index: 0,
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: "call_divide",
+              type: "function",
+              function: {
+                name: "divide_task",
+                arguments: JSON.stringify({
+                  sub_tasks: [
+                    {
+                      id: "repo-context",
+                      description: "Analyze repository context and cleanup risk.",
+                      focus_area: "repository",
+                      suggested_model_routing: "fakee-model",
+                    },
+                    {
+                      id: "fusion-contract",
+                      description: "Analyze Fusion subagent and dashboard contract.",
+                      focus_area: "fusion",
+                      suggested_model_routing: "fakee-model",
+                    },
+                  ],
+                }),
+              },
+            }],
+          },
+          finish_reason: "tool_calls",
+        }],
+      },
+      {
+        id: "fuse-1",
+        object: "chat.completion",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "Final fused answer from HTTP-level Fusion." },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 24, completion_tokens: 8, total_tokens: 32 },
+      },
+    ];
+    FakeProvider.streamResponses = [
+      "Repository context analysis only. No file edits or tool calls.",
+      "Fusion contract analysis only. Subagents remain reasoning-only.",
+    ];
+    const tools = Array.from({ length: 9 }, (_, index) => ({
+      type: "function",
+      function: {
+        name: `final_tool_${index + 1}`,
+        description: "Tool for the final model only.",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+    }));
+
+    const id = "test-req-fusion-e2e";
+    const inferRes = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json", "x-request-id": id },
+      body: JSON.stringify({
+        model: "fusion-e2e",
+        messages: [
+          { role: "system", content: "You are testing Fusion observability." },
+          {
+            role: "user",
+            content: "Triage a complex repository cleanup and Fusion verification plan with many possible tools.",
+          },
+        ],
+        tools,
+        tool_choice: "auto",
+        fusion_effort: "high",
+      }),
+    });
+    expect(inferRes.status).toBe(200);
+    const body = (await inferRes.json()) as {
+      fusion_trace?: {
+        fusionRunId?: string;
+        subTaskCount?: number;
+        cacheHit?: boolean;
+        subagentDetails?: Array<{
+          contextWindow?: number;
+          inputBudgetTokens?: number;
+          outputBudgetTokens?: number;
+          contextMessageCount?: number;
+        }>;
+      };
+    };
+    expect(body.fusion_trace?.fusionRunId).toBeDefined();
+    expect(body.fusion_trace?.subTaskCount).toBe(2);
+    expect(body.fusion_trace?.cacheHit).toBe(false);
+    expect(body.fusion_trace?.subagentDetails?.[0]?.contextWindow).toBe(128_000);
+    expect(body.fusion_trace?.subagentDetails?.[0]?.inputBudgetTokens).toBe(96_000);
+    expect(body.fusion_trace?.subagentDetails?.[0]?.outputBudgetTokens).toBe(32_000);
+    expect(body.fusion_trace?.subagentDetails?.[0]?.contextMessageCount).toBe(2);
+
+    expect(FakeProvider.streamCalls).toHaveLength(2);
+    for (const call of FakeProvider.streamCalls) {
+      expect(call.args.tools).toBeUndefined();
+      expect(call.args.tool_choice).toBe("none");
+      expect(call.args.stream).toBe(true);
+    }
+
+    const snapRes = await app.request(`/v1/admin/events/${encodeURIComponent(id)}`, { headers: auth });
+    expect(snapRes.status).toBe(200);
+    const snap = (await snapRes.json()) as {
+      finished: boolean;
+      events: Array<{
+        type: string;
+        status?: string;
+        phase?: string;
+        fusionTrace?: Record<string, unknown>;
+        trace?: Record<string, unknown>;
+        detail?: Record<string, unknown>;
+      }>;
+    };
+    expect(snap.finished).toBe(true);
+    const types = snap.events.map((event) => event.type);
+    expect(types).toContain("fusion.pipeline.started");
+    expect(types).toContain("fusion.subtasks");
+    expect(types).toContain("fusion.subagent");
+    expect(types).toContain("fusion.pipeline.completed");
+    expect(types[types.length - 1]).toBe("request.finished");
+    const terminalSubagent = snap.events.find((event) =>
+      event.type === "fusion.subagent" && event.status === "completed" && event.detail?.["stage"] === "completed");
+    expect(terminalSubagent?.detail?.["contextWindow"]).toBe(128_000);
+    const completed = snap.events.find((event) => event.type === "fusion.pipeline.completed");
+    expect(completed?.trace?.["subTaskCount"]).toBe(2);
+    const finished = snap.events.find((event) => event.type === "request.finished");
+    expect(finished?.fusionTrace?.["fusionRunId"]).toBe(body.fusion_trace?.fusionRunId);
   });
 
   test("snapshot 404s for unknown requestId", async () => {
