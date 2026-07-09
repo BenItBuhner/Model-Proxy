@@ -39,6 +39,9 @@ class FakeProvider implements BaseProvider {
 
   static responses: Array<Record<string, unknown> | Promise<Record<string, unknown>> | Error> = [];
   static streamResponses: Array<string | Error> = [];
+  static streamResponder:
+    | ((args: OpenAICallArgs, ctx: ProviderCallContext) => string | Error | Promise<string | Error>)
+    | undefined;
   static calls: Array<{ args: OpenAICallArgs; ctx: ProviderCallContext }> = [];
   static streamCalls: Array<{ args: OpenAICallArgs; ctx: ProviderCallContext }> = [];
 
@@ -58,7 +61,9 @@ class FakeProvider implements BaseProvider {
     ctx: ProviderCallContext,
   ): AsyncGenerator<string, void, unknown> {
     FakeProvider.streamCalls.push({ args, ctx });
-    const next = FakeProvider.streamResponses.shift();
+    const next = FakeProvider.streamResponder !== undefined
+      ? await FakeProvider.streamResponder(args, ctx)
+      : FakeProvider.streamResponses.shift();
     if (next === undefined) throw new Error("no stream response queued");
     if (next instanceof Error) throw next;
     const chunk = {
@@ -192,6 +197,33 @@ beforeAll(() => {
     }),
   );
 
+  writeFileSync(
+    join(tmpRoot, "models", "fusion-e2e-summary.json"),
+    JSON.stringify({
+      logical_name: "fusion-e2e-summary",
+      timeout_seconds: 5,
+      default_cooldown_seconds: 0,
+      model_routings: [
+        { provider: "fakee", model: "fakee-fusion-placeholder", wire_protocol: "openai" },
+      ],
+      fusion: {
+        enabled: true,
+        context_window: 10_000_000,
+        complexity_scoring: { effort_1_threshold: 0.2, effort_2_threshold: 0.55 },
+        task_divider: { model_routing: "fakee-model", timeout_seconds: 5, max_subtasks: 2 },
+        effort_levels: {
+          1: { model_routing: "fakee-model" },
+          2: { subagent_count: { min: 2, max: 2 }, model_routings: ["fakee-model"], tools: [] },
+          3: { subagent_count: { min: 2, max: 2 }, model_routings: ["fakee-model"], tools: [] },
+        },
+        fusion: { model_routing: "fakee-model", strategy: "sequential_append", wire_protocol: "openai" },
+        summarizer: { enabled: true, model_routing: "fakee-model", segment_chars: 200, max_summary_tokens: 128 },
+        cache: { enabled: false, scope: "permanent" },
+        scheduler: { allow_nested_fusion: false, max_depth: 0, max_leaf_calls: 8, max_wall_ms: 120000 },
+      },
+    }),
+  );
+
   providerRegistry.registerProvider("fakee", () => new FakeProvider());
   providerRegistry.registerProvider("fakee-proxy", () => new FakeProvider());
 });
@@ -219,6 +251,7 @@ afterAll(() => {
 afterEach(() => {
   FakeProvider.responses = [];
   FakeProvider.streamResponses = [];
+  FakeProvider.streamResponder = undefined;
   FakeProvider.calls = [];
   FakeProvider.streamCalls = [];
   eventSink._resetForTests();
@@ -533,6 +566,129 @@ describe("request-scoped event tracing", () => {
     const terminalSubagent = snap.events.find((event) =>
       event.type === "fusion.subagent" && event.status === "completed" && event.detail?.["stage"] === "completed");
     expect(terminalSubagent?.detail?.["contextWindow"]).toBe(128_000);
+  });
+
+  test("streaming fusion request snapshot includes live summary events", async () => {
+    FakeProvider.responses = [
+      {
+        id: "divide-summary-stream-1",
+        object: "chat.completion",
+        choices: [{
+          index: 0,
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: "call_divide_summary_stream",
+              type: "function",
+              function: {
+                name: "divide_task",
+                arguments: JSON.stringify({
+                  sub_tasks: [
+                    {
+                      id: "stream-summary-repo",
+                      description: "Analyze repository cleanup risks during streaming Fusion.",
+                      focus_area: "repository",
+                      suggested_model_routing: "fakee-model",
+                    },
+                    {
+                      id: "stream-summary-dashboard",
+                      description: "Analyze live summary event coverage during streaming Fusion.",
+                      focus_area: "observability",
+                      suggested_model_routing: "fakee-model",
+                    },
+                  ],
+                }),
+              },
+            }],
+          },
+          finish_reason: "tool_calls",
+        }],
+      },
+    ];
+    FakeProvider.streamResponder = (args) => {
+      const messages = JSON.stringify(args.messages);
+      if (messages.includes("live reasoning summarizer")) {
+        return "Repository cleanup risks and dashboard event coverage are being checked through the live HTTP trace.";
+      }
+      if (args.tool_choice === "none" && messages.includes("repository cleanup risks")) {
+        return "Repository cleanup analysis is checking stale branches, old pull requests, and main branch readiness. The work confirms subagents stay reasoning-only while final tools remain reserved for synthesis.";
+      }
+      if (args.tool_choice === "none") {
+        return "Dashboard coverage analysis is checking admin event snapshots, live summary events, and terminal Fusion traces. The work verifies completed traces preserve subagent budgets and cache state.";
+      }
+      return "Streaming final answer with live summary events from HTTP-level Fusion.";
+    };
+    const tools = Array.from({ length: 9 }, (_, index) => ({
+      type: "function",
+      function: {
+        name: `summary_stream_final_tool_${index + 1}`,
+        description: "Tool for the summary-enabled final model only.",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+    }));
+
+    const id = "test-req-fusion-summary-stream-e2e";
+    const inferRes = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json", "x-request-id": id },
+      body: JSON.stringify({
+        model: "fusion-e2e-summary",
+        messages: [
+          { role: "system", content: "You are testing streaming Fusion summaries." },
+          {
+            role: "user",
+            content: "Stream a complex Fusion pass and expose live summary events to the admin dashboard.",
+          },
+        ],
+        stream: true,
+        tools,
+        tool_choice: "auto",
+        fusion_effort: "high",
+      }),
+    });
+    expect(inferRes.status).toBe(200);
+    const streamText = await inferRes.text();
+    expect(streamText).toContain("Streaming final answer with live summary events");
+    expect(streamText).toContain("reasoning_content");
+    expect(streamText.trim().endsWith("data: [DONE]")).toBe(true);
+
+    const subagentCalls = FakeProvider.streamCalls.filter((call) => call.args.tool_choice === "none");
+    expect(subagentCalls).toHaveLength(2);
+    for (const call of subagentCalls) {
+      expect(call.args.tools).toBeUndefined();
+      expect(call.args.stream).toBe(true);
+    }
+    const summaryCalls = FakeProvider.streamCalls.filter((call) =>
+      JSON.stringify(call.args.messages).includes("live reasoning summarizer"));
+    expect(summaryCalls.length).toBeGreaterThanOrEqual(1);
+    const finalCall = FakeProvider.streamCalls.find((call) => Array.isArray(call.args.tools));
+    expect(finalCall?.args.tools).toHaveLength(9);
+    expect(finalCall?.args.tool_choice).toBe("auto");
+
+    const snapRes = await app.request(`/v1/admin/events/${encodeURIComponent(id)}`, { headers: auth });
+    expect(snapRes.status).toBe(200);
+    const snap = (await snapRes.json()) as {
+      finished: boolean;
+      events: Array<{
+        type: string;
+        status?: string;
+        fusionTrace?: Record<string, unknown>;
+        trace?: Record<string, unknown>;
+        detail?: Record<string, unknown>;
+        label?: string;
+        text?: string;
+      }>;
+    };
+    expect(snap.finished).toBe(true);
+    const summaryEvent = snap.events.find((event) => event.type === "fusion.summary");
+    expect(summaryEvent?.label).toContain("stream-summary");
+    expect(summaryEvent?.text).toContain("Repository cleanup risks");
+    const completed = snap.events.find((event) => event.type === "fusion.pipeline.completed");
+    const finished = snap.events.find((event) => event.type === "request.finished");
+    expect(completed?.trace?.["subTaskCount"]).toBe(2);
+    expect(completed?.trace?.["cacheHit"]).toBe(false);
+    expect(finished?.fusionTrace?.["subTaskCount"]).toBe(2);
   });
 
   test("snapshot 404s for unknown requestId", async () => {
