@@ -59,6 +59,7 @@ export interface FusionTraceLike {
   complexityScore?: number;
   complexityReason?: string;
   subTaskCount?: number;
+  subTasks?: Array<{ id: string; focus: string; model: string; description: string }>;
   cacheHit?: boolean;
   cacheKey?: string;
   totalCostUsd?: number;
@@ -251,7 +252,7 @@ export function stateFromTrace(trace: FusionTraceLike): PipelineState {
     caches: trace.cacheHit !== undefined
       ? [{ kind: "subtask", hit: trace.cacheHit, detail: trace.cacheKey !== undefined ? `key ${trace.cacheKey}` : undefined }]
       : [],
-    subTasks: [],
+    subTasks: trace.subTasks ?? [],
     subagents: (trace.subagentDetails ?? []).map((sa) => ({
       id: sa.id,
       focus: sa.focus_area,

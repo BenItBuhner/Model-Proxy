@@ -190,6 +190,13 @@ export interface FusionTrace {
   steps: FusionStep[];
   /** Which sub-tasks were divided and how many. */
   subTaskCount: number;
+  /** Bounded sub-task metadata for completed/historical observability views. */
+  subTasks?: Array<{
+    id: string;
+    focus: string;
+    model: string;
+    description: string;
+  }>;
   /** Which subagents executed, with their results. */
   subagentDetails?: Array<{
     id: string;

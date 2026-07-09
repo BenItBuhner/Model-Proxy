@@ -25,6 +25,12 @@ interface FusionTrace {
   complexityScore: number;
   complexityReason: string;
   subTaskCount: number;
+  subTasks?: Array<{
+    id: string;
+    focus: string;
+    model: string;
+    description: string;
+  }>;
   subagentDetails?: Array<{
     id: string;
     focus_area: string;

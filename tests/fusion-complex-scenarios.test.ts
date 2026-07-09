@@ -300,6 +300,8 @@ describe("Fusion complex scenarios", () => {
     expect(first.cacheHit).toBe(false);
     expect(first.subagentResults).toHaveLength(2);
     expect(first.fusionTrace?.subTaskCount).toBe(2);
+    expect(first.fusionTrace?.subTasks?.map((task) => task.focus)).toEqual(["repository", "testing"]);
+    expect(first.fusionTrace?.subTasks?.[0]?.description).toContain("stale branch and PR cleanup");
     expect(first.fusionTrace?.subagentDetails?.[0]?.contextWindow).toBe(64_000);
     expect(first.fusionTrace?.subagentDetails?.[0]?.inputBudgetTokens).toBe(48_000);
     expect(first.fusionTrace?.subagentDetails?.[0]?.outputBudgetTokens).toBe(16_000);
@@ -339,6 +341,7 @@ describe("Fusion complex scenarios", () => {
     expect(second.subagentResults).toHaveLength(2);
     expect(second.cacheKey).toBe(first.cacheKey);
     expect(second.fusionTrace?.cacheHit).toBe(true);
+    expect(second.fusionTrace?.subTasks?.map((task) => task.focus)).toEqual(["repository", "testing"]);
     expect(second.fusionTrace?.steps.some((step) => step.label === "Pre-Divider Cache Lookup")).toBe(true);
     expect(captured.divider).toHaveLength(1);
     expect(captured.subagent).toHaveLength(2);
@@ -508,6 +511,8 @@ describe("Fusion complex scenarios", () => {
     expect(captured.summarizer.length).toBeGreaterThan(0);
     expect(captured.fuser).toHaveLength(1);
     expect(firstCtx.streamFusionTrace?.["cacheHit"]).toBe(false);
+    const firstTraceTasks = firstCtx.streamFusionTrace?.["subTasks"] as Array<Record<string, unknown>> | undefined;
+    expect(firstTraceTasks?.map((task) => task["focus"])).toEqual(["repository", "testing"]);
     const firstDetails = firstCtx.streamFusionTrace?.["subagentDetails"] as Array<Record<string, unknown>> | undefined;
     expect(firstDetails?.[0]?.["contextWindow"]).toBe(64_000);
     expect(firstDetails?.[0]?.["inputBudgetTokens"]).toBe(48_000);

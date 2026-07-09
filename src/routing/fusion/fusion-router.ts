@@ -53,6 +53,27 @@ function usageSnapshotFromCounts(counts: {
   };
 }
 
+function traceSubTasks(results: SubagentResult[]): Array<{
+  id: string;
+  focus: string;
+  model: string;
+  description: string;
+}> {
+  const seen = new Set<string>();
+  const subTasks: Array<{ id: string; focus: string; model: string; description: string }> = [];
+  for (const result of results) {
+    if (seen.has(result.subTask.id)) continue;
+    seen.add(result.subTask.id);
+    subTasks.push({
+      id: result.subTask.id,
+      focus: result.subTask.focus_area,
+      model: result.subTask.suggested_model_routing,
+      description: result.subTask.description.slice(0, 200),
+    });
+  }
+  return subTasks;
+}
+
 // ── FusionRouter ──────────────────────────────────────────────────────
 
 /**
@@ -187,6 +208,7 @@ export class FusionRouter {
       subTaskCount: result.subagentResults.length > 0
         ? new Set(result.subagentResults.map(r => r.subTask.id)).size
         : 0,
+      subTasks: traceSubTasks(result.subagentResults),
       subagentDetails: result.subagentResults.map(r => ({
         id: r.subTask.id,
         focus_area: r.subTask.focus_area,
@@ -639,6 +661,7 @@ export class FusionRouter {
         complexityReason: score.reason,
         steps: streamSteps,
         subTaskCount: new Set(results.map((r) => r.subTask.id)).size,
+        subTasks: traceSubTasks(results),
         subagentDetails: results.map((r) => ({
           id: r.subTask.id,
           focus_area: r.subTask.focus_area,

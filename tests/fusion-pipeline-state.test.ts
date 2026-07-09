@@ -165,6 +165,14 @@ describe("fusion pipeline state derivation", () => {
       complexityScore: 0.44,
       complexityReason: "moderate request",
       subTaskCount: 0,
+      subTasks: [
+        {
+          id: "research-1",
+          focus: "repository",
+          model: "glm-5.2",
+          description: "Analyze repository cleanup risk and verification scope.",
+        },
+      ],
       cacheHit: false,
       totalTokens: 120,
       fusedByModelRouting: "glm-5.2",
@@ -200,6 +208,12 @@ describe("fusion pipeline state derivation", () => {
     const state = stateFromTrace(trace);
 
     expect(state.started?.complexityReason).toBe("moderate request");
+    expect(state.subTasks[0]).toEqual({
+      id: "research-1",
+      focus: "repository",
+      model: "glm-5.2",
+      description: "Analyze repository cleanup risk and verification scope.",
+    });
     expect(state.phases[0]?.detail?.["reason"]).toBe("moderate request is within synthesis model context");
     expect(state.caches[0]?.hit).toBe(false);
     expect(state.subagents[0]?.detail?.["contextWindow"]).toBe(64_000);
