@@ -531,6 +531,9 @@ describe("Fusion complex scenarios", () => {
     expect(secondStream).toContain("Cached streamed fusion answer.");
     expect(secondCtx.streamFusionTrace?.["cacheHit"]).toBe(true);
     expect(secondCtx.streamFusionTrace?.["cacheKey"]).toBe(firstCtx.streamFusionTrace?.["cacheKey"]);
+    const secondSteps = secondCtx.streamFusionTrace?.["steps"] as Array<Record<string, unknown>> | undefined;
+    expect(secondSteps?.some((step) => step["type"] === "cache_lookup")).toBe(true);
+    expect(secondSteps?.some((step) => step["type"] === "synthesis")).toBe(true);
     expect(captured.divider).toHaveLength(1);
     expect(captured.subagent).toHaveLength(2);
     expect(captured.fuser).toHaveLength(2);

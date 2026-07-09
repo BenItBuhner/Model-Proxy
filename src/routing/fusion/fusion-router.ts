@@ -677,7 +677,14 @@ export class FusionRouter {
           ctx,
           `Recalling ${cachedByRequest.subagentResults.length} prior deep-reasoning result(s) for this turn instead of re-running subagents.\n\n`,
         );
+        const synthStart = performance.now();
         yield* this.responseFuser.fuseStream(ctx, combined);
+        streamSteps.push({
+          type: "synthesis",
+          label: "Response Synthesis",
+          durationMs: Math.round(performance.now() - synthStart),
+          modelRouting: ctx.fusionConfig.fusion.model_routing,
+        });
         setStreamTrace(cachedByRequest.subagentResults, true, cachedByRequest.key);
         this.finishRun(ctx, "completed", {
           content: cachedByRequest.fusedContent ?? null,
@@ -712,7 +719,14 @@ export class FusionRouter {
           ctx,
           `Reusing prior deep reasoning from ${reuse.entry.subagentResults.length} subagent(s) — only trivial updates (${reuse.reason}) arrived since.\n\n`,
         );
+        const synthStart = performance.now();
         yield* this.responseFuser.fuseStream(ctx, combined);
+        streamSteps.push({
+          type: "synthesis",
+          label: "Response Synthesis",
+          durationMs: Math.round(performance.now() - synthStart),
+          modelRouting: ctx.fusionConfig.fusion.model_routing,
+        });
         setStreamTrace(reuse.entry.subagentResults, true, reuse.entry.key);
         this.finishRun(ctx, "completed", {
           content: reuse.entry.fusedContent ?? null,
@@ -752,11 +766,12 @@ export class FusionRouter {
     }
     if (!subagentNeed.useSubagents) {
       yield* paceReasoningText(ctx, `Skipping parallel subagents: ${subagentNeed.reason}.\n\n`);
+      const synthStart = performance.now();
       yield* this.responseFuser.fuseStream(ctx, imageResults);
       streamSteps.push({
         type: "synthesis",
         label: "Response Synthesis",
-        durationMs: 0,
+        durationMs: Math.round(performance.now() - synthStart),
         modelRouting: ctx.fusionConfig.fusion.model_routing,
       });
       setStreamTrace([], false, undefined);
