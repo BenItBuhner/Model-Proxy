@@ -194,6 +194,48 @@ describe("fusion pipeline state derivation", () => {
     expect(state.phases[0]?.detail?.["reason"]).toBe("moderate request is within synthesis model context");
   });
 
+  it("preserves adaptive subagent decision metrics for historical dashboard views", () => {
+    const trace: FusionTraceLike = {
+      effort: 2,
+      fusionEffort: "F2",
+      complexityScore: 0.45,
+      complexityReason: "long focused transcript",
+      subTaskCount: 0,
+      cacheHit: false,
+      totalTokens: 30000,
+      fusedByModelRouting: "glm-5.2",
+      steps: [
+        {
+          type: "subagent_execution",
+          label: "Subagent Execution Skipped",
+          durationMs: 0,
+          detail: {
+            useSubagents: false,
+            reason: "moderate request is within synthesis model context; subagents would add latency without clear benefit",
+            tokenCount: 30000,
+            activeFusionContextWindow: 128000,
+            declaredFusionContextWindow: 128000,
+            largeContextThreshold: 44800,
+            largeContext: false,
+            toolCount: 0,
+            toolUseAllowed: false,
+            messageCount: 4,
+            referencedFileCount: 0,
+          },
+        },
+      ],
+    };
+
+    const state = stateFromTrace(trace);
+    const detail = state.phases[0]?.detail;
+
+    expect(detail?.["useSubagents"]).toBe(false);
+    expect(detail?.["activeFusionContextWindow"]).toBe(128000);
+    expect(detail?.["largeContextThreshold"]).toBe(44800);
+    expect(detail?.["largeContext"]).toBe(false);
+    expect(detail?.["toolUseAllowed"]).toBe(false);
+  });
+
   it("reconstructs cache lookup steps as cache phases instead of scoring phases", () => {
     const trace: FusionTraceLike = {
       effort: 3,

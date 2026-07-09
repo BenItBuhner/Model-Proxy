@@ -69,6 +69,7 @@ export function FusionPipelineView({
   const isComplete = state.completed !== undefined || !live;
   const succeeded = state.subagents.filter((s) => s.status === "completed").length;
   const failed = state.subagents.filter((s) => s.status === "failed").length;
+  const subagentDecision = state.phases.find((phase) => phase.key === "subagent_execution");
 
   return (
     <Panel
@@ -141,6 +142,10 @@ export function FusionPipelineView({
               <PhaseChip key={phase.key} phase={phase} live={live} />
             ))}
           </div>
+        ) : null}
+
+        {subagentDecision?.detail !== undefined ? (
+          <SubagentDecisionPanel phase={subagentDecision} />
         ) : null}
 
         {/* Subagent lanes */}
@@ -273,6 +278,80 @@ function PhaseChip({ phase, live }: { phase: PhaseState; live: boolean }): React
           {reason}
         </span>
       ) : null}
+    </div>
+  );
+}
+
+function SubagentDecisionPanel({ phase }: { phase: PhaseState }): React.ReactElement | null {
+  const detail = phase.detail;
+  if (detail === undefined) return null;
+
+  const useSubagents = typeof detail["useSubagents"] === "boolean"
+    ? detail["useSubagents"]
+    : detail["decision"] === "use"
+      ? true
+      : detail["decision"] === "skip"
+        ? false
+        : undefined;
+  const reason = typeof detail["reason"] === "string" ? detail["reason"] : undefined;
+  const activeWindow = asNumber(detail["activeFusionContextWindow"]);
+  const declaredWindow = asNumber(detail["declaredFusionContextWindow"]);
+  const contextThreshold = asNumber(detail["largeContextThreshold"]);
+  const tokenCount = asNumber(detail["tokenCount"]);
+  const messageCount = asNumber(detail["messageCount"]);
+  const toolCount = asNumber(detail["toolCount"]);
+  const referencedFileCount = asNumber(detail["referencedFileCount"]);
+  const largeContext = typeof detail["largeContext"] === "boolean" ? detail["largeContext"] : undefined;
+  const manyTools = typeof detail["manyTools"] === "boolean" ? detail["manyTools"] : undefined;
+  const toolUseAllowed = typeof detail["toolUseAllowed"] === "boolean" ? detail["toolUseAllowed"] : undefined;
+  const hasLargeEditIntent = typeof detail["hasLargeEditIntent"] === "boolean" ? detail["hasLargeEditIntent"] : undefined;
+
+  const hasDecisionMetrics =
+    useSubagents !== undefined ||
+    reason !== undefined ||
+    activeWindow !== undefined ||
+    declaredWindow !== undefined ||
+    contextThreshold !== undefined ||
+    tokenCount !== undefined ||
+    messageCount !== undefined ||
+    toolCount !== undefined ||
+    referencedFileCount !== undefined ||
+    largeContext !== undefined ||
+    manyTools !== undefined ||
+    toolUseAllowed !== undefined ||
+    hasLargeEditIntent !== undefined;
+  if (!hasDecisionMetrics) return null;
+
+  return (
+    <div className="space-y-2 rounded-sm bg-ink-900 px-3 py-2 shadow-edge">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-bone-300">
+          subagent decision
+        </span>
+        {useSubagents !== undefined ? (
+          <Badge tone={useSubagents ? "phosphor" : "muted"}>
+            {useSubagents ? "used" : "skipped"}
+          </Badge>
+        ) : null}
+        {largeContext === true ? <Badge tone="warning">large context</Badge> : null}
+        {manyTools === true ? <Badge tone="warning">many tools</Badge> : null}
+        {hasLargeEditIntent === true ? <Badge tone="warning">large edit</Badge> : null}
+      </div>
+      {reason !== undefined ? (
+        <div className="font-mono text-[10px] leading-4 text-bone-500">
+          {reason}
+        </div>
+      ) : null}
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1 border-t border-ink-700 pt-2 sm:grid-cols-4">
+        {tokenCount !== undefined ? <MiniStat label="tokens" value={formatCount(tokenCount)} /> : null}
+        {contextThreshold !== undefined ? <MiniStat label="threshold" value={`${formatCount(contextThreshold)} tok`} /> : null}
+        {activeWindow !== undefined ? <MiniStat label="active window" value={`${formatCount(activeWindow)} tok`} /> : null}
+        {declaredWindow !== undefined ? <MiniStat label="declared" value={`${formatCount(declaredWindow)} tok`} /> : null}
+        {messageCount !== undefined ? <MiniStat label="messages" value={formatCount(messageCount)} /> : null}
+        {toolCount !== undefined ? <MiniStat label="tools" value={formatCount(toolCount)} /> : null}
+        {toolUseAllowed !== undefined ? <MiniStat label="tool use" value={toolUseAllowed ? "allowed" : "disabled"} /> : null}
+        {referencedFileCount !== undefined ? <MiniStat label="files" value={formatCount(referencedFileCount)} /> : null}
+      </div>
     </div>
   );
 }
