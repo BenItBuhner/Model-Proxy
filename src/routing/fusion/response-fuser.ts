@@ -1,5 +1,7 @@
 import { createLogger } from "../../observability/logger.ts";
+import { modelConfigLoader } from "../../config/model-loader.ts";
 import { FallbackRouter } from "../fallback.ts";
+import { SYSTEM_DEFAULT_CONTEXT_WINDOW } from "../context-window.ts";
 import { resolvePricing, calculateCosts } from "../../observability/pricing.ts";
 import type { FusionCostEntry, FusionRequestContext, FusionStep, SubagentResult, FusionResult } from "./types.ts";
 import {
@@ -20,9 +22,41 @@ const FUSER_MAX_TOKENS = 131072;
 /** Max context messages to include. */
 const MAX_CONTEXT_MESSAGES = 200;
 
+/** Minimum input room preserved for synthesis after reserving output tokens. */
+const MIN_SYNTHESIS_INPUT_TOKENS = 8_000;
+
+/** Output headroom for the final synthesis model. */
+const MAX_OUTPUT_RESERVE_RATIO = 0.25;
+
+interface SynthesisContextBudget {
+  contextWindow: number;
+  inputBudgetTokens: number;
+  outputBudgetTokens: number;
+}
+
+interface SynthesisContextPack {
+  messages: unknown[];
+  estimatedTokens: number;
+  droppedMessages: number;
+  mix: {
+    first: number;
+    relevant: number;
+    anchors: number;
+    recent: number;
+  };
+}
+
 /** Rough token estimate: chars / 4. */
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
+}
+
+function estimateMessageTokens(messages: unknown[]): number {
+  let total = 0;
+  for (const message of messages) {
+    total += estimateTokens(JSON.stringify(message));
+  }
+  return total;
 }
 
 function usageSnapshotFromCounts(counts: {
@@ -78,12 +112,14 @@ export class ResponseFuser {
     });
 
     const appendedContent = this.buildSequentialAppend(subagentResults);
+    const synthesisBudget = this.synthesisContextBudget(ctx, fusionModel);
 
     const synthesisMessages = this.buildSynthesisMessages(
       messages,
       appendedContent,
       subagentResults,
       ctx,
+      synthesisBudget,
     );
 
     const synthStart = performance.now();
@@ -100,7 +136,7 @@ export class ResponseFuser {
       const fusionRequestData: Record<string, unknown> = {
         model: fusionModel,
         messages: synthesisMessages,
-        max_tokens: FUSER_MAX_TOKENS,
+        max_tokens: synthesisBudget.outputBudgetTokens,
       };
       const tools = (ctx.requestData?.["tools"] as unknown[] | undefined);
       const toolChoice = ctx.requestData?.["tool_choice"];
@@ -236,19 +272,21 @@ export class ResponseFuser {
     });
 
     const appendedContent = this.buildSequentialAppend(subagentResults);
+    const synthesisBudget = this.synthesisContextBudget(ctx, fusionModel);
 
     const synthesisMessages = this.buildSynthesisMessages(
       messages,
       appendedContent,
       subagentResults,
       ctx,
+      synthesisBudget,
     );
 
     try {
       const fusionRequestData: Record<string, unknown> = {
         model: fusionModel,
         messages: synthesisMessages,
-        max_tokens: FUSER_MAX_TOKENS,
+        max_tokens: synthesisBudget.outputBudgetTokens,
         stream: true,
       };
       const tools = (ctx.requestData?.["tools"] as unknown[] | undefined);
@@ -446,6 +484,7 @@ export class ResponseFuser {
     appendedContent: string,
     results: SubagentResult[],
     ctx?: FusionRequestContext,
+    budget?: SynthesisContextBudget,
   ): unknown[] {
     const successfulResults = results.filter((r) => r.success && r.content.length > 0);
 
@@ -464,7 +503,7 @@ Your job:
 4. Maintain the original user's intent and tone
 5. Your response should read as a single, unified answer — not a collection of separate parts
 6. TOOL CALLS: if tools are available and the correct next step in the conversation is to invoke one or more of them, respond with proper structured tool calls (tool_calls) exactly as the tool schema requires. NEVER describe a tool call in prose, and NEVER write tool-call JSON inside your text content.
-7. The subagent outputs are advisory research only. Subagents worked in a sealed sandbox with (at most) read-only research tools — they could not touch the user's environment. Ignore any claims they make about having created, edited, executed, or deployed anything, and never repeat such claims to the user.
+7. The subagent outputs are advisory research only. Subagents worked in a sealed sandbox with no tools — they could not touch the user's environment. Ignore any claims they make about having created, edited, executed, or deployed anything, and never repeat such claims to the user.
 
 The subagent outputs are separated by section markers. Each section indicates its focus area.`
         : `You are the final synthesis model in a Fusion system. The router decided this turn does not need parallel subagents, so you are responding directly from the conversation context.
@@ -486,8 +525,8 @@ Your job:
     };
 
     // Image context
-    const hadImgsFromCtx = !!(ctx as FusionRequestContext & { hadImages?: boolean }).hadImages;
-    const descsFromCtx = (ctx as FusionRequestContext & { imageDescriptions?: string[] }).imageDescriptions ?? [];
+    const hadImgsFromCtx = !!ctx?.hadImages;
+    const descsFromCtx = ctx?.imageDescriptions ?? [];
     const hadImgs = hadImgsFromCtx || (originalMessages as Array<Record<string, unknown>>).some(m => Array.isArray(m.content) && (m.content as Array<Record<string, unknown>>).some(p => (p as Record<string, unknown>)["type"] === "image_url"));
     const imgDescs = descsFromCtx.length > 0 ? descsFromCtx : [];
 
@@ -502,40 +541,189 @@ Your job:
       });
     }
 
-    // Include ALL context messages, dropping oldest if needed
-    const availableTokens = 900_000 - systemTokens - estimateTokens(JSON.stringify(fusionPrompt));
-
-    let contextMessages = [...originalMessages];
-    let totalCtxTokens = contextMessages.reduce<number>((t, m) => t + estimateTokens(JSON.stringify(m)), 0);
-    let trimmed = 0;
-
-    while (totalCtxTokens > availableTokens && contextMessages.length > 2 && trimmed < 10) {
-      if (contextMessages.length > 5) {
-        contextMessages.splice(1, 1);
-      } else {
-        contextMessages.shift();
-      }
-      totalCtxTokens = contextMessages.reduce<number>((t, m) => t + estimateTokens(JSON.stringify(m)), 0);
-      trimmed++;
-    }
-
-    if (contextMessages.length > MAX_CONTEXT_MESSAGES) {
-      contextMessages = contextMessages.slice(contextMessages.length - MAX_CONTEXT_MESSAGES);
-    }
+    const activeBudget = budget ?? (ctx !== undefined
+      ? this.synthesisContextBudget(ctx, ctx.fusionConfig.fusion.model_routing)
+      : {
+          contextWindow: SYSTEM_DEFAULT_CONTEXT_WINDOW,
+          inputBudgetTokens: Math.max(
+            MIN_SYNTHESIS_INPUT_TOKENS,
+            SYSTEM_DEFAULT_CONTEXT_WINDOW - Math.floor(SYSTEM_DEFAULT_CONTEXT_WINDOW * MAX_OUTPUT_RESERVE_RATIO),
+          ),
+          outputBudgetTokens: Math.floor(SYSTEM_DEFAULT_CONTEXT_WINDOW * MAX_OUTPUT_RESERVE_RATIO),
+        });
+    const imageTokens = estimateTokens(JSON.stringify(imageContext));
+    const promptTokens = systemTokens + estimateTokens(JSON.stringify(fusionPrompt)) + imageTokens;
+    const contextBudget = Math.max(
+      MIN_SYNTHESIS_INPUT_TOKENS,
+      activeBudget.inputBudgetTokens - promptTokens,
+    );
+    const pack = this.buildSynthesisContextPack(originalMessages, results, contextBudget);
 
     log.info("synthesis context built", {
       originalMessages: originalMessages.length,
-      includedMessages: contextMessages.length,
-      trimmedRounds: trimmed,
+      includedMessages: pack.messages.length,
+      droppedMessages: pack.droppedMessages,
+      estimatedTokens: pack.estimatedTokens,
+      contextWindow: activeBudget.contextWindow,
+      inputBudgetTokens: activeBudget.inputBudgetTokens,
+      outputBudgetTokens: activeBudget.outputBudgetTokens,
+      mix: pack.mix,
       appendedContentLength: appendedContent.length,
     });
 
     return [
       systemPrompt,
-      ...contextMessages,
+      ...pack.messages,
       ...imageContext,
       fusionPrompt,
     ];
+  }
+
+  private synthesisContextBudget(ctx: FusionRequestContext, modelRouting: string): SynthesisContextBudget {
+    const contextWindow = Math.max(
+      4096,
+      Math.min(ctx.fusionConfig.context_window, this.resolveDeclaredContextWindow(modelRouting)),
+    );
+    const outputBudgetTokens = Math.min(
+      FUSER_MAX_TOKENS,
+      Math.max(1024, Math.floor(contextWindow * MAX_OUTPUT_RESERVE_RATIO)),
+    );
+    return {
+      contextWindow,
+      inputBudgetTokens: Math.max(MIN_SYNTHESIS_INPUT_TOKENS, contextWindow - outputBudgetTokens),
+      outputBudgetTokens,
+    };
+  }
+
+  private resolveDeclaredContextWindow(modelRouting: string): number {
+    try {
+      const cfg = modelConfigLoader.loadConfig(modelRouting);
+      const primary = cfg.model_routings[0];
+      return primary?.context_window ?? cfg.context_window ?? SYSTEM_DEFAULT_CONTEXT_WINDOW;
+    } catch {
+      return SYSTEM_DEFAULT_CONTEXT_WINDOW;
+    }
+  }
+
+  private buildSynthesisContextPack(
+    originalMessages: unknown[],
+    results: SubagentResult[],
+    tokenBudget: number,
+  ): SynthesisContextPack {
+    type Candidate = { index: number; message: unknown; priority: number };
+
+    const selected = new Map<number, Candidate>();
+    const add = (index: number, priority: number) => {
+      const message = originalMessages[index];
+      if (message === undefined) return;
+      const existing = selected.get(index);
+      if (existing === undefined || priority < existing.priority) {
+        selected.set(index, { index, message, priority });
+      }
+    };
+
+    const firstCount = Math.min(3, originalMessages.length);
+    const recentTarget = Math.min(96, Math.max(24, Math.floor(tokenBudget / 1600)));
+    const relevantTarget = Math.min(32, Math.max(8, Math.floor(tokenBudget / 6000)));
+    const anchorTarget = Math.min(32, Math.max(4, Math.floor(tokenBudget / 8000)));
+
+    for (let i = 0; i < firstCount; i++) add(i, 0);
+
+    const query = results
+      .map((result) => `${result.subTask.focus_area} ${result.subTask.description}`)
+      .join(" ");
+    const relevantHits = this.scoreMessages(originalMessages, query).slice(0, relevantTarget);
+    for (const hit of relevantHits) add(hit.index, 1);
+
+    for (const index of this.sampleMiddleIndexes(originalMessages.length, firstCount, recentTarget, anchorTarget)) {
+      add(index, 3);
+    }
+
+    for (let i = Math.max(firstCount, originalMessages.length - recentTarget); i < originalMessages.length; i++) {
+      add(i, 2);
+    }
+
+    let candidates = [...selected.values()];
+    let messages = this.materializeCandidates(candidates);
+    let estimatedTokens = estimateMessageTokens(messages);
+
+    while (
+      (estimatedTokens > tokenBudget || candidates.length > MAX_CONTEXT_MESSAGES) &&
+      candidates.length > 1
+    ) {
+      let removeAt = -1;
+      let worstPriority = -1;
+      for (let i = 0; i < candidates.length; i++) {
+        if (candidates[i]!.priority > worstPriority) {
+          worstPriority = candidates[i]!.priority;
+          removeAt = i;
+        }
+      }
+      if (removeAt < 0) break;
+      candidates.splice(removeAt, 1);
+      messages = this.materializeCandidates(candidates);
+      estimatedTokens = estimateMessageTokens(messages);
+    }
+
+    return {
+      messages,
+      estimatedTokens,
+      droppedMessages: Math.max(0, originalMessages.length - messages.length),
+      mix: {
+        first: firstCount,
+        relevant: relevantHits.length,
+        anchors: anchorTarget,
+        recent: recentTarget,
+      },
+    };
+  }
+
+  private materializeCandidates(candidates: Array<{ index: number; message: unknown }>): unknown[] {
+    return candidates
+      .slice()
+      .sort((a, b) => a.index - b.index)
+      .map((candidate) => candidate.message);
+  }
+
+  private scoreMessages(messages: unknown[], query: string): Array<{ index: number; score: number }> {
+    const terms = query
+      .toLowerCase()
+      .split(/\W+/)
+      .filter((term) => term.length > 3);
+    if (terms.length === 0) return [];
+
+    const hits: Array<{ index: number; score: number }> = [];
+    for (let i = 0; i < messages.length; i++) {
+      const text = this.messageText(messages[i]);
+      const lower = text.toLowerCase();
+      const score = terms.reduce((sum, term) => sum + (lower.includes(term) ? 1 : 0), 0);
+      if (score > 0) hits.push({ index: i, score });
+    }
+    return hits.sort((a, b) => b.score - a.score || a.index - b.index);
+  }
+
+  private sampleMiddleIndexes(
+    messageCount: number,
+    firstCount: number,
+    recentTarget: number,
+    anchorTarget: number,
+  ): number[] {
+    const middleStart = firstCount;
+    const middleEndExclusive = Math.max(middleStart, messageCount - recentTarget);
+    const middleCount = middleEndExclusive - middleStart;
+    if (middleCount <= 0 || anchorTarget <= 0) return [];
+    const count = Math.min(anchorTarget, middleCount);
+    const indexes: number[] = [];
+    for (let i = 1; i <= count; i++) {
+      indexes.push(middleStart + Math.floor((i * middleCount) / (count + 1)));
+    }
+    return indexes;
+  }
+
+  private messageText(msg: unknown): string {
+    const record = msg as Record<string, unknown>;
+    const content = record["content"];
+    return typeof content === "string" ? content : JSON.stringify(content ?? "");
   }
 
   private extractToolCalls(response: Record<string, unknown>): unknown[] | undefined {
