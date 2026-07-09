@@ -1,7 +1,7 @@
 # Fusion Quality Evaluation Scratchpad
 
 ## Current Focus
-Add compact scorecard review summaries so benchmark output is directly actionable.
+Add an expected-fail scorecard benchmark control so the low-resource eval proves it can reject bad traces.
 
 ## To-Dos
 - [x] Inspect current model diversity and handoff behavior.
@@ -17,6 +17,7 @@ Add compact scorecard review summaries so benchmark output is directly actionabl
 - [x] Add advisory-diversity and context-coverage scorecard dimensions.
 - [x] Add regression coverage for duplicated advisories with varied model labels.
 - [x] Add deterministic scorecard review summaries for strengths and risks.
+- [x] Add an expected-fail benchmark case for duplicated, unsafe, low-context advisories.
 
 ## Findings
 - `fusion-beta` already exposes a diverse candidate pool for Effort 2/3: GLM, Kimi code, MiniMax, DeepSeek, Mimo, and Nemotron routes.
@@ -35,6 +36,7 @@ Add compact scorecard review summaries so benchmark output is directly actionabl
 - The scorecard now includes advisoryDiversity via pairwise token-overlap checks and contextCoverage via advisory context coverage percentages.
 - A focused regression proved that varied model labels are not enough: duplicated generic advisories with 25% average context coverage now fail with advisory similarity and context coverage checks.
 - `reviewFusionQualityScorecard` now emits pass/warn/fail, one-line summaries, strengths, and risks so scorecard output can be reviewed without manually interpreting every metric.
+- `bun run eval:fusion-scorecard` now includes three expected-pass hard cases plus one expected-fail negative control with duplicated advisories, fake tool artifacts, missing final tools, subagent tools, and low context coverage.
 
 ## Test Results
 - 2026-07-09: `bun test tests/fusion-complexity-scorer.test.ts tests/fusion-quality-gauntlet.test.ts` passed, 8 tests / 59 assertions.
@@ -43,6 +45,11 @@ Add compact scorecard review summaries so benchmark output is directly actionabl
 - 2026-07-09: `bun test tests/multi-user-auth.test.ts` passed, 4 tests / 22 assertions after a transient full-suite timeout.
 - 2026-07-09: `bun test` passed, 358 tests / 1409 assertions.
 - 2026-07-09: `bun run typecheck` passed.
+- 2026-07-09: `bun run build` passed.
+- 2026-07-09: `git diff --check` passed.
+- 2026-07-09: `bun run eval:fusion-scorecard` passed 4 cases: 3 expected pass, 1 expected fail, minOverall 0.601, averageOverall 0.9, elapsedMs 46.26, rssDeltaMb 3.25.
+- 2026-07-09: `bun run eval:fusion-quality` passed, 11 tests / 95 assertions after adding the expected-fail scorecard benchmark control.
+- 2026-07-09: `bun run typecheck` passed after one long-running active `tsc --noEmit` retry.
 - 2026-07-09: `bun run build` passed.
 - 2026-07-09: `git diff --check` passed.
 - 2026-07-09: `bun test tests/fusion-quality-scorecard.test.ts tests/fusion-quality-gauntlet.test.ts` passed, 4 tests / 72 assertions after adding advisoryDiversity and contextCoverage.

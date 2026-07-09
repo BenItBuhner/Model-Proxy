@@ -9,6 +9,7 @@ Push `fusion-beta` beyond plumbing correctness by measuring whether it produces 
 - Verify advisory outputs are not near-duplicates when different models are selected.
 - Verify subagent advisory quality accounts for context coverage, not just short output shape.
 - Emit a compact human-readable review of scorecard strengths and risks for quick triage.
+- Include a negative-control benchmark fixture so the scorecard command proves it rejects shallow/broken Fusion traces.
 - Keep subagent advisory handoff concise enough for the final fuser while preserving key recommendations.
 - Preserve sealed subagents: no tools, `tool_choice: "none"`, no fake tool-call artifacts, and no claims of executed work.
 - Preserve final-model authority over real tool use.
@@ -40,6 +41,7 @@ Push `fusion-beta` beyond plumbing correctness by measuring whether it produces 
 - [x] Scorecard evaluator reports measurable SWE/math/diversity/safety/terse-handoff scores.
 - [x] Scorecard evaluator penalizes duplicated advisories and weak context coverage.
 - [x] Scorecard benchmark emits compact pass/warn/fail review summaries.
+- [x] Scorecard benchmark includes an expected-fail negative control.
 - [x] Scorecard has a low-resource command and regression tests.
 - [x] Scorecard is applied to the live mocked Fusion gauntlet output.
 - [x] Scorecard command reports elapsed time and RSS delta budget checks across multiple hard-case fixtures.

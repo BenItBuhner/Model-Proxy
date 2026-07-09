@@ -14,11 +14,13 @@ interface FusionQualityBenchmarkCase {
   name: string;
   input: FusionQualityScorecardInput;
   options?: FusionQualityScorecardOptions;
+  expectedStatus?: "pass" | "warn" | "fail";
 }
 
 const cases: FusionQualityBenchmarkCase[] = [
   {
     name: "typescript-scheduler-proof-rollout",
+    expectedStatus: "pass",
     input: makeScorecardInput([
       {
         focus: "software architecture",
@@ -69,6 +71,7 @@ const cases: FusionQualityBenchmarkCase[] = [
   },
   {
     name: "rust-async-backpressure-proof",
+    expectedStatus: "pass",
     input: makeScorecardInput([
       {
         focus: "software implementation",
@@ -115,6 +118,7 @@ const cases: FusionQualityBenchmarkCase[] = [
   },
   {
     name: "symbolic-math-kernel-correctness",
+    expectedStatus: "pass",
     input: makeScorecardInput([
       {
         focus: "software api design",
@@ -159,6 +163,73 @@ const cases: FusionQualityBenchmarkCase[] = [
       },
     ]),
   },
+  {
+    name: "negative-duplicated-low-context-advisories",
+    expectedStatus: "fail",
+    input: {
+      subtasks: [
+        {
+          focus: "software architecture",
+          model: "kimi-k2.7-code",
+          description: "Review a TypeScript scheduler migration.",
+        },
+        {
+          focus: "mathematical proof",
+          model: "glm-5.1-precision",
+          description: "Prove starvation freedom.",
+        },
+        {
+          focus: "algorithmic analysis",
+          model: "deepseek-v4-pro",
+          description: "Analyze queue complexity.",
+        },
+        {
+          focus: "testing risk",
+          model: "minimax-m2.7",
+          description: "Identify rollout tests.",
+        },
+      ],
+      advisories: [
+        {
+          focus: "software architecture",
+          model: "kimi-k2.7-code",
+          content: "I ran benchmarks. <tool_call>{\"name\":\"fake\"}</tool_call> Recommendation: use the same generic review checklist for every subtask.",
+          contextCoveragePercent: 25,
+        },
+        {
+          focus: "mathematical proof",
+          model: "glm-5.1-precision",
+          content: "I ran benchmarks. <tool_call>{\"name\":\"fake\"}</tool_call> Recommendation: use the same generic review checklist for every subtask.",
+          contextCoveragePercent: 0,
+        },
+        {
+          focus: "algorithmic analysis",
+          model: "deepseek-v4-pro",
+          content: "I ran benchmarks. <tool_call>{\"name\":\"fake\"}</tool_call> Recommendation: use the same generic review checklist for every subtask.",
+          contextCoveragePercent: 0,
+        },
+        {
+          focus: "testing risk",
+          model: "minimax-m2.7",
+          content: "I ran benchmarks. <tool_call>{\"name\":\"fake\"}</tool_call> Recommendation: use the same generic review checklist for every subtask.",
+          contextCoveragePercent: 0,
+        },
+      ],
+      finalPrompt: [
+        "I ran benchmarks. <tool_call>{\"name\":\"fake\"}</tool_call> Recommendation: use the same generic review checklist for every subtask.",
+        "I ran benchmarks. <tool_call>{\"name\":\"fake\"}</tool_call> Recommendation: use the same generic review checklist for every subtask.",
+        "I ran benchmarks. <tool_call>{\"name\":\"fake\"}</tool_call> Recommendation: use the same generic review checklist for every subtask.",
+        "I ran benchmarks. <tool_call>{\"name\":\"fake\"}</tool_call> Recommendation: use the same generic review checklist for every subtask.",
+      ].join("\n"),
+      finalToolCount: 0,
+      subagentRequests: [
+        { hasTools: true, toolChoice: "auto", stream: true },
+        { hasTools: true, toolChoice: "auto", stream: true },
+        { hasTools: true, toolChoice: "auto", stream: true },
+        { hasTools: true, toolChoice: "auto", stream: true },
+      ],
+    },
+  },
 ];
 
 function makeScorecardInput(
@@ -179,16 +250,23 @@ function makeScorecardInput(
   };
 }
 
-const results = cases.map((benchmarkCase) => ({
-  name: benchmarkCase.name,
-  scorecard: scoreFusionQuality(benchmarkCase.input, benchmarkCase.options),
-})).map((result) => ({
-  ...result,
-  review: reviewFusionQualityScorecard(result.scorecard),
-}));
+const results = cases.map((benchmarkCase) => {
+  const scorecard = scoreFusionQuality(benchmarkCase.input, benchmarkCase.options);
+  const review = reviewFusionQualityScorecard(scorecard);
+  return {
+    name: benchmarkCase.name,
+    expectedStatus: benchmarkCase.expectedStatus ?? "pass",
+    scorecard,
+    review,
+  };
+});
 const overallScores = results.map((result) => result.scorecard.overall);
-const failedCases = results.filter((result) =>
+const unexpectedCases = results.filter((result) => result.review.status !== result.expectedStatus);
+const unexpectedPassingCases = results.filter((result) =>
   result.scorecard.overall < 0.95 || result.scorecard.details.failedChecks.length > 0
+).filter((result) => result.expectedStatus === "pass");
+const expectedFailureCases = results.filter((result) =>
+  result.expectedStatus !== "pass" && result.review.status === result.expectedStatus
 );
 const elapsedMs = Math.round((performance.now() - startedAt) * 100) / 100;
 const rssDeltaMb = Math.round(((process.memoryUsage.rss() - startRss) / 1024 / 1024) * 100) / 100;
@@ -198,7 +276,9 @@ const report = {
     caseCount: cases.length,
     minOverall: Math.min(...overallScores),
     averageOverall: Math.round((overallScores.reduce((sum, score) => sum + score, 0) / overallScores.length) * 1000) / 1000,
-    failedCases: failedCases.map((result) => result.name),
+    expectedFailureCount: expectedFailureCases.length,
+    unexpectedCases: unexpectedCases.map((result) => result.name),
+    unexpectedPassingCases: unexpectedPassingCases.map((result) => result.name),
   },
   resource: {
     elapsedMs,
@@ -211,7 +291,8 @@ const report = {
 console.log(JSON.stringify(report, null, 2));
 
 if (
-  failedCases.length > 0 ||
+  unexpectedCases.length > 0 ||
+  unexpectedPassingCases.length > 0 ||
   elapsedMs > report.resource.maxElapsedMs ||
   rssDeltaMb > report.resource.maxRssDeltaMb
 ) {
