@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { scoreFusionQuality, type FusionQualityScorecardInput } from "../src/routing/fusion/quality-scorecard.ts";
+import {
+  reviewFusionQualityScorecard,
+  scoreFusionQuality,
+  type FusionQualityScorecardInput,
+} from "../src/routing/fusion/quality-scorecard.ts";
 
 function strongInput(): FusionQualityScorecardInput {
   return {
@@ -64,6 +68,12 @@ describe("scoreFusionQuality", () => {
     expect(scorecard.safety).toBe(1);
     expect(scorecard.finalToolAuthority).toBe(1);
     expect(scorecard.details.failedChecks).toEqual([]);
+
+    const review = reviewFusionQualityScorecard(scorecard);
+    expect(review.status).toBe("pass");
+    expect(review.summary).toContain("Fusion quality pass");
+    expect(review.strengths.length).toBeGreaterThanOrEqual(5);
+    expect(review.risks).toEqual([]);
   });
 
   it("penalizes unsafe, verbose, low-diversity traces", () => {
@@ -104,5 +114,10 @@ describe("scoreFusionQuality", () => {
     expect(scorecard.overall).toBeLessThan(0.95);
     expect(scorecard.details.failedChecks).toContain("context coverage 25/80");
     expect(scorecard.details.failedChecks.some((check) => check.startsWith("advisory similarity"))).toBe(true);
+
+    const review = reviewFusionQualityScorecard(scorecard);
+    expect(review.status).not.toBe("pass");
+    expect(review.risks).toContain("advisories are too similar across subagents");
+    expect(review.risks).toContain("subagent context coverage is below threshold");
   });
 });

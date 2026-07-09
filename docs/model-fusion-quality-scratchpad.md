@@ -1,7 +1,7 @@
 # Fusion Quality Evaluation Scratchpad
 
 ## Current Focus
-Harden the deterministic scorecard against shallow diversity by scoring advisory uniqueness and context coverage.
+Add compact scorecard review summaries so benchmark output is directly actionable.
 
 ## To-Dos
 - [x] Inspect current model diversity and handoff behavior.
@@ -16,6 +16,7 @@ Harden the deterministic scorecard against shallow diversity by scoring advisory
 - [x] Add elapsed time and RSS delta budget reporting to the scorecard command.
 - [x] Add advisory-diversity and context-coverage scorecard dimensions.
 - [x] Add regression coverage for duplicated advisories with varied model labels.
+- [x] Add deterministic scorecard review summaries for strengths and risks.
 
 ## Findings
 - `fusion-beta` already exposes a diverse candidate pool for Effort 2/3: GLM, Kimi code, MiniMax, DeepSeek, Mimo, and Nemotron routes.
@@ -33,6 +34,7 @@ Harden the deterministic scorecard against shallow diversity by scoring advisory
 - The latest scorecard suite run scored minOverall 1.0 / averageOverall 1.0 with no failed cases, completing in 3.71 ms with 1.88 MB RSS delta against limits of 1000 ms and 64 MB.
 - The scorecard now includes advisoryDiversity via pairwise token-overlap checks and contextCoverage via advisory context coverage percentages.
 - A focused regression proved that varied model labels are not enough: duplicated generic advisories with 25% average context coverage now fail with advisory similarity and context coverage checks.
+- `reviewFusionQualityScorecard` now emits pass/warn/fail, one-line summaries, strengths, and risks so scorecard output can be reviewed without manually interpreting every metric.
 
 ## Test Results
 - 2026-07-09: `bun test tests/fusion-complexity-scorer.test.ts tests/fusion-quality-gauntlet.test.ts` passed, 8 tests / 59 assertions.
@@ -51,6 +53,12 @@ Harden the deterministic scorecard against shallow diversity by scoring advisory
 - 2026-07-09: `bun run build` passed.
 - 2026-07-09: `git diff --check` passed.
 - 2026-07-09: Full `bun test` attempt hit two recurring unrelated `multi-user auth` timeouts after 359 passes; isolated `bun test tests/multi-user-auth.test.ts` passed, 4 tests / 22 assertions.
+- 2026-07-09: `bun test tests/fusion-quality-scorecard.test.ts` passed, 3 tests / 27 assertions after adding scorecard review summaries.
+- 2026-07-09: `bun run eval:fusion-scorecard` passed 3 cases with pass reviews, elapsedMs 23.1, and rssDeltaMb 2.88.
+- 2026-07-09: `bun run eval:fusion-quality` passed, 11 tests / 95 assertions after adding scorecard review assertions.
+- 2026-07-09: `bun run typecheck` passed.
+- 2026-07-09: `bun run build` passed.
+- 2026-07-09: `git diff --check` passed.
 - 2026-07-09: Expanded `bun run eval:fusion-scorecard` suite passed 3 cases with minOverall 1.0, averageOverall 1.0, elapsedMs 3.71, and rssDeltaMb 1.88.
 - 2026-07-09: `bun run eval:fusion-quality` passed, 10 tests / 78 assertions after expanding the scorecard suite.
 - 2026-07-09: `bun run typecheck` passed.

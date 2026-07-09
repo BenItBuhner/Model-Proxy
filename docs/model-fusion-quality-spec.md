@@ -8,6 +8,7 @@ Push `fusion-beta` beyond plumbing correctness by measuring whether it produces 
 - Verify model diversity is available and used when subtasks request different model routings.
 - Verify advisory outputs are not near-duplicates when different models are selected.
 - Verify subagent advisory quality accounts for context coverage, not just short output shape.
+- Emit a compact human-readable review of scorecard strengths and risks for quick triage.
 - Keep subagent advisory handoff concise enough for the final fuser while preserving key recommendations.
 - Preserve sealed subagents: no tools, `tool_choice: "none"`, no fake tool-call artifacts, and no claims of executed work.
 - Preserve final-model authority over real tool use.
@@ -16,7 +17,7 @@ Push `fusion-beta` beyond plumbing correctness by measuring whether it produces 
 ## Scope
 - Add a lightweight local evaluation harness under `tests/` or `benchmarks/` that uses mocked providers rather than live model calls.
 - Add regression tests that cover task quality signals, model-route diversity, terse advisory packing, cache behavior, and SWE/math prompts.
-- Add a deterministic scorecard that turns Fusion trace/prompt shape into reviewable SWE/math/diversity/context/terse-handoff metrics.
+- Add a deterministic scorecard and review summary that turn Fusion trace/prompt shape into reviewable SWE/math/diversity/context/terse-handoff metrics.
 - Apply the scorecard to actual mocked Fusion gauntlet output, not only to a standalone fixture.
 - Document findings and remaining limits in `docs/model-fusion-quality-scratchpad.md`.
 
@@ -38,6 +39,7 @@ Push `fusion-beta` beyond plumbing correctness by measuring whether it produces 
 - [x] Findings clearly state what local tests prove and what would still require live benchmark evaluation.
 - [x] Scorecard evaluator reports measurable SWE/math/diversity/safety/terse-handoff scores.
 - [x] Scorecard evaluator penalizes duplicated advisories and weak context coverage.
+- [x] Scorecard benchmark emits compact pass/warn/fail review summaries.
 - [x] Scorecard has a low-resource command and regression tests.
 - [x] Scorecard is applied to the live mocked Fusion gauntlet output.
 - [x] Scorecard command reports elapsed time and RSS delta budget checks across multiple hard-case fixtures.

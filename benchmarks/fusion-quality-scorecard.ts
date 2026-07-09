@@ -1,4 +1,5 @@
 import {
+  reviewFusionQualityScorecard,
   scoreFusionQuality,
   type FusionQualityAdvisory,
   type FusionQualityScorecardInput,
@@ -181,6 +182,9 @@ function makeScorecardInput(
 const results = cases.map((benchmarkCase) => ({
   name: benchmarkCase.name,
   scorecard: scoreFusionQuality(benchmarkCase.input, benchmarkCase.options),
+})).map((result) => ({
+  ...result,
+  review: reviewFusionQualityScorecard(result.scorecard),
 }));
 const overallScores = results.map((result) => result.scorecard.overall);
 const failedCases = results.filter((result) =>

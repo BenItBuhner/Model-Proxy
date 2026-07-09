@@ -54,6 +54,13 @@ export interface FusionQualityScorecard {
   };
 }
 
+export interface FusionQualityReview {
+  status: "pass" | "warn" | "fail";
+  summary: string;
+  strengths: string[];
+  risks: string[];
+}
+
 const DEFAULT_REQUIRED_DOMAINS: Array<"software" | "math" | "algorithm" | "testing"> = [
   "software",
   "math",
@@ -170,6 +177,56 @@ export function scoreFusionQuality(
       failedChecks,
     },
   };
+}
+
+export function reviewFusionQualityScorecard(scorecard: FusionQualityScorecard): FusionQualityReview {
+  const strengths: string[] = [];
+  const risks: string[] = [];
+
+  if (scorecard.domainCoverage === 1) strengths.push("covers software, math, algorithm, and testing signals");
+  else risks.push("missing required SWE/math review domains");
+
+  if (scorecard.modelDiversity === 1) strengths.push(`${scorecard.details.uniqueModels.length} unique model routes represented`);
+  else risks.push("model route diversity below target");
+
+  if (scorecard.advisoryDiversity === 1) {
+    strengths.push(`advisories are non-duplicative (max similarity ${scorecard.details.maxAdvisorySimilarity})`);
+  } else {
+    risks.push("advisories are too similar across subagents");
+  }
+
+  if (scorecard.contextCoverage === 1) {
+    strengths.push(`context coverage is sufficient (${scorecard.details.averageContextCoveragePercent ?? "n/a"}%)`);
+  } else {
+    risks.push("subagent context coverage is below threshold");
+  }
+
+  if (scorecard.terseHandoff === 1) strengths.push(`handoff is terse (${scorecard.details.promptChars} prompt chars)`);
+  else risks.push("handoff is too verbose for efficient fusion");
+
+  if (scorecard.safety === 1 && scorecard.finalToolAuthority === 1) {
+    strengths.push("sealed subagents and final-tool authority are preserved");
+  } else {
+    if (scorecard.safety < 1) risks.push("sealed-subagent safety checks failed");
+    if (scorecard.finalToolAuthority < 1) risks.push("final model tool authority is weakened");
+  }
+
+  for (const failedCheck of scorecard.details.failedChecks) {
+    if (!risks.includes(failedCheck)) risks.push(failedCheck);
+  }
+
+  const status: FusionQualityReview["status"] = scorecard.overall >= 0.95 && risks.length === 0
+    ? "pass"
+    : scorecard.overall >= 0.8
+      ? "warn"
+      : "fail";
+  const summary = status === "pass"
+    ? `Fusion quality pass: overall ${scorecard.overall}, diverse terse advisories with preserved safety.`
+    : status === "warn"
+      ? `Fusion quality warning: overall ${scorecard.overall}, review ${risks.length} risk(s).`
+      : `Fusion quality fail: overall ${scorecard.overall}, ${risks.length} blocking risk(s).`;
+
+  return { status, summary, strengths, risks };
 }
 
 function detectDomains(input: FusionQualityScorecardInput): Set<string> {
