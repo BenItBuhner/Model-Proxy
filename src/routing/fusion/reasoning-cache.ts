@@ -337,8 +337,11 @@ function sanitizePointerId(id: string): string {
 }
 
 const TRIVIAL_TOOL_NAME = /todo|plan|task[-_]?list|update[-_]?plan/i;
+const CONTEXT_TOOL_NAME = /read|grep|search|find|list|glob|cat|sed|show|diff|status|log|ls|file|shell|bash|exec|run|test/i;
 const CODE_FENCE = /```/;
 const FILE_PATH = /(^|[\s"'`(=])(\/|\.\.?\/|~\/|[A-Za-z]:\\|[\w.-]+\/)[\w.\\/-]*\w\.\w{1,8}\b/m;
+const DIFF_OR_PATCH_SIGNAL = /(^|\n)\s*(diff --git|@@ |[+-]{3} |\+\+\+ |--- )/;
+const CODE_LIKE_SIGNAL = /\b(export|import|const|let|function|class|interface|type|return|async|await|SELECT|INSERT|UPDATE|CREATE TABLE)\b|[{};]\s*$/m;
 // Matches error signals including compound words like "TypeError" / "SyntaxError".
 const ERROR_SIGNAL = /\b\w*(error|exception)s?\b|traceback|stack trace|\bfail(ed|ure|ing)?\b|\bpanic\b|segfault/i;
 
@@ -464,7 +467,7 @@ export function classifyConversationDelta(
       const name = (typeof obj["name"] === "string" ? (obj["name"] as string) : undefined) ??
         (toolCallId !== undefined ? toolNames.get(toolCallId) : undefined);
       if (name !== undefined && TRIVIAL_TOOL_NAME.test(name)) continue;
-      if (isSignificantToolResult(text)) {
+      if (isSignificantToolResult(text, name)) {
         return { significant: true, reason: `substantial tool result${name !== undefined ? ` (${name})` : ""}` };
       }
       continue;
@@ -477,11 +480,16 @@ export function classifyConversationDelta(
   return { significant: false, reason: "only trivial updates (todo/plan, acks, small tool results)" };
 }
 
-function isSignificantToolResult(text: string): boolean {
+function isSignificantToolResult(text: string, toolName?: string): boolean {
   if (text.length > 1500) return true;
   if (CODE_FENCE.test(text)) return true;
   if (ERROR_SIGNAL.test(text)) return true;
+  if (DIFF_OR_PATCH_SIGNAL.test(text)) return true;
   if (text.length > 300 && FILE_PATH.test(text)) return true;
+  if (toolName !== undefined && CONTEXT_TOOL_NAME.test(toolName)) {
+    if (FILE_PATH.test(text)) return true;
+    if (CODE_LIKE_SIGNAL.test(text)) return true;
+  }
   return false;
 }
 

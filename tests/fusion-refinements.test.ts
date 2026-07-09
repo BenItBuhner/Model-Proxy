@@ -82,6 +82,48 @@ describe("classifyConversationDelta", () => {
     expect(result.significant).toBe(false);
   });
 
+  it("treats short file search tool results as significant", () => {
+    const all = [
+      ...base,
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ id: "call_search", type: "function", function: { name: "grep_files", arguments: "{}" } }],
+      },
+      { role: "tool", tool_call_id: "call_search", content: "src/auth/middleware.ts:42: export function authenticateApiKey(req)" },
+    ];
+    const delta = all.slice(1);
+    const result = classifyConversationDelta(all, delta);
+    expect(result.significant).toBe(true);
+    expect(result.reason).toContain("grep_files");
+  });
+
+  it("treats short read-file snippets as significant even without fences", () => {
+    const all = [
+      ...base,
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ id: "call_read", type: "function", function: { name: "read_file", arguments: "{}" } }],
+      },
+      { role: "tool", tool_call_id: "call_read", content: "export const authHeader = req.headers.get('authorization');" },
+    ];
+    const delta = all.slice(1);
+    const result = classifyConversationDelta(all, delta);
+    expect(result.significant).toBe(true);
+    expect(result.reason).toContain("read_file");
+  });
+
+  it("treats short diff output as significant", () => {
+    const all = [
+      ...base,
+      { role: "tool", tool_call_id: "call_diff", content: "diff --git a/src/auth.ts b/src/auth.ts\n@@ -1 +1 @@\n- old\n+ new" },
+    ];
+    const delta = all.slice(1);
+    const result = classifyConversationDelta(all, delta);
+    expect(result.significant).toBe(true);
+  });
+
   it("treats error-bearing tool results as significant", () => {
     const all = [
       ...base,
