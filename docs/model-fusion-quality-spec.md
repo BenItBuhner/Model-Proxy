@@ -14,6 +14,7 @@ Push `fusion-beta` beyond plumbing correctness by measuring whether it produces 
 ## Scope
 - Add a lightweight local evaluation harness under `tests/` or `benchmarks/` that uses mocked providers rather than live model calls.
 - Add regression tests that cover task quality signals, model-route diversity, terse advisory packing, cache behavior, and SWE/math prompts.
+- Add a deterministic scorecard that turns Fusion trace/prompt shape into reviewable SWE/math/diversity/terse-handoff metrics.
 - Document findings and remaining limits in `docs/model-fusion-quality-scratchpad.md`.
 
 ## Out Of Scope
@@ -32,3 +33,5 @@ Push `fusion-beta` beyond plumbing correctness by measuring whether it produces 
 - [x] Tests prove diverse subagent model routings are preserved through execution and synthesis metadata.
 - [x] Tests prove advisory handoff remains terse and strips invalid action/tool-call artifacts.
 - [x] Findings clearly state what local tests prove and what would still require live benchmark evaluation.
+- [x] Scorecard evaluator reports measurable SWE/math/diversity/safety/terse-handoff scores.
+- [x] Scorecard has a low-resource command and regression tests.

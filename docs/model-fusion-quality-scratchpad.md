@@ -1,7 +1,7 @@
 # Fusion Quality Evaluation Scratchpad
 
 ## Current Focus
-Build a low-resource quality gauntlet for Fusion that stresses software-engineering/math decomposition, model diversity, terse advisory handoff, sealed subagents, and final-model tool authority.
+Add a deterministic scorecard layer that turns Fusion prompt/trace shape into reviewable SWE/math/diversity/safety/terse-handoff metrics.
 
 ## To-Dos
 - [x] Inspect current model diversity and handoff behavior.
@@ -9,6 +9,9 @@ Build a low-resource quality gauntlet for Fusion that stresses software-engineer
 - [x] Add or document a lightweight benchmark/eval entrypoint.
 - [x] Run focused and full validation.
 - [x] Record review findings and remaining live-benchmark limits.
+- [x] Add deterministic Fusion quality scorecard.
+- [x] Add scorecard command and tests.
+- [x] Re-run focused/full validation after scorecard work.
 
 ## Findings
 - `fusion-beta` already exposes a diverse candidate pool for Effort 2/3: GLM, Kimi code, MiniMax, DeepSeek, Mimo, and Nemotron routes.
@@ -19,6 +22,8 @@ Build a low-resource quality gauntlet for Fusion that stresses software-engineer
 - `bun run eval:fusion-quality` runs the low-resource focused evaluator without live provider calls or heavyweight benchmark builds.
 - The older complex-scenario fixture now pins its local Effort 3 minimum to 2 so it continues testing two-subtask cache reuse instead of accidentally testing policy-fill behavior.
 - Local mocked evals prove routing, isolation, diversity preservation, and prompt-shape invariants. They do not prove real-world GPT-5.5/Fable parity; that would require a live benchmark pass with explicit provider, rate, cost, and resource limits.
+- `src/routing/fusion/quality-scorecard.ts` adds a deterministic scorecard over domain coverage, model diversity, terse handoff, safety, and final-tool authority.
+- `bun run eval:fusion-scorecard` emits JSON suitable for quick review without live model calls; current fixture scored overall 1.0 with 596 prompt chars, max 97 advisory chars, four domains, four unique models, and no failed checks.
 
 ## Test Results
 - 2026-07-09: `bun test tests/fusion-complexity-scorer.test.ts tests/fusion-quality-gauntlet.test.ts` passed, 8 tests / 59 assertions.
@@ -26,6 +31,13 @@ Build a low-resource quality gauntlet for Fusion that stresses software-engineer
 - 2026-07-09: `bun test tests/fusion-complex-scenarios.test.ts` passed, 4 tests / 136 assertions.
 - 2026-07-09: `bun test tests/multi-user-auth.test.ts` passed, 4 tests / 22 assertions after a transient full-suite timeout.
 - 2026-07-09: `bun test` passed, 358 tests / 1409 assertions.
+- 2026-07-09: `bun run typecheck` passed.
+- 2026-07-09: `bun run build` passed.
+- 2026-07-09: `git diff --check` passed.
+- 2026-07-09: `bun test tests/fusion-quality-scorecard.test.ts` passed, 2 tests / 12 assertions.
+- 2026-07-09: `bun run eval:fusion-scorecard` passed with overall/domain/diversity/terse/safety/final-tool scores all 1.0.
+- 2026-07-09: `bun run eval:fusion-quality` passed, 10 tests / 71 assertions after adding scorecard coverage.
+- 2026-07-09: `bun test` passed, 360 tests / 1421 assertions.
 - 2026-07-09: `bun run typecheck` passed.
 - 2026-07-09: `bun run build` passed.
 - 2026-07-09: `git diff --check` passed.
