@@ -195,11 +195,16 @@ describe("FusionRouter", () => {
     };
 
     const decision = (router as unknown as {
-      evaluateSubagentNeed: (ctx: FusionRequestContext, score: ComplexityScore) => { useSubagents: boolean; reason: string };
+      evaluateSubagentNeed: (ctx: FusionRequestContext, score: ComplexityScore) => {
+        useSubagents: boolean;
+        reason: string;
+        signals: Record<string, unknown>;
+      };
     }).evaluateSubagentNeed(ctx, score);
 
     expect(decision.useSubagents).toBe(true);
     expect(decision.reason).toContain("tool surface");
+    expect(decision.signals["toolUseAllowed"]).toBe(true);
 
     ctx.resolvedFusionEffort = "F3";
     const highDecision = (router as unknown as {
@@ -207,5 +212,46 @@ describe("FusionRouter", () => {
     }).evaluateSubagentNeed(ctx, score);
     expect(highDecision.useSubagents).toBe(true);
     expect(highDecision.reason).toContain("F3");
+  });
+
+  it("does not spawn subagents for a disabled tool surface alone", () => {
+    const tools = Array.from({ length: 12 }, (_, i) => ({
+      type: "function",
+      function: { name: `tool_${i}`, parameters: { type: "object", properties: {} } },
+    }));
+    const ctx: FusionRequestContext = {
+      logicalModel: "fusion-beta",
+      fusionConfig: testFusionConfig,
+      requestData: {
+        messages: [{ role: "user", content: "Explain this helper without calling tools." }],
+        tools,
+        tool_choice: "none",
+      },
+      clientProtocol: "openai",
+      messages: [{ role: "user", content: "Explain this helper without calling tools." }],
+      runtimeEffort: 2,
+      resolvedFusionEffort: "F2",
+    };
+    const score: ComplexityScore = {
+      score: 0.4,
+      effort: 2,
+      fusionEffort: "F2",
+      reason: "many tools disabled",
+      tokenCount: 3000,
+    };
+
+    const decision = (router as unknown as {
+      evaluateSubagentNeed: (ctx: FusionRequestContext, score: ComplexityScore) => {
+        useSubagents: boolean;
+        reason: string;
+        signals: Record<string, unknown>;
+      };
+    }).evaluateSubagentNeed(ctx, score);
+
+    expect(decision.useSubagents).toBe(false);
+    expect(decision.reason).toContain("within synthesis model context");
+    expect(decision.signals["toolCount"]).toBe(12);
+    expect(decision.signals["toolUseAllowed"]).toBe(false);
+    expect(decision.signals["manyTools"]).toBe(false);
   });
 });

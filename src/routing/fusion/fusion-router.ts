@@ -1073,6 +1073,8 @@ export class FusionRouter {
     const runtimeEffort = ctx.runtimeEffort ?? score.effort;
     const requestData = ctx.requestData;
     const tools = Array.isArray(requestData["tools"]) ? requestData["tools"] : [];
+    const toolChoice = requestData["tool_choice"];
+    const toolUseAllowed = toolChoice !== "none" && tools.length > 0;
     const messageCount = ctx.messages.length;
     const text = JSON.stringify(ctx.messages).toLowerCase();
     const hasCodeOrFileWork =
@@ -1085,7 +1087,7 @@ export class FusionRouter {
           ((msg as Record<string, unknown>)["content"] as unknown[]).some((part) =>
             typeof part === "object" && part !== null && (part as Record<string, unknown>)["type"] === "tool_result"))));
     const largeContext = score.tokenCount >= 24_000;
-    const manyTools = tools.length >= 8;
+    const manyTools = toolUseAllowed && tools.length >= 8;
     const longConversation = messageCount >= 10;
     const explicitHigh = ctx.resolvedFusionEffort === "F3";
     const images = ctx.hadImages === true || (ctx.imageDescriptions?.length ?? 0) > 0;
@@ -1096,6 +1098,7 @@ export class FusionRouter {
       tokenCount: score.tokenCount,
       messageCount,
       toolCount: tools.length,
+      toolUseAllowed,
       largeContext,
       manyTools,
       longConversation,
