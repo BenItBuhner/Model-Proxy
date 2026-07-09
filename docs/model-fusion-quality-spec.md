@@ -11,6 +11,7 @@ Push `fusion-beta` beyond plumbing correctness by measuring whether it produces 
 - Emit a compact human-readable review of scorecard strengths and risks for quick triage.
 - Include a negative-control benchmark fixture so the scorecard command proves it rejects shallow/broken Fusion traces.
 - Report a compact benchmark gate with expected pass/fail counts and resource headroom.
+- Require a minimum score separation between expected-pass and expected-fail benchmark cases.
 - Keep subagent advisory handoff concise enough for the final fuser while preserving key recommendations.
 - Preserve sealed subagents: no tools, `tool_choice: "none"`, no fake tool-call artifacts, and no claims of executed work.
 - Preserve final-model authority over real tool use.
@@ -45,6 +46,7 @@ Push `fusion-beta` beyond plumbing correctness by measuring whether it produces 
 - [x] Scorecard benchmark emits compact pass/warn/fail review summaries.
 - [x] Scorecard benchmark includes an expected-fail negative control.
 - [x] Scorecard benchmark reports compact gate and resource-headroom fields.
+- [x] Scorecard benchmark enforces a positive-vs-negative score separation margin.
 - [x] Scorecard has a low-resource command and regression tests.
 - [x] Scorecard is applied to the live mocked Fusion gauntlet output.
 - [x] Scorecard command reports elapsed time and RSS delta budget checks across multiple hard-case fixtures.

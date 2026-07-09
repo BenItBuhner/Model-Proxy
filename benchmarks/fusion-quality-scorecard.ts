@@ -261,6 +261,7 @@ const results = cases.map((benchmarkCase) => {
   };
 });
 const overallScores = results.map((result) => result.scorecard.overall);
+const expectedPassCases = results.filter((result) => result.expectedStatus === "pass");
 const unexpectedCases = results.filter((result) => result.review.status !== result.expectedStatus);
 const unexpectedPassingCases = results.filter((result) =>
   result.scorecard.overall < 0.95 || result.scorecard.details.failedChecks.length > 0
@@ -268,20 +269,27 @@ const unexpectedPassingCases = results.filter((result) =>
 const expectedFailureCases = results.filter((result) =>
   result.expectedStatus !== "pass" && result.review.status === result.expectedStatus
 );
+const positiveMinOverall = Math.min(...expectedPassCases.map((result) => result.scorecard.overall));
+const negativeMaxOverall = Math.max(...expectedFailureCases.map((result) => result.scorecard.overall), 0);
+const separationMargin = Math.round((positiveMinOverall - negativeMaxOverall) * 1000) / 1000;
+const minSeparationMargin = 0.25;
 const elapsedMs = Math.round((performance.now() - startedAt) * 100) / 100;
 const rssDeltaMb = Math.round(((process.memoryUsage.rss() - startRss) / 1024 / 1024) * 100) / 100;
 const maxElapsedMs = 1000;
 const maxRssDeltaMb = 64;
 const gatePassed = unexpectedCases.length === 0 &&
   unexpectedPassingCases.length === 0 &&
+  separationMargin >= minSeparationMargin &&
   elapsedMs <= maxElapsedMs &&
   rssDeltaMb <= maxRssDeltaMb;
 const report = {
   gate: {
     passed: gatePassed,
-    expectedPassCount: results.filter((result) => result.expectedStatus === "pass").length,
+    expectedPassCount: expectedPassCases.length,
     expectedFailureCount: expectedFailureCases.length,
     unexpectedCount: unexpectedCases.length + unexpectedPassingCases.length,
+    separationMargin,
+    minSeparationMargin,
     elapsedHeadroomMs: Math.round((maxElapsedMs - elapsedMs) * 100) / 100,
     rssHeadroomMb: Math.round((maxRssDeltaMb - rssDeltaMb) * 100) / 100,
   },
@@ -289,6 +297,8 @@ const report = {
   summary: {
     caseCount: cases.length,
     minOverall: Math.min(...overallScores),
+    positiveMinOverall,
+    negativeMaxOverall,
     averageOverall: Math.round((overallScores.reduce((sum, score) => sum + score, 0) / overallScores.length) * 1000) / 1000,
     expectedFailureCount: expectedFailureCases.length,
     unexpectedCases: unexpectedCases.map((result) => result.name),

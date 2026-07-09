@@ -1,7 +1,7 @@
 # Fusion Quality Evaluation Scratchpad
 
 ## Current Focus
-Add a durable human-readable review of local Fusion quality evidence, limits, and safe next steps.
+Add a score separation margin so expected-pass cases must stay meaningfully above expected-fail controls.
 
 ## To-Dos
 - [x] Inspect current model diversity and handoff behavior.
@@ -20,6 +20,7 @@ Add a durable human-readable review of local Fusion quality evidence, limits, an
 - [x] Add an expected-fail benchmark case for duplicated, unsafe, low-context advisories.
 - [x] Add compact benchmark gate fields for pass/fail counts and resource headroom.
 - [x] Add `docs/model-fusion-quality-review.md`.
+- [x] Add positive-vs-negative score separation margin to the scorecard gate.
 
 ## Findings
 - `fusion-beta` already exposes a diverse candidate pool for Effort 2/3: GLM, Kimi code, MiniMax, DeepSeek, Mimo, and Nemotron routes.
@@ -41,6 +42,7 @@ Add a durable human-readable review of local Fusion quality evidence, limits, an
 - `bun run eval:fusion-scorecard` now includes three expected-pass hard cases plus one expected-fail negative control with duplicated advisories, fake tool artifacts, missing final tools, subagent tools, and low context coverage.
 - The scorecard benchmark now emits a top-level gate summary with passed, expectedPassCount, expectedFailureCount, unexpectedCount, elapsedHeadroomMs, and rssHeadroomMb.
 - `docs/model-fusion-quality-review.md` summarizes current local evidence, safe commands, resource posture, explicit non-proof of live GPT-5.5/Fable parity, and live-eval prerequisites.
+- The scorecard benchmark now requires expected-pass cases to clear expected-fail controls by at least 0.25 overall score; current margin is 0.399.
 
 ## Test Results
 - 2026-07-09: `bun test tests/fusion-complexity-scorer.test.ts tests/fusion-quality-gauntlet.test.ts` passed, 8 tests / 59 assertions.
@@ -53,6 +55,11 @@ Add a durable human-readable review of local Fusion quality evidence, limits, an
 - 2026-07-09: `git diff --check` passed.
 - 2026-07-09: Added `docs/model-fusion-quality-review.md`; `bun run eval:fusion-scorecard` passed with elapsedMs 41.67 and rssDeltaMb 3.13.
 - 2026-07-09: `bun run eval:fusion-quality` passed, 11 tests / 95 assertions after adding the review doc.
+- 2026-07-09: `git diff --check` passed.
+- 2026-07-09: `bun run eval:fusion-scorecard` passed with positiveMinOverall 1.0, negativeMaxOverall 0.601, separationMargin 0.399, minSeparationMargin 0.25, elapsedMs 60.73, rssDeltaMb 3.13.
+- 2026-07-09: `bun run eval:fusion-quality` passed, 11 tests / 95 assertions after adding score separation gating.
+- 2026-07-09: `bun run typecheck` passed.
+- 2026-07-09: `bun run build` passed.
 - 2026-07-09: `git diff --check` passed.
 - 2026-07-09: `bun run eval:fusion-scorecard` passed with gate.passed true, expectedPassCount 3, expectedFailureCount 1, unexpectedCount 0, elapsedHeadroomMs 987.65, and rssHeadroomMb 60.5.
 - 2026-07-09: `bun run eval:fusion-quality` passed, 11 tests / 95 assertions after adding compact gate fields.

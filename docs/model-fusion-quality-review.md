@@ -32,6 +32,7 @@ Latest focused scorecard run:
 - Expected-pass cases: 3.
 - Expected-fail cases: 1.
 - Unexpected cases: 0.
+- Positive-vs-negative score margin: 0.399 against a minimum of 0.25.
 - Minimum overall score: 0.601, from the expected-fail negative control.
 - Average overall score: 0.9.
 - Resource headroom: about 987 ms and 60 MB under the configured limits.
