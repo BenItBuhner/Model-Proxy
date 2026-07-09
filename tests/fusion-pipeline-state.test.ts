@@ -208,6 +208,22 @@ describe("fusion pipeline state derivation", () => {
           contextMessageCount: 38,
           droppedMessageCount: 102,
           packedContextTokens: 11_819,
+          contextPack: {
+            logicalContextWindow: 10_000_000,
+            tokenBudget: 48_000,
+            totalMessages: 140,
+            suppliedMessages: 38,
+            droppedMessages: 102,
+            coveragePercent: 27.1,
+            selectedRanges: "1-3,42,60,103-140",
+            relevantHitCount: 12,
+            mix: {
+              first: 3,
+              relevant: 8,
+              anchors: 4,
+              recent: 38,
+            },
+          },
         },
       ],
     };
@@ -232,6 +248,7 @@ describe("fusion pipeline state derivation", () => {
     expect(state.subagents[0]?.detail?.["outputBudgetTokens"]).toBe(16_000);
     expect(state.subagents[0]?.detail?.["contextMessageCount"]).toBe(38);
     expect(state.subagents[0]?.detail?.["droppedMessageCount"]).toBe(102);
+    expect((state.subagents[0]?.detail?.["contextPack"] as Record<string, unknown> | undefined)?.["selectedRanges"]).toBe("1-3,42,60,103-140");
   });
 
   it("preserves streaming trace step detail in historical dashboard views", () => {

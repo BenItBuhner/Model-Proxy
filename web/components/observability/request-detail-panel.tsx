@@ -43,6 +43,13 @@ interface FusionTrace {
     modelRouting: string;
     durationMs: number;
     outputLength: number;
+    contextWindow?: number;
+    inputBudgetTokens?: number;
+    outputBudgetTokens?: number;
+    contextMessageCount?: number;
+    droppedMessageCount?: number;
+    packedContextTokens?: number;
+    contextPack?: Record<string, unknown>;
   }>;
   steps?: Array<{
     type: string;

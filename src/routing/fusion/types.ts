@@ -126,6 +126,23 @@ export interface SubagentResult {
   droppedMessageCount?: number;
   /** Estimated tokens for the packed verbatim context messages. */
   packedContextTokens?: number;
+  /** Compact telemetry describing how the logical Fusion context was triaged. */
+  contextPack?: {
+    logicalContextWindow: number;
+    tokenBudget: number;
+    totalMessages: number;
+    suppliedMessages: number;
+    droppedMessages: number;
+    coveragePercent: number;
+    selectedRanges: string;
+    relevantHitCount: number;
+    mix: {
+      first: number;
+      relevant: number;
+      anchors: number;
+      recent: number;
+    };
+  };
 }
 
 // ── Complexity Score Result ──────────────────────────────────────────
@@ -223,6 +240,7 @@ export interface FusionTrace {
     contextMessageCount?: number;
     droppedMessageCount?: number;
     packedContextTokens?: number;
+    contextPack?: SubagentResult["contextPack"];
   }>;
   /** Cost breakdown across all model calls in the pipeline. */
   costs: FusionCostEntry[];

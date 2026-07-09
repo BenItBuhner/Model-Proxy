@@ -89,12 +89,16 @@ interface SubagentMessagePack {
   contextMessageCount: number;
   droppedMessageCount: number;
   packedContextTokens: number;
+  contextPack: NonNullable<SubagentResult["contextPack"]>;
 }
+
+type ContextPackSource = "first" | "relevant" | "anchor" | "recent";
 
 interface SelectedContextMessage {
   index: number;
   message: unknown;
   priority: number;
+  sources: Set<ContextPackSource>;
 }
 
 /** Merge OpenAI streaming tool_call deltas into complete calls. */
@@ -271,6 +275,7 @@ export class SubagentExecutor {
             contextMessageCount: messagePack.contextMessageCount,
             droppedMessageCount: messagePack.droppedMessageCount,
             packedContextTokens: messagePack.packedContextTokens,
+            contextPack: messagePack.contextPack,
           },
         });
         const attemptSignal = this.createAttemptSignal(ctx, options);
@@ -337,6 +342,7 @@ export class SubagentExecutor {
               contextMessageCount: messagePack.contextMessageCount,
               droppedMessageCount: messagePack.droppedMessageCount,
               packedContextTokens: messagePack.packedContextTokens,
+              contextPack: messagePack.contextPack,
             },
           });
 
@@ -353,6 +359,7 @@ export class SubagentExecutor {
             contextMessageCount: messagePack.contextMessageCount,
             droppedMessageCount: messagePack.droppedMessageCount,
             packedContextTokens: messagePack.packedContextTokens,
+            contextPack: messagePack.contextPack,
           };
         } finally {
           attemptSignal.cleanup();
@@ -427,6 +434,7 @@ export class SubagentExecutor {
       contextMessageCount: lastMessagePack?.contextMessageCount,
       droppedMessageCount: lastMessagePack?.droppedMessageCount,
       packedContextTokens: lastMessagePack?.packedContextTokens,
+      contextPack: lastMessagePack?.contextPack,
     };
   }
 
@@ -444,6 +452,7 @@ export class SubagentExecutor {
       contextMessageCount: messagePack.contextMessageCount,
       droppedMessageCount: messagePack.droppedMessageCount,
       packedContextTokens: messagePack.packedContextTokens,
+      contextPack: messagePack.contextPack,
     };
   }
 
@@ -694,7 +703,7 @@ Be thorough and complete — do not truncate or trim your analysis.`,
       MIN_SUBAGENT_CONTEXT_PACKET_TOKENS,
       budget.inputBudgetTokens - systemTokens - taskPromptTokens,
     );
-    const { contextMessages, briefing, estimatedTokens, droppedMessages } =
+    const { contextMessages, briefing, estimatedTokens, droppedMessages, contextPack } =
       this.buildAdaptiveContextPack(ctx, subTask, contextBudget);
 
     const nudge = nudgeNoTools
@@ -732,6 +741,7 @@ Be thorough and complete — do not truncate or trim your analysis.`,
       contextMessageCount: contextMessages.length,
       droppedMessageCount: droppedMessages,
       packedContextTokens: estimatedTokens,
+      contextPack,
     };
   }
 
@@ -772,6 +782,7 @@ Be thorough and complete — do not truncate or trim your analysis.`,
     briefing: string;
     estimatedTokens: number;
     droppedMessages: number;
+    contextPack: NonNullable<SubagentResult["contextPack"]>;
   } {
     const sanitized = ctx.messages.map((msg) => this.sanitizeContextMessage(msg));
     const taskTerms = `${subTask.focus_area} ${subTask.description}`;
@@ -781,7 +792,7 @@ Be thorough and complete — do not truncate or trim your analysis.`,
     const anchorTarget = Math.min(24, Math.max(4, Math.floor(tokenBudget / 8000)));
     const relevantHits = this.selectRelevantHits(this.scoreMessages(sanitized, taskTerms), relevantTarget, sanitized.length);
     const selected = new Map<number, SelectedContextMessage>();
-    const addSelected = (index: number, priority: number) => {
+    const addSelected = (index: number, priority: number, source: ContextPackSource) => {
       const message = sanitized[index];
       if (message === undefined) return;
       const existing = selected.get(index);
@@ -789,16 +800,17 @@ Be thorough and complete — do not truncate or trim your analysis.`,
         index,
         message,
         priority: Math.max(priority, existing?.priority ?? 0),
+        sources: new Set([...(existing?.sources ?? []), source]),
       });
     };
 
-    for (let i = 0; i < firstCount; i++) addSelected(i, 100);
-    for (const hit of relevantHits) addSelected(hit.index, 80 + hit.score);
+    for (let i = 0; i < firstCount; i++) addSelected(i, 100, "first");
+    for (const hit of relevantHits) addSelected(hit.index, 80 + hit.score, "relevant");
     for (const index of this.sampleMiddleIndexes(sanitized.length, firstCount, recentTarget, anchorTarget)) {
-      addSelected(index, 20);
+      addSelected(index, 20, "anchor");
     }
     for (let i = Math.max(firstCount, sanitized.length - recentTarget); i < sanitized.length; i++) {
-      addSelected(i, 60);
+      addSelected(i, 60, "recent");
     }
 
     let selectedMessages = [...selected.values()].sort((a, b) => a.index - b.index);
@@ -809,6 +821,14 @@ Be thorough and complete — do not truncate or trim your analysis.`,
 
     const relevantExcerpt = this.keywordContextBrief(relevantHits);
     let droppedMessages = Math.max(0, sanitized.length - contextMessages.length);
+    let contextPack = this.buildContextPackTelemetry({
+      logicalContextWindow: ctx.fusionConfig.context_window,
+      tokenBudget,
+      totalMessages: sanitized.length,
+      selectedMessages,
+      droppedMessages,
+      relevantHitCount: relevantHits.length,
+    });
     let briefing = this.buildContextBriefing({
       logicalContextWindow: ctx.fusionConfig.context_window,
       tokenBudget,
@@ -819,6 +839,8 @@ Be thorough and complete — do not truncate or trim your analysis.`,
       anchorTarget,
       recentTarget,
       droppedMessages,
+      selectedRanges: contextPack.selectedRanges,
+      coveragePercent: contextPack.coveragePercent,
       relevantExcerpt,
     });
     let estimatedTokens = this.estimateContextPacketTokens(contextMessages, briefing);
@@ -827,6 +849,14 @@ Be thorough and complete — do not truncate or trim your analysis.`,
       selectedMessages.splice(this.lowestPriorityRemovalIndex(selectedMessages), 1);
       contextMessages = selectedMessages.map((item) => item.message);
       droppedMessages = Math.max(0, sanitized.length - contextMessages.length);
+      contextPack = this.buildContextPackTelemetry({
+        logicalContextWindow: ctx.fusionConfig.context_window,
+        tokenBudget,
+        totalMessages: sanitized.length,
+        selectedMessages,
+        droppedMessages,
+        relevantHitCount: relevantHits.length,
+      });
       briefing = this.buildContextBriefing({
         logicalContextWindow: ctx.fusionConfig.context_window,
         tokenBudget,
@@ -837,6 +867,8 @@ Be thorough and complete — do not truncate or trim your analysis.`,
         anchorTarget,
         recentTarget,
         droppedMessages,
+        selectedRanges: contextPack.selectedRanges,
+        coveragePercent: contextPack.coveragePercent,
         relevantExcerpt,
       });
       estimatedTokens = this.estimateContextPacketTokens(contextMessages, briefing);
@@ -847,7 +879,59 @@ Be thorough and complete — do not truncate or trim your analysis.`,
       estimatedTokens = this.estimateContextPacketTokens(contextMessages, briefing);
     }
 
-    return { contextMessages, briefing, estimatedTokens, droppedMessages };
+    return { contextMessages, briefing, estimatedTokens, droppedMessages, contextPack };
+  }
+
+  private buildContextPackTelemetry(args: {
+    logicalContextWindow: number;
+    tokenBudget: number;
+    totalMessages: number;
+    selectedMessages: SelectedContextMessage[];
+    droppedMessages: number;
+    relevantHitCount: number;
+  }): NonNullable<SubagentResult["contextPack"]> {
+    const suppliedMessages = args.selectedMessages.length;
+    const coveragePercent = args.totalMessages === 0
+      ? 100
+      : Number(((suppliedMessages / args.totalMessages) * 100).toFixed(1));
+    const countSource = (source: ContextPackSource) =>
+      args.selectedMessages.filter((message) => message.sources.has(source)).length;
+    return {
+      logicalContextWindow: args.logicalContextWindow,
+      tokenBudget: args.tokenBudget,
+      totalMessages: args.totalMessages,
+      suppliedMessages,
+      droppedMessages: args.droppedMessages,
+      coveragePercent,
+      selectedRanges: this.formatSelectedRanges(args.selectedMessages.map((message) => message.index)),
+      relevantHitCount: args.relevantHitCount,
+      mix: {
+        first: countSource("first"),
+        relevant: countSource("relevant"),
+        anchors: countSource("anchor"),
+        recent: countSource("recent"),
+      },
+    };
+  }
+
+  private formatSelectedRanges(indexes: number[]): string {
+    if (indexes.length === 0) return "none";
+    const sorted = [...new Set(indexes)].sort((a, b) => a - b);
+    const ranges: string[] = [];
+    let start = sorted[0]!;
+    let prev = start;
+    for (let i = 1; i < sorted.length; i++) {
+      const index = sorted[i]!;
+      if (index === prev + 1) {
+        prev = index;
+        continue;
+      }
+      ranges.push(start === prev ? String(start + 1) : `${start + 1}-${prev + 1}`);
+      start = index;
+      prev = index;
+    }
+    ranges.push(start === prev ? String(start + 1) : `${start + 1}-${prev + 1}`);
+    return ranges.join(",");
   }
 
   private lowestPriorityRemovalIndex(messages: SelectedContextMessage[]): number {
@@ -880,6 +964,8 @@ Be thorough and complete — do not truncate or trim your analysis.`,
     anchorTarget: number;
     recentTarget: number;
     droppedMessages: number;
+    selectedRanges: string;
+    coveragePercent: number;
     relevantExcerpt: string;
   }): string {
     return [
@@ -887,6 +973,7 @@ Be thorough and complete — do not truncate or trim your analysis.`,
       `- Logical Fusion context window: ${args.logicalContextWindow} tokens.`,
       `- Your routed model context budget is smaller/adaptive; this packet targets about ${args.tokenBudget} input tokens.`,
       `- Conversation messages supplied verbatim: ${args.suppliedMessages}/${args.totalMessages}.`,
+      `- Final selected message ranges: ${args.selectedRanges} (${args.coveragePercent}% message coverage).`,
       `- Stratified context mix before final budget pruning: first=${args.firstCount}, relevant<=${args.relevantTarget}, middle_anchors<=${args.anchorTarget}, recent<=${args.recentTarget}.`,
       args.droppedMessages > 0
         ? `- ${args.droppedMessages} older or lower-priority messages were omitted to preserve room for reasoning.`

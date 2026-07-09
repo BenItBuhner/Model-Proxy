@@ -223,6 +223,7 @@ export class FusionRouter {
         contextMessageCount: r.contextMessageCount,
         droppedMessageCount: r.droppedMessageCount,
         packedContextTokens: r.packedContextTokens,
+        contextPack: r.contextPack,
       })),
       costs,
       totalCostUsd,
@@ -678,6 +679,7 @@ export class FusionRouter {
           contextMessageCount: r.contextMessageCount,
           droppedMessageCount: r.droppedMessageCount,
           packedContextTokens: r.packedContextTokens,
+          contextPack: r.contextPack,
         })),
         costs: estCosts,
         totalCostUsd: estCosts.reduce((t, c) => t + c.userCostUsd, 0),
@@ -1269,6 +1271,7 @@ export class FusionRouter {
           contextMessageCount: result.contextMessageCount,
           droppedMessageCount: result.droppedMessageCount,
           packedContextTokens: result.packedContextTokens,
+          contextPack: result.contextPack,
           ...extraDetail,
         },
       });

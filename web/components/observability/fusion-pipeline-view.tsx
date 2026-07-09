@@ -393,6 +393,14 @@ function SubagentLane({
   const contextMessages = asNumber(agent.detail?.["contextMessageCount"]);
   const droppedMessages = asNumber(agent.detail?.["droppedMessageCount"]);
   const packedTokens = asNumber(agent.detail?.["packedContextTokens"]);
+  const contextPack = asRecord(agent.detail?.["contextPack"]);
+  const coveragePercent = asNumber(contextPack?.["coveragePercent"]);
+  const relevantHits = asNumber(contextPack?.["relevantHitCount"]);
+  const selectedRanges = typeof contextPack?.["selectedRanges"] === "string" ? contextPack["selectedRanges"] : undefined;
+  const mix = asRecord(contextPack?.["mix"]);
+  const mixText = mix !== undefined
+    ? `f${asNumber(mix["first"]) ?? 0}/r${asNumber(mix["relevant"]) ?? 0}/a${asNumber(mix["anchors"]) ?? 0}/n${asNumber(mix["recent"]) ?? 0}`
+    : undefined;
   const stage = typeof agent.detail?.["stage"] === "string" ? agent.detail["stage"] : undefined;
   const hasContextPackStats =
     contextWindow !== undefined ||
@@ -401,6 +409,10 @@ function SubagentLane({
     contextMessages !== undefined ||
     droppedMessages !== undefined ||
     packedTokens !== undefined ||
+    coveragePercent !== undefined ||
+    relevantHits !== undefined ||
+    selectedRanges !== undefined ||
+    mixText !== undefined ||
     stage !== undefined;
 
   return (
@@ -435,6 +447,10 @@ function SubagentLane({
           {contextMessages !== undefined ? <MiniStat label="msgs" value={formatCount(contextMessages)} /> : null}
           {droppedMessages !== undefined ? <MiniStat label="dropped" value={formatCount(droppedMessages)} /> : null}
           {packedTokens !== undefined ? <MiniStat label="packed" value={`${formatCount(packedTokens)} tok`} /> : null}
+          {coveragePercent !== undefined ? <MiniStat label="coverage" value={`${coveragePercent}%`} /> : null}
+          {relevantHits !== undefined ? <MiniStat label="hits" value={formatCount(relevantHits)} /> : null}
+          {mixText !== undefined ? <MiniStat label="mix" value={mixText} /> : null}
+          {selectedRanges !== undefined ? <MiniStat label="ranges" value={selectedRanges} /> : null}
         </div>
       ) : null}
       {agent.error !== undefined && agent.status === "failed" ? (
@@ -473,4 +489,8 @@ function MiniStat({ label, value }: { label: string; value: string }): React.Rea
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null ? value as Record<string, unknown> : undefined;
 }

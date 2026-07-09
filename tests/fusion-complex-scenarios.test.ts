@@ -308,6 +308,8 @@ describe("Fusion complex scenarios", () => {
     expect(first.fusionTrace?.subagentDetails?.[0]?.contextMessageCount).toBe(3);
     expect(first.fusionTrace?.subagentDetails?.[0]?.droppedMessageCount).toBe(0);
     expect(first.fusionTrace?.subagentDetails?.[0]?.packedContextTokens).toBeGreaterThan(0);
+    expect(first.fusionTrace?.subagentDetails?.[0]?.contextPack?.logicalContextWindow).toBe(10_000_000);
+    expect(first.fusionTrace?.subagentDetails?.[0]?.contextPack?.selectedRanges).toBe("1-3");
     expect(first.fusionTrace?.steps.some((step) => step.label === "Subagent Decision")).toBe(true);
     expect(first.fusionTrace?.steps.some((step) => step.label === "Subagent Execution")).toBe(true);
     const fusionRunId = first.fusionTrace?.fusionRunId;
@@ -520,6 +522,9 @@ describe("Fusion complex scenarios", () => {
     expect(firstDetails?.[0]?.["contextMessageCount"]).toBe(3);
     expect(firstDetails?.[0]?.["droppedMessageCount"]).toBe(0);
     expect(firstDetails?.[0]?.["packedContextTokens"]).toBeGreaterThan(0);
+    const firstContextPack = firstDetails?.[0]?.["contextPack"] as Record<string, unknown> | undefined;
+    expect(firstContextPack?.["selectedRanges"]).toBe("1-3");
+    expect(firstContextPack?.["coveragePercent"]).toBe(100);
     expect(events.some((event) => {
       const evt = event as Record<string, unknown>;
       return evt["type"] === "fusion.summary" && String(evt["text"] ?? "").includes("repository cleanup risks");

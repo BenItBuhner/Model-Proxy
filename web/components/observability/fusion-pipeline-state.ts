@@ -87,6 +87,7 @@ export interface FusionTraceLike {
     contextMessageCount?: number;
     droppedMessageCount?: number;
     packedContextTokens?: number;
+    contextPack?: Record<string, unknown>;
     detail?: Record<string, unknown>;
   }>;
   costs?: Array<{
@@ -269,6 +270,7 @@ export function stateFromTrace(trace: FusionTraceLike): PipelineState {
         contextMessageCount: sa.contextMessageCount,
         droppedMessageCount: sa.droppedMessageCount,
         packedContextTokens: sa.packedContextTokens,
+        contextPack: sa.contextPack,
       },
     })),
     summaries: trace.summaries ?? [],

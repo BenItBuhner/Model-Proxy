@@ -189,6 +189,10 @@ describe("SubagentExecutor reasoning-only subagents", () => {
     expect(completedDetail?.["contextMessageCount"]).toBe(1);
     expect(completedDetail?.["droppedMessageCount"]).toBe(0);
     expect(completedDetail?.["packedContextTokens"]).toBeGreaterThan(0);
+    const contextPack = completedDetail?.["contextPack"] as Record<string, unknown> | undefined;
+    expect(contextPack?.["logicalContextWindow"]).toBe(10_000_000);
+    expect(contextPack?.["selectedRanges"]).toBe("1");
+    expect(contextPack?.["coveragePercent"]).toBe(100);
 
     const firstBody = capturedBodies[0];
     expect("tools" in firstBody).toBe(false);
@@ -197,6 +201,7 @@ describe("SubagentExecutor reasoning-only subagents", () => {
     expect(messages.some((m) => m["role"] === "tool")).toBe(false);
     const briefing = String(messages[1]?.["content"] ?? "");
     expect(briefing).toContain("Fusion proxy context briefing");
+    expect(briefing).toContain("Final selected message ranges: 1 (100% message coverage).");
     expect(briefing).toContain("Relevant excerpts selected by the proxy");
     expect(briefing).toContain("retry behavior");
     expect(firstBody["max_tokens"]).toBe(16000);
@@ -233,6 +238,12 @@ describe("SubagentExecutor reasoning-only subagents", () => {
     expect(results[0].contextMessageCount).toBeGreaterThan(20);
     expect(results[0].droppedMessageCount).toBeGreaterThan(90);
     expect(results[0].packedContextTokens).toBeGreaterThan(1000);
+    expect(results[0].contextPack?.totalMessages).toBe(140);
+    expect(results[0].contextPack?.coveragePercent).toBeLessThan(50);
+    expect(results[0].contextPack?.selectedRanges).toContain("1-3");
+    expect(results[0].contextPack?.mix.relevant).toBeGreaterThan(0);
+    expect(results[0].contextPack?.mix.anchors).toBeGreaterThan(0);
+    expect(results[0].contextPack?.mix.recent).toBeGreaterThan(0);
     const body = capturedBodies[0];
     const packedMessages = body["messages"] as Array<Record<string, unknown>>;
     const packedText = JSON.stringify(packedMessages);
