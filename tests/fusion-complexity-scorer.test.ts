@@ -125,6 +125,50 @@ describe("ComplexityScorer", () => {
     expect(result.tokenCount).toBeGreaterThan(0);
   });
 
+  it("escalates SWE/math proof-heavy engineering prompts to full fusion", () => {
+    const ctx: FusionRequestContext = {
+      logicalModel: "fusion-beta",
+      fusionConfig: defaultFusionConfig,
+      requestData: {
+        messages: [
+          {
+            role: "user",
+            content: [
+              "Design a TypeScript request scheduler with a migration adapter.",
+              "Prove no starvation using an invariant, bounded wait, and a ranking function.",
+              "Include complexity analysis, counterexamples, queue behavior, and edge-case tests.",
+            ].join("\n"),
+          },
+        ],
+        tools: Array.from({ length: 12 }, (_, i) => ({
+          type: "function",
+          function: {
+            name: `engineering_tool_${i}`,
+            description: `Engineering analysis tool ${i}`,
+            parameters: { type: "object", properties: {} },
+          },
+        })),
+      },
+      clientProtocol: "openai",
+      messages: [
+        {
+          role: "user",
+          content: [
+            "Design a TypeScript request scheduler with a migration adapter.",
+            "Prove no starvation using an invariant, bounded wait, and a ranking function.",
+            "Include complexity analysis, counterexamples, queue behavior, and edge-case tests.",
+          ].join("\n"),
+        },
+      ],
+    };
+
+    const result = scorer.score(ctx);
+
+    expect(result.effort).toBe(3);
+    expect(result.reason).toContain("code-gen: yes");
+    expect(result.reason).toContain("reasoning: yes");
+  });
+
   it("handles Anthropic-format tool calls", () => {
     const ctx = makeCtx([
       {

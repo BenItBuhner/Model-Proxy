@@ -76,7 +76,8 @@ function hasCodeGeneration(messages: unknown[]): boolean {
   const codeKeywords = [
     "implement", "function", "class ", "def ", "const ", "let ", "import ",
     "require(", "component", "api", "endpoint", "database", "schema",
-    "algorithm", "optimize", "refactor", "bug", "error",
+    "algorithm", "optimize", "refactor", "bug", "error", "typescript",
+    "javascript", "scheduler", "queue", "migration", "adapter", "test",
   ];
   const text = JSON.stringify(messages).toLowerCase();
   let matches = 0;
@@ -92,7 +93,9 @@ function hasOpenEndedReasoning(messages: unknown[]): boolean {
   const reasoningKeywords = [
     "explain", "analyze", "compare", "contrast", "research", "investigate",
     "why", "how does", "what is the best", "evaluate", "assess",
-    "design", "architect", "plan", "strategy",
+    "design", "architect", "plan", "strategy", "prove", "proof",
+    "invariant", "correctness", "complexity analysis", "counterexample",
+    "starvation", "bounded wait", "ranking function",
   ];
   const text = JSON.stringify(messages).toLowerCase();
   let matches = 0;

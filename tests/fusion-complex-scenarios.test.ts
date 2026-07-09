@@ -42,7 +42,7 @@ const testFusionConfig: FusionConfig = {
   effort_levels: {
     1: { model_routing: "glm-5.2" },
     2: { subagent_count: { min: 2, max: 3 }, model_routings: ["glm-5.2"], tools: [] },
-    3: { subagent_count: { min: 3, max: 4 }, model_routings: ["glm-5.2"], tools: [] },
+    3: { subagent_count: { min: 2, max: 4 }, model_routings: ["glm-5.2"], tools: [] },
   },
   fusion: { model_routing: "glm-5.2", strategy: "sequential_append", wire_protocol: "openai" },
   cache: { enabled: true, scope: "permanent" },
