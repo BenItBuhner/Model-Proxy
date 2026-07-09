@@ -28,6 +28,8 @@ export interface FusionQualityScorecardInput {
 export interface FusionQualityScorecardOptions {
   maxPromptChars?: number;
   maxAdvisoryChars?: number;
+  maxAdvisorySimilarity?: number;
+  minContextCoveragePercent?: number;
   requiredDomains?: Array<"software" | "math" | "algorithm" | "testing">;
   targetUniqueModels?: number;
 }
@@ -36,6 +38,8 @@ export interface FusionQualityScorecard {
   overall: number;
   domainCoverage: number;
   modelDiversity: number;
+  advisoryDiversity: number;
+  contextCoverage: number;
   terseHandoff: number;
   safety: number;
   finalToolAuthority: number;
@@ -44,6 +48,8 @@ export interface FusionQualityScorecard {
     uniqueModels: string[];
     promptChars: number;
     maxAdvisoryChars: number;
+    maxAdvisorySimilarity: number;
+    averageContextCoveragePercent: number | null;
     failedChecks: string[];
   };
 }
@@ -73,6 +79,8 @@ export function scoreFusionQuality(
 ): FusionQualityScorecard {
   const maxPromptChars = options.maxPromptChars ?? 9_000;
   const maxAdvisoryChars = options.maxAdvisoryChars ?? 700;
+  const maxAdvisorySimilarity = options.maxAdvisorySimilarity ?? 0.72;
+  const minContextCoveragePercent = options.minContextCoveragePercent ?? 80;
   const requiredDomains = options.requiredDomains ?? DEFAULT_REQUIRED_DOMAINS;
   const targetUniqueModels = options.targetUniqueModels ?? Math.min(4, Math.max(1, input.subtasks.length));
   const failedChecks: string[] = [];
@@ -94,6 +102,29 @@ export function scoreFusionQuality(
     failedChecks.push(`model diversity ${uniqueModels.size}/${targetUniqueModels}`);
   }
 
+  const observedMaxSimilarity = scoreMaxAdvisorySimilarity(input.advisories.map((advisory) => advisory.content));
+  const advisoryDiversity = observedMaxSimilarity <= maxAdvisorySimilarity
+    ? 1
+    : clamp01(maxAdvisorySimilarity / Math.max(0.001, observedMaxSimilarity));
+  if (advisoryDiversity < 1) {
+    failedChecks.push(`advisory similarity ${roundScore(observedMaxSimilarity)}/${maxAdvisorySimilarity}`);
+  }
+
+  const contextCoverageValues = input.advisories.map((advisory) =>
+    typeof advisory.contextCoveragePercent === "number" ? advisory.contextCoveragePercent : 0
+  );
+  const averageContextCoveragePercent = contextCoverageValues.length === 0
+    ? null
+    : contextCoverageValues.reduce((sum, value) => sum + value, 0) / contextCoverageValues.length;
+  const contextCoverage = averageContextCoveragePercent === null
+    ? 1
+    : averageContextCoveragePercent >= minContextCoveragePercent
+      ? 1
+      : clamp01(averageContextCoveragePercent / minContextCoveragePercent);
+  if (contextCoverage < 1) {
+    failedChecks.push(`context coverage ${roundNumber(averageContextCoveragePercent ?? 0)}/${minContextCoveragePercent}`);
+  }
+
   const promptScore = input.finalPrompt.length <= maxPromptChars
     ? 1
     : clamp01(maxPromptChars / Math.max(1, input.finalPrompt.length));
@@ -109,17 +140,21 @@ export function scoreFusionQuality(
   const finalToolAuthority = scoreFinalToolAuthority(input, failedChecks);
 
   const overall = weightedAverage([
-    [domainCoverage, 0.22],
-    [modelDiversity, 0.20],
-    [terseHandoff, 0.18],
-    [safety, 0.24],
-    [finalToolAuthority, 0.16],
+    [domainCoverage, 0.18],
+    [modelDiversity, 0.17],
+    [advisoryDiversity, 0.13],
+    [contextCoverage, 0.10],
+    [terseHandoff, 0.15],
+    [safety, 0.17],
+    [finalToolAuthority, 0.10],
   ]);
 
   return {
     overall: roundScore(overall),
     domainCoverage: roundScore(domainCoverage),
     modelDiversity: roundScore(modelDiversity),
+    advisoryDiversity: roundScore(advisoryDiversity),
+    contextCoverage: roundScore(contextCoverage),
     terseHandoff: roundScore(terseHandoff),
     safety: roundScore(safety),
     finalToolAuthority: roundScore(finalToolAuthority),
@@ -128,6 +163,10 @@ export function scoreFusionQuality(
       uniqueModels: [...uniqueModels].sort(),
       promptChars: input.finalPrompt.length,
       maxAdvisoryChars: longestAdvisory,
+      maxAdvisorySimilarity: roundScore(observedMaxSimilarity),
+      averageContextCoveragePercent: averageContextCoveragePercent === null
+        ? null
+        : roundNumber(averageContextCoveragePercent),
       failedChecks,
     },
   };
@@ -198,6 +237,46 @@ function scoreFinalToolAuthority(input: FusionQualityScorecardInput, failedCheck
   return clamp01(score);
 }
 
+function scoreMaxAdvisorySimilarity(contents: string[]): number {
+  if (contents.length < 2) return 0;
+  const tokenSets = contents.map(tokenSet);
+  let maxSimilarity = 0;
+
+  for (let left = 0; left < tokenSets.length; left++) {
+    for (let right = left + 1; right < tokenSets.length; right++) {
+      maxSimilarity = Math.max(maxSimilarity, jaccard(tokenSets[left]!, tokenSets[right]!));
+    }
+  }
+
+  return maxSimilarity;
+}
+
+function tokenSet(text: string): Set<string> {
+  const stopWords = new Set([
+    "about",
+    "after",
+    "behind",
+    "during",
+    "recommendation",
+    "should",
+    "that",
+    "then",
+    "this",
+    "with",
+  ]);
+  const tokens = text.toLowerCase().match(/[a-z0-9_+-]{4,}/g) ?? [];
+  return new Set(tokens.filter((token) => !stopWords.has(token)));
+}
+
+function jaccard(left: Set<string>, right: Set<string>): number {
+  if (left.size === 0 && right.size === 0) return 1;
+  let intersection = 0;
+  for (const token of left) {
+    if (right.has(token)) intersection++;
+  }
+  return intersection / (left.size + right.size - intersection);
+}
+
 function weightedAverage(parts: Array<[score: number, weight: number]>): number {
   const totalWeight = parts.reduce((sum, [, weight]) => sum + weight, 0);
   if (totalWeight <= 0) return 0;
@@ -211,4 +290,8 @@ function clamp01(value: number): number {
 
 function roundScore(value: number): number {
   return Math.round(clamp01(value) * 1000) / 1000;
+}
+
+function roundNumber(value: number): number {
+  return Math.round(value * 100) / 100;
 }

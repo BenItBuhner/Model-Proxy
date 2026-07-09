@@ -166,7 +166,10 @@ function makeScorecardInput(
 ): FusionQualityScorecardInput {
   return {
     subtasks,
-    advisories,
+    advisories: advisories.map((advisory) => ({
+      contextCoveragePercent: 100,
+      ...advisory,
+    })),
     finalPrompt: advisories.map((advisory, index) =>
       `Advisory ${index + 1} (${advisory.focus} via ${advisory.model}): ${advisory.content}`
     ).join("\n"),

@@ -10,10 +10,30 @@ function strongInput(): FusionQualityScorecardInput {
       { focus: "testing risk", model: "minimax-m2.7", description: "Identify edge-case tests and rollout risks." },
     ],
     advisories: [
-      { focus: "software architecture", model: "kimi-k2.7-code", content: "Recommendation: use an adapter boundary for scheduler migration." },
-      { focus: "mathematical proof", model: "glm-5.1-precision", content: "Recommendation: prove starvation freedom with a decreasing rank tuple." },
-      { focus: "algorithmic analysis", model: "deepseek-v4-pro", content: "Recommendation: use heap aging and reject strict priority queues." },
-      { focus: "testing risk", model: "minimax-m2.7", content: "Recommendation: test equal bursts, cancellation, replay, and rollout recovery." },
+      {
+        focus: "software architecture",
+        model: "kimi-k2.7-code",
+        content: "Recommendation: use an adapter boundary for scheduler migration.",
+        contextCoveragePercent: 100,
+      },
+      {
+        focus: "mathematical proof",
+        model: "glm-5.1-precision",
+        content: "Recommendation: prove starvation freedom with a decreasing rank tuple.",
+        contextCoveragePercent: 100,
+      },
+      {
+        focus: "algorithmic analysis",
+        model: "deepseek-v4-pro",
+        content: "Recommendation: use heap aging and reject strict priority queues.",
+        contextCoveragePercent: 100,
+      },
+      {
+        focus: "testing risk",
+        model: "minimax-m2.7",
+        content: "Recommendation: test equal bursts, cancellation, replay, and rollout recovery.",
+        contextCoveragePercent: 100,
+      },
     ],
     finalPrompt: [
       "Software: use an adapter boundary for scheduler migration.",
@@ -38,6 +58,8 @@ describe("scoreFusionQuality", () => {
     expect(scorecard.overall).toBeGreaterThanOrEqual(0.95);
     expect(scorecard.domainCoverage).toBe(1);
     expect(scorecard.modelDiversity).toBe(1);
+    expect(scorecard.advisoryDiversity).toBe(1);
+    expect(scorecard.contextCoverage).toBe(1);
     expect(scorecard.terseHandoff).toBe(1);
     expect(scorecard.safety).toBe(1);
     expect(scorecard.finalToolAuthority).toBe(1);
@@ -63,5 +85,24 @@ describe("scoreFusionQuality", () => {
     expect(scorecard.terseHandoff).toBeLessThan(1);
     expect(scorecard.finalToolAuthority).toBeLessThan(1);
     expect(scorecard.details.failedChecks.length).toBeGreaterThan(0);
+  });
+
+  it("penalizes duplicated advisories and missing context coverage even with varied model labels", () => {
+    const weak = strongInput();
+    weak.advisories = weak.advisories.map((advisory, index) => ({
+      ...advisory,
+      content: `Recommendation: use the same generic review checklist for every subtask ${index}.`,
+      contextCoveragePercent: index === 0 ? 100 : 0,
+    }));
+    weak.finalPrompt = weak.advisories.map((advisory) => advisory.content).join("\n");
+
+    const scorecard = scoreFusionQuality(weak);
+
+    expect(scorecard.modelDiversity).toBe(1);
+    expect(scorecard.advisoryDiversity).toBeLessThan(1);
+    expect(scorecard.contextCoverage).toBeLessThan(1);
+    expect(scorecard.overall).toBeLessThan(0.95);
+    expect(scorecard.details.failedChecks).toContain("context coverage 25/80");
+    expect(scorecard.details.failedChecks.some((check) => check.startsWith("advisory similarity"))).toBe(true);
   });
 });

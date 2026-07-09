@@ -1,7 +1,7 @@
 # Fusion Quality Evaluation Scratchpad
 
 ## Current Focus
-Validate the deterministic scorecard against actual mocked Fusion gauntlet output and keep its benchmark resource budget explicit.
+Harden the deterministic scorecard against shallow diversity by scoring advisory uniqueness and context coverage.
 
 ## To-Dos
 - [x] Inspect current model diversity and handoff behavior.
@@ -14,6 +14,8 @@ Validate the deterministic scorecard against actual mocked Fusion gauntlet outpu
 - [x] Re-run focused/full validation after scorecard work.
 - [x] Apply scorecard assertions to the actual mocked Fusion gauntlet output.
 - [x] Add elapsed time and RSS delta budget reporting to the scorecard command.
+- [x] Add advisory-diversity and context-coverage scorecard dimensions.
+- [x] Add regression coverage for duplicated advisories with varied model labels.
 
 ## Findings
 - `fusion-beta` already exposes a diverse candidate pool for Effort 2/3: GLM, Kimi code, MiniMax, DeepSeek, Mimo, and Nemotron routes.
@@ -29,6 +31,8 @@ Validate the deterministic scorecard against actual mocked Fusion gauntlet outpu
 - The live mocked gauntlet output now feeds the same scorecard and asserts overall >= 0.95 plus perfect domain coverage, model diversity, terse handoff, safety, final-tool authority, and no failed checks.
 - The scorecard benchmark now runs three deterministic hard-case fixtures: TypeScript scheduler proof/rollout, Rust async backpressure proof, and symbolic math kernel correctness.
 - The latest scorecard suite run scored minOverall 1.0 / averageOverall 1.0 with no failed cases, completing in 3.71 ms with 1.88 MB RSS delta against limits of 1000 ms and 64 MB.
+- The scorecard now includes advisoryDiversity via pairwise token-overlap checks and contextCoverage via advisory context coverage percentages.
+- A focused regression proved that varied model labels are not enough: duplicated generic advisories with 25% average context coverage now fail with advisory similarity and context coverage checks.
 
 ## Test Results
 - 2026-07-09: `bun test tests/fusion-complexity-scorer.test.ts tests/fusion-quality-gauntlet.test.ts` passed, 8 tests / 59 assertions.
@@ -39,6 +43,14 @@ Validate the deterministic scorecard against actual mocked Fusion gauntlet outpu
 - 2026-07-09: `bun run typecheck` passed.
 - 2026-07-09: `bun run build` passed.
 - 2026-07-09: `git diff --check` passed.
+- 2026-07-09: `bun test tests/fusion-quality-scorecard.test.ts tests/fusion-quality-gauntlet.test.ts` passed, 4 tests / 72 assertions after adding advisoryDiversity and contextCoverage.
+- 2026-07-09: `bun run eval:fusion-scorecard` passed 3 cases with minOverall 1.0, averageOverall 1.0, elapsedMs 9.03, and rssDeltaMb 3.
+- 2026-07-09: `bun run eval:fusion-scorecard` passed 3 cases with minOverall 1.0, averageOverall 1.0, elapsedMs 12.28, and rssDeltaMb 2.25 after docs updates.
+- 2026-07-09: `bun run eval:fusion-quality` passed, 11 tests / 88 assertions after advisory-diversity/context-coverage scoring.
+- 2026-07-09: `bun run typecheck` passed.
+- 2026-07-09: `bun run build` passed.
+- 2026-07-09: `git diff --check` passed.
+- 2026-07-09: Full `bun test` attempt hit two recurring unrelated `multi-user auth` timeouts after 359 passes; isolated `bun test tests/multi-user-auth.test.ts` passed, 4 tests / 22 assertions.
 - 2026-07-09: Expanded `bun run eval:fusion-scorecard` suite passed 3 cases with minOverall 1.0, averageOverall 1.0, elapsedMs 3.71, and rssDeltaMb 1.88.
 - 2026-07-09: `bun run eval:fusion-quality` passed, 10 tests / 78 assertions after expanding the scorecard suite.
 - 2026-07-09: `bun run typecheck` passed.

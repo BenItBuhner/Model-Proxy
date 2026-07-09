@@ -379,6 +379,8 @@ describe("Fusion quality gauntlet", () => {
     expect(scorecard.overall).toBeGreaterThanOrEqual(0.95);
     expect(scorecard.domainCoverage).toBe(1);
     expect(scorecard.modelDiversity).toBe(1);
+    expect(scorecard.advisoryDiversity).toBe(1);
+    expect(scorecard.contextCoverage).toBe(1);
     expect(scorecard.terseHandoff).toBe(1);
     expect(scorecard.safety).toBe(1);
     expect(scorecard.finalToolAuthority).toBe(1);
