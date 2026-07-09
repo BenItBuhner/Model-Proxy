@@ -1,25 +1,15 @@
 # Model Fusion (Beta) — Scratchpad
 
 ## Current Focus
-Step 1: Create FusionConfig schema (shared/schemas/fusion.ts) and integrate into ModelRoutingConfig
+Continue hardening Fusion toward production-grade reasoning quality: sealed subagents, adaptive route-sized context packs over the 10M logical window, coherent synthesis handoff, cache/summary correctness, and richer live/completed observability.
 
-## To-Dos (by implementation order)
-- [x] Write finalized plan to docs/model-fusion-plan.md
-- [ ] Step 1: Create `shared/schemas/fusion.ts`, export from index.ts, add to routing.ts
-- [ ] Step 2: Create `src/routing/fusion/fusion-router.ts` — orchestrator shell
-- [ ] Step 3: Create `src/routing/fusion/complexity-scorer.ts`
-- [ ] Step 4: Create `src/routing/fusion/task-divider.ts`
-- [ ] Step 5: Create `src/routing/fusion/subagent-executor.ts`
-- [ ] Step 6: Create `src/routing/fusion/response-fuser.ts`
-- [ ] Step 7: Create `src/routing/fusion/reasoning-cache.ts`
-- [ ] Step 8: Harden reasoning-only subagents and adaptive context packing
-- [ ] Step 9: Integrate goalpost streaming into fusion-router
-- [ ] Step 10: Create `web/app/fusion/` admin UI pages
-- [ ] Step 11: Anthropic wire protocol support for fusion output
-- [ ] Step 12: Edge cases, hardening, test creation
-- [ ] Create `config/models/fusion-beta.json`
-- [ ] All tests pass
-- [ ] End-to-end verification
+## To-Dos (current hardening order)
+- [x] Audit whether cached legacy subagent outputs can reintroduce action/tool-call claims into summaries, traces, or fuser handoff.
+- [x] Normalize deprecated effort-level subagent `tools` config to `[]` at parse time so legacy config cannot carry a tool surface forward.
+- [ ] Add another complex scenario/backtest that exercises ambiguous tool-heavy turns with cache reuse and synthesis quality guardrails.
+- [ ] Continue improving live/completed observability where trace detail exists but the dashboard does not surface it clearly.
+- [ ] Run full validation after every scoped change: `bun test`, `bun run typecheck`, relevant web checks, builds, and `git diff --check`.
+- [ ] Perform a requirement-by-requirement completion audit before marking the Fusion goal complete.
 
 ## Completed
 - [x] **Step 1:** `shared/schemas/fusion.ts` — FusionConfig schema with all layers (complexity scoring, task divider, effort levels, fusion synthesis, cache)
@@ -35,6 +25,12 @@ Step 1: Create FusionConfig schema (shared/schemas/fusion.ts) and integrate into
 - [x] **Config:** `config/models/fusion-beta.json` — complete fusion model config
 - [x] **Tests:** 230 tests total (6 fusion-specific, 4 schema validation, 4 router, 7 cache, 209 existing)
 - [x] **Regressions:** 0 — all 230 tests pass with no failures
+- [x] **Subagent tool hardening:** subagent requests omit tools and set `tool_choice: "none"`; hallucinated tool-call-only output is retried and inline tool-call artifacts are stripped before summaries/synthesis.
+- [x] **Deprecated tool config removal:** legacy `effort_levels.2.tools` and `effort_levels.3.tools` inputs are accepted for compatibility but normalized to empty arrays by the Fusion schema.
+- [x] **Adaptive context packs:** subagents pack first/relevant/anchor/recent conversation slices against each selected route context window while preserving Fusion's 10M logical context telemetry.
+- [x] **Context-pack persistence:** fresh and cache-reused subagent runs persist context pack metadata; cached reuse emits completed live lanes.
+- [x] **Synthesis handoff:** subagent findings are converted to bounded advisory records with tool-call artifact stripping and final-model instructions not to echo internal labels.
+- [x] **Observability:** live/completed Fusion dashboard shows decision triggers/suppressors, context-pack coverage, logical vs route budgets, selected ranges, summary feed, cache reuse, and reconstructed historical traces.
 
 ## Deferred / Future Work
 - [ ] **Admin UI tab** (`web/app/fusion/`) — needs Next.js UI components
@@ -50,4 +46,10 @@ None yet
 - All subagent model references point to existing model routings (complete, turbo, glm-5.2, etc.)
 
 ## Test Results
-(not yet)
+- 2026-07-09: `bun test` passed, 354 tests.
+- 2026-07-09: `bun run typecheck` passed.
+- 2026-07-09: `cd web && bun run typecheck` passed.
+- 2026-07-09: `bun run build` passed.
+- 2026-07-09: `bun run build:web` passed.
+- 2026-07-09: `git diff --check` passed.
+- 2026-07-09: Focused `bun test tests/fusion-schema.test.ts tests/fusion-subagent-tools.test.ts tests/fusion-complex-scenarios.test.ts` passed, 22 tests.

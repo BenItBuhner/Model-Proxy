@@ -135,7 +135,7 @@ export const FusionConfigSchema = z.object({
         max: z.number().int().min(1).default(4),
       }),
       model_routings: z.array(z.string()).min(1),
-      tools: z.array(z.enum(["context_search", "web_search"])).default([]), // deprecated/no-op
+      tools: z.array(z.enum(["context_search", "web_search"])).optional(), // deprecated; accepted then normalized to []
     }),
     3: z.object({
       subagent_count: z.object({
@@ -143,7 +143,7 @@ export const FusionConfigSchema = z.object({
         max: z.number().int().min(1).default(8),
       }),
       model_routings: z.array(z.string()).min(1),
-      tools: z.array(z.enum(["context_search", "web_search", "code_execution"])).default([]), // deprecated/no-op
+      tools: z.array(z.enum(["context_search", "web_search", "code_execution"])).optional(), // deprecated; accepted then normalized to []
     }),
   }),
 

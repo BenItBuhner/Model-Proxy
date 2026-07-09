@@ -103,7 +103,7 @@ describe("Fusion Config Schema", () => {
     expect(minimal.scheduler.allow_nested_fusion).toBe(false);
   });
 
-  it("accepts legacy effort tools but normal runtime ignores them", () => {
+  it("accepts legacy effort tools but normalizes them away", () => {
     const parsed = FusionConfigSchema.parse({
       enabled: true,
       effort_levels: {
@@ -122,8 +122,8 @@ describe("Fusion Config Schema", () => {
       fusion: { model_routing: "complete" },
     });
 
-    expect(parsed.effort_levels[2]?.tools).toEqual(["context_search"]);
-    expect(parsed.effort_levels[3]?.tools).toEqual(["context_search", "code_execution"]);
+    expect(parsed.effort_levels[2]?.tools).toEqual([]);
+    expect(parsed.effort_levels[3]?.tools).toEqual([]);
   });
 
   it("validates effort 1 thresholds must be <= effort 2 thresholds", () => {
