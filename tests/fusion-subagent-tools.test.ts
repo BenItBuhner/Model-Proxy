@@ -78,7 +78,7 @@ const subTask: SubTask = {
   suggested_model_routing: "glm-5.2",
 };
 
-describe("SubagentExecutor research tool loop", () => {
+describe("SubagentExecutor reasoning-only subagents", () => {
   let executor: SubagentExecutor;
   let savedModelSearchPaths: string[] | undefined;
   let savedProviderSearchPaths: string[] | undefined;
@@ -91,6 +91,7 @@ describe("SubagentExecutor research tool loop", () => {
       JSON.stringify({
         logical_name: "glm-5.2",
         timeout_seconds: 5,
+        context_window: 64000,
         default_cooldown_seconds: 0,
         model_routings: [{ provider: "openai", model: "fake-subagent-model", api_key_env: ["FAKE_SUBAGENT_API_KEY"] }],
         fallback_model_routings: [],
@@ -149,16 +150,11 @@ describe("SubagentExecutor research tool loop", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("declares research tools upstream and executes search_context locally", async () => {
+  it("does not declare tools upstream and supplies a pre-triaged context briefing", async () => {
     const capturedBodies: Array<Record<string, unknown>> = [];
     globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
       capturedBodies.push(body);
-      const messages = body["messages"] as Array<Record<string, unknown>>;
-      const hasToolResult = messages.some((m) => m["role"] === "tool");
-      if (!hasToolResult) {
-        return sseResponse(toolCallEvents("search_context", { query: "retry behavior fallback" }));
-      }
       return sseResponse(contentEvents("The fallback router retries transient failures with exponential backoff; recommend tightening the retry predicate."));
     }) as unknown as typeof fetch;
 
@@ -171,26 +167,70 @@ describe("SubagentExecutor research tool loop", () => {
     expect(results[0].success).toBe(true);
     expect(results[0].content).toContain("exponential backoff");
 
-    // First request must declare ONLY research tool schemas
     const firstBody = capturedBodies[0];
-    const tools = firstBody["tools"] as Array<{ function: { name: string } }>;
-    expect(tools.map((t) => t.function.name)).toEqual(["search_context"]);
-
-    // Second request must carry the locally executed tool result
-    const secondBody = capturedBodies[1];
-    const toolMsg = (secondBody["messages"] as Array<Record<string, unknown>>).find((m) => m["role"] === "tool");
-    expect(toolMsg).toBeDefined();
-    expect(String(toolMsg!["content"])).toContain("retry");
+    expect("tools" in firstBody).toBe(false);
+    expect(firstBody["tool_choice"]).toBe("none");
+    const messages = firstBody["messages"] as Array<Record<string, unknown>>;
+    expect(messages.some((m) => m["role"] === "tool")).toBe(false);
+    const briefing = String(messages[1]?.["content"] ?? "");
+    expect(briefing).toContain("Fusion proxy context briefing");
+    expect(briefing).toContain("Relevant excerpts selected by the proxy");
+    expect(briefing).toContain("retry behavior");
+    expect(firstBody["max_tokens"]).toBe(16000);
   }, 20000);
 
-  it("corrects hallucinated harness tools and still gets a final analysis", async () => {
+  it("packs large contexts with opening, relevant, middle-anchor, and recent coverage", async () => {
+    const capturedBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      capturedBodies.push(body);
+      return sseResponse(contentEvents("The context pack includes broad coverage across the conversation."));
+    }) as unknown as typeof fetch;
+
+    const filler = "context filler ".repeat(80);
+    const messages = Array.from({ length: 140 }, (_, index) => ({
+      role: index % 7 === 0 ? "assistant" : "user",
+      content: `message-${index} ${filler}`,
+    }));
+    messages[0] = { role: "user", content: `OPENING_SENTINEL ${filler}` };
+    messages[70] = {
+      role: "user",
+      content: `RELEVANT_RETRY_SENTINEL fallback router retry behavior ${filler}`,
+    };
+    messages[93] = {
+      role: "assistant",
+      content: `MIDDLE_ANCHOR_SENTINEL unrelated architecture note ${filler}`,
+    };
+    messages[139] = { role: "user", content: `RECENT_SENTINEL final user update ${filler}` };
+
+    const ctx = makeCtx(messages);
+    const results = await executor.execute(ctx, [subTask]);
+
+    expect(results[0].success).toBe(true);
+    expect(results[0].contextMessageCount).toBeGreaterThan(20);
+    expect(results[0].droppedMessageCount).toBeGreaterThan(90);
+    expect(results[0].packedContextTokens).toBeGreaterThan(1000);
+    const body = capturedBodies[0];
+    const packedMessages = body["messages"] as Array<Record<string, unknown>>;
+    const packedText = JSON.stringify(packedMessages);
+    expect(packedText).toContain("OPENING_SENTINEL");
+    expect(packedText).toContain("RELEVANT_RETRY_SENTINEL");
+    expect(packedText).toContain("MIDDLE_ANCHOR_SENTINEL");
+    expect(packedText).toContain("RECENT_SENTINEL");
+    expect(packedText).toContain("Stratified context mix");
+    expect(packedText).toContain("messages were omitted");
+    expect(packedMessages.length).toBeLessThan(messages.length);
+    expect(body["max_tokens"]).toBe(16000);
+  }, 20000);
+
+  it("retries hallucinated tool-call-only output and still gets final analysis", async () => {
     const capturedBodies: Array<Record<string, unknown>> = [];
     globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
       capturedBodies.push(body);
       const messages = body["messages"] as Array<Record<string, unknown>>;
-      const hasToolResult = messages.some((m) => m["role"] === "tool");
-      if (!hasToolResult) {
+      const retryNudge = JSON.stringify(messages).includes("you have no tools");
+      if (!retryNudge) {
         // Model hallucinates a harness tool it saw in the transcript
         return sseResponse(toolCallEvents("write_file", { path: "src/x.ts", content: "..." }));
       }
@@ -205,10 +245,12 @@ describe("SubagentExecutor research tool loop", () => {
     expect(results[0].success).toBe(true);
     expect(results[0].content).toContain("plain-text analysis");
 
-    // The correction message must have been fed back as the tool result
     const followupBody = capturedBodies[1];
-    const toolMsg = (followupBody["messages"] as Array<Record<string, unknown>>).find((m) => m["role"] === "tool");
-    expect(String(toolMsg!["content"])).toContain("does not exist in this research sandbox");
+    expect("tools" in followupBody).toBe(false);
+    expect(followupBody["tool_choice"]).toBe("none");
+    const followupMessages = followupBody["messages"] as Array<Record<string, unknown>>;
+    expect(followupMessages.some((m) => m["role"] === "tool")).toBe(false);
+    expect(JSON.stringify(followupMessages)).toContain("Do not call or describe tool calls");
   }, 20000);
 
   it("strips hallucinated inline tool-call JSON from subagent content and segments", async () => {
@@ -248,7 +290,8 @@ describe("SubagentExecutor research tool loop", () => {
     expect(systemPrompt).toContain("RESEARCH AND REASONING subagent");
     expect(systemPrompt).toContain("sealed analysis sandbox");
     expect(systemPrompt).toContain("CANNOT create, edit, delete, or run anything");
-    expect(systemPrompt).toContain("search_context");
+    expect(systemPrompt).toContain("You have NO tools");
+    expect(systemPrompt).toContain("There is no tool-calling interface");
     expect(systemPrompt).toContain("NEVER claim to have created, modified, executed");
   }, 20000);
 });

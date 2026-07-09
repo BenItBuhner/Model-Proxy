@@ -26,9 +26,10 @@ export const Effort2ConfigSchema = z
     }),
     /** Existing model routings to draw subagent models from (e.g. ["complete", "gemini"]). */
     model_routings: z.array(z.string().min(1)).min(1),
+    /** Deprecated/no-op: subagents are reasoning-only and receive no tools. */
     tools: z
       .array(z.enum(["context_search", "web_search"]))
-      .default(["context_search"]),
+      .default([]),
   })
   .strict()
   .refine(
@@ -46,9 +47,10 @@ export const Effort3ConfigSchema = z
     }),
     /** Existing model routings to draw subagent models from. */
     model_routings: z.array(z.string().min(1)).min(1),
+    /** Deprecated/no-op: subagents are reasoning-only and receive no tools. */
     tools: z
       .array(z.enum(["context_search", "web_search", "code_execution"]))
-      .default(["context_search", "web_search", "code_execution"]),
+      .default([]),
   })
   .strict()
   .refine(

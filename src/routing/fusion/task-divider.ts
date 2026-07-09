@@ -77,18 +77,15 @@ const DIVIDER_TOOLS = [
   },
 ];
 
-function buildDividerSystemPrompt(allowedModels: string[], subagentTools: string[]): string {
+function buildDividerSystemPrompt(allowedModels: string[]): string {
   const modelsLine = allowedModels.length > 0
     ? `Available model routings for suggested_model_routing (use ONLY these exact names): ${allowedModels.join(", ")}.`
     : "Use the routing name provided by the pipeline for suggested_model_routing.";
-  const toolsLine = subagentTools.length > 0
-    ? `sandboxed research tools (${subagentTools.join(", ")}) for looking things up`
-    : "no tools at all";
 
   return `You are an expert task division agent inside a multi-model fusion pipeline. Your role is to analyze the full conversation context and divide the CURRENT task into focused, independently solvable RESEARCH sub-tasks.
 
 UNDERSTAND THE EXECUTION ENVIRONMENT:
-- The sub-tasks you define are handed to isolated RESEARCH/REASONING subagents. Those subagents run in a sealed sandbox: they cannot edit files, run project commands, deploy, or take any real-world action. They have ${toolsLine}, and their only deliverable is written analysis.
+- The sub-tasks you define are handed to isolated RESEARCH/REASONING subagents. Those subagents run in a sealed sandbox: they cannot edit files, run project commands, deploy, take any real-world action, or call any tools. Their only deliverable is written analysis from the context briefing supplied by the Fusion proxy.
 - A separate final "fusion" synthesis model reads their analysis and is the ONLY entity that produces the user-facing response and performs real actions.
 - Therefore, write every sub-task description as an ANALYSIS/RESEARCH assignment ("Analyze…", "Investigate…", "Design…", "Recommend exact code for…"), NEVER as an execution order ("Implement…", "Deploy…", "Edit file X…"). Execution-style descriptions cause subagents to hallucinate actions they cannot perform.
 
@@ -199,7 +196,6 @@ export class TaskDividerAgent {
 
     const systemPrompt = buildDividerSystemPrompt(
       this.subagentModelRoutings(ctx),
-      this.subagentToolIds(ctx),
     );
 
     // Build context messages with token-aware truncation
@@ -339,15 +335,6 @@ export class TaskDividerAgent {
       ? ctx.fusionConfig.effort_levels[3]
       : ctx.fusionConfig.effort_levels[2];
     return effortConfig?.model_routings ?? [ctx.fusionConfig.task_divider.model_routing];
-  }
-
-  /** Research tools enabled for subagents at the active effort level. */
-  private subagentToolIds(ctx: FusionRequestContext): string[] {
-    const runtimeEffort = ctx.runtimeEffort ?? 2;
-    const effortConfig = runtimeEffort === 3
-      ? ctx.fusionConfig.effort_levels[3]
-      : ctx.fusionConfig.effort_levels[2];
-    return effortConfig?.tools ?? ["context_search"];
   }
 
   private dividerFallbackModels(ctx: FusionRequestContext): string[] {

@@ -31,6 +31,12 @@ import {
 
 const log = createLogger("routing.fusion");
 
+interface SubagentNeedDecision {
+  useSubagents: boolean;
+  reason: string;
+  signals: Record<string, unknown>;
+}
+
 function usageSnapshotFromCounts(counts: {
   promptTokens: number;
   completionTokens: number;
@@ -187,6 +193,12 @@ export class FusionRouter {
         modelRouting: r.usedModelRouting,
         durationMs: r.durationMs,
         outputLength: r.content.length,
+        contextWindow: r.contextWindow,
+        inputBudgetTokens: r.inputBudgetTokens,
+        outputBudgetTokens: r.outputBudgetTokens,
+        contextMessageCount: r.contextMessageCount,
+        droppedMessageCount: r.droppedMessageCount,
+        packedContextTokens: r.packedContextTokens,
       })),
       costs,
       totalCostUsd,
@@ -379,6 +391,42 @@ export class FusionRouter {
         result.cacheKey = reuse.entry.key;
         return result;
       }
+    }
+
+    const subagentNeed = this.evaluateSubagentNeed(ctx, score);
+    steps.push({
+      type: "subagent_execution",
+      label: subagentNeed.useSubagents ? "Subagent Decision" : "Subagent Execution Skipped",
+      startedAt: new Date().toISOString(),
+      durationMs: 0,
+      details: {
+        useSubagents: subagentNeed.useSubagents,
+        reason: subagentNeed.reason,
+        ...subagentNeed.signals,
+      },
+    });
+    if (!subagentNeed.useSubagents) {
+      emitFusion(ctx, {
+        type: "fusion.phase",
+        at: nowIso(),
+        phase: "subagent_execution",
+        status: "completed",
+        detail: {
+          decision: "skip",
+          reason: subagentNeed.reason,
+          ...subagentNeed.signals,
+        },
+      });
+    }
+    if (!subagentNeed.useSubagents) {
+      log.info("skipping fusion subagents", {
+        useSubagents: subagentNeed.useSubagents,
+        reason: subagentNeed.reason,
+        ...subagentNeed.signals,
+      });
+      const result = await this.responseFuser.fuse(ctx, imageResults, steps, costs);
+      result.cacheHit = false;
+      return result;
     }
 
     // Layer 3: Divide the task
@@ -589,6 +637,12 @@ export class FusionRouter {
           modelRouting: r.usedModelRouting,
           durationMs: r.durationMs,
           outputLength: r.content.length,
+          contextWindow: r.contextWindow,
+          inputBudgetTokens: r.inputBudgetTokens,
+          outputBudgetTokens: r.outputBudgetTokens,
+          contextMessageCount: r.contextMessageCount,
+          droppedMessageCount: r.droppedMessageCount,
+          packedContextTokens: r.packedContextTokens,
         })),
         costs: estCosts,
         totalCostUsd: estCosts.reduce((t, c) => t + c.userCostUsd, 0),
@@ -668,6 +722,43 @@ export class FusionRouter {
         });
         return;
       }
+    }
+
+    const subagentNeed = this.evaluateSubagentNeed(ctx, score);
+    streamSteps.push({
+      type: "subagent_execution",
+      label: subagentNeed.useSubagents ? "Subagent Decision" : "Subagent Execution Skipped",
+      durationMs: 0,
+      detail: {
+        useSubagents: subagentNeed.useSubagents,
+        reason: subagentNeed.reason,
+        ...subagentNeed.signals,
+      },
+    });
+    if (!subagentNeed.useSubagents) {
+      emitFusion(ctx, {
+        type: "fusion.phase",
+        at: nowIso(),
+        phase: "subagent_execution",
+        status: "completed",
+        detail: {
+          decision: "skip",
+          reason: subagentNeed.reason,
+          ...subagentNeed.signals,
+        },
+      });
+    }
+    if (!subagentNeed.useSubagents) {
+      yield* paceReasoningText(ctx, `Skipping parallel subagents: ${subagentNeed.reason}.\n\n`);
+      yield* this.responseFuser.fuseStream(ctx, imageResults);
+      streamSteps.push({
+        type: "synthesis",
+        label: "Response Synthesis",
+        durationMs: 0,
+        modelRouting: ctx.fusionConfig.fusion.model_routing,
+      });
+      setStreamTrace([], false, undefined);
+      return;
     }
 
     // Layer 3: Divide the task
@@ -965,6 +1056,73 @@ export class FusionRouter {
     } catch (err) {
       log.warn("failed to record fusion conversation turn", { error: String(err) });
     }
+  }
+
+  private evaluateSubagentNeed(
+    ctx: FusionRequestContext,
+    score: ComplexityScore,
+  ): SubagentNeedDecision {
+    const runtimeEffort = ctx.runtimeEffort ?? score.effort;
+    const requestData = ctx.requestData;
+    const tools = Array.isArray(requestData["tools"]) ? requestData["tools"] : [];
+    const messageCount = ctx.messages.length;
+    const text = JSON.stringify(ctx.messages).toLowerCase();
+    const hasCodeOrFileWork =
+      /\b(refactor|implement|edit|modify|patch|debug|fix|test|typescript|javascript|tsx|schema|database|migration|api|route|component)\b/.test(text);
+    const hasToolResults = ctx.messages.some((msg) =>
+      typeof msg === "object" &&
+      msg !== null &&
+      ((msg as Record<string, unknown>)["role"] === "tool" ||
+        (Array.isArray((msg as Record<string, unknown>)["content"]) &&
+          ((msg as Record<string, unknown>)["content"] as unknown[]).some((part) =>
+            typeof part === "object" && part !== null && (part as Record<string, unknown>)["type"] === "tool_result"))));
+    const largeContext = score.tokenCount >= 24_000;
+    const manyTools = tools.length >= 8;
+    const longConversation = messageCount >= 10;
+    const explicitHigh = ctx.resolvedFusionEffort === "F3";
+    const images = ctx.hadImages === true || (ctx.imageDescriptions?.length ?? 0) > 0;
+
+    const signals = {
+      runtimeEffort,
+      fusionEffort: ctx.resolvedFusionEffort,
+      tokenCount: score.tokenCount,
+      messageCount,
+      toolCount: tools.length,
+      largeContext,
+      manyTools,
+      longConversation,
+      hasToolResults,
+      hasCodeOrFileWork,
+      images,
+    };
+
+    if (runtimeEffort <= 1) {
+      return { useSubagents: false, reason: "fast-path effort does not use subagents", signals };
+    }
+    if (explicitHigh) {
+      return { useSubagents: true, reason: "F3/high effort explicitly requires parallel deep reasoning", signals };
+    }
+    if (images) {
+      return { useSubagents: true, reason: "image-derived context requires dedicated reasoning before synthesis", signals };
+    }
+    if (largeContext) {
+      return { useSubagents: true, reason: "large context benefits from parallel context triage", signals };
+    }
+    if (manyTools) {
+      return { useSubagents: true, reason: "large tool surface benefits from parallel risk analysis", signals };
+    }
+    if (hasToolResults && (hasCodeOrFileWork || score.tokenCount >= 8_000)) {
+      return { useSubagents: true, reason: "tool results introduced substantial implementation context", signals };
+    }
+    if (longConversation && hasCodeOrFileWork) {
+      return { useSubagents: true, reason: "multi-turn implementation context benefits from parallel review", signals };
+    }
+
+    return {
+      useSubagents: false,
+      reason: "moderate request is within synthesis model context; subagents would add latency without clear benefit",
+      signals,
+    };
   }
 
   private startRun(

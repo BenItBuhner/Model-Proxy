@@ -19,265 +19,16 @@ import { Badge, StatusDot, type BadgeTone } from "@/components/ui/badge";
 import { Panel, PanelBody } from "@/components/ui/panel";
 import type { RequestEvent } from "@/lib/test-events";
 import { formatCount, formatDurationMs, formatUsd } from "./metric-widget";
+import {
+  derivePipelineState,
+  PHASE_LABEL,
+  stateFromTrace,
+  type FusionTraceLike,
+  type PhaseState,
+  type SubagentState,
+} from "./fusion-pipeline-state";
 
-// ── Derived pipeline state ────────────────────────────────────────────
-
-type PhaseKey =
-  | "image_preprocessing"
-  | "complexity_scoring"
-  | "task_division"
-  | "subagent_execution"
-  | "synthesis"
-  | "fast_path";
-
-const PHASE_LABEL: Record<PhaseKey, string> = {
-  image_preprocessing: "images",
-  complexity_scoring: "scoring",
-  task_division: "task division",
-  subagent_execution: "subagents",
-  synthesis: "synthesis",
-  fast_path: "fast path",
-};
-
-interface PhaseState {
-  key: PhaseKey;
-  status: "running" | "completed" | "failed";
-  durationMs?: number;
-  modelRouting?: string;
-  detail?: Record<string, unknown>;
-  at: string;
-}
-
-interface SubagentState {
-  id: string;
-  focus: string;
-  model: string;
-  status: "started" | "progress" | "retrying" | "completed" | "failed";
-  attempt?: number;
-  chars?: number;
-  durationMs?: number;
-  error?: string;
-  startedAtMs?: number;
-}
-
-interface CacheState {
-  kind: "request" | "conversation" | "subtask";
-  hit: boolean;
-  detail?: string;
-}
-
-interface SummaryEntry {
-  label: string;
-  text: string;
-  at: string;
-}
-
-export interface FusionTraceLike {
-  effort?: number;
-  fusionEffort?: string;
-  complexityScore?: number;
-  complexityReason?: string;
-  subTaskCount?: number;
-  cacheHit?: boolean;
-  totalCostUsd?: number;
-  totalTokens?: number;
-  fusedByModelRouting?: string;
-  steps?: Array<{ type: string; label: string; durationMs: number; modelRouting?: string }>;
-  subagentDetails?: Array<{
-    id: string;
-    focus_area: string;
-    success: boolean;
-    modelRouting: string;
-    durationMs: number;
-    outputLength: number;
-  }>;
-  costs?: Array<{
-    modelRouting: string;
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
-    userCostUsd: number;
-    typicalCostUsd: number;
-  }>;
-}
-
-interface PipelineState {
-  hasFusionEvents: boolean;
-  started?: {
-    effort: number;
-    fusionEffort?: string;
-    complexityScore: number;
-    complexityReason: string;
-    logicalModel: string;
-    stream: boolean;
-  };
-  phases: PhaseState[];
-  caches: CacheState[];
-  subTasks: Array<{ id: string; focus: string; model: string; description: string }>;
-  subagents: SubagentState[];
-  summaries: SummaryEntry[];
-  completed?: { totalMs: number; trace?: FusionTraceLike };
-}
-
-function derivePipelineState(events: RequestEvent[]): PipelineState {
-  const state: PipelineState = {
-    hasFusionEvents: false,
-    phases: [],
-    caches: [],
-    subTasks: [],
-    subagents: [],
-    summaries: [],
-  };
-  const phaseIndex = new Map<PhaseKey, number>();
-  const subagentIndex = new Map<string, number>();
-
-  for (const event of events) {
-    switch (event.type) {
-      case "fusion.pipeline.started": {
-        state.hasFusionEvents = true;
-        state.started = {
-          effort: event.effort,
-          fusionEffort: event.fusionEffort,
-          complexityScore: event.complexityScore,
-          complexityReason: event.complexityReason,
-          logicalModel: event.logicalModel,
-          stream: event.stream,
-        };
-        break;
-      }
-      case "fusion.phase": {
-        state.hasFusionEvents = true;
-        const existing = phaseIndex.get(event.phase);
-        const next: PhaseState = {
-          key: event.phase,
-          status: event.status === "started" ? "running" : event.status,
-          durationMs: event.durationMs,
-          modelRouting: event.modelRouting,
-          detail: event.detail,
-          at: event.at,
-        };
-        if (existing !== undefined) {
-          const prev = state.phases[existing]!;
-          state.phases[existing] = {
-            ...prev,
-            ...next,
-            modelRouting: next.modelRouting ?? prev.modelRouting,
-            detail: next.detail ?? prev.detail,
-          };
-        } else {
-          phaseIndex.set(event.phase, state.phases.length);
-          state.phases.push(next);
-        }
-        break;
-      }
-      case "fusion.cache": {
-        state.hasFusionEvents = true;
-        state.caches.push({ kind: event.kind, hit: event.hit, detail: event.detail });
-        break;
-      }
-      case "fusion.subtasks": {
-        state.hasFusionEvents = true;
-        state.subTasks = event.subTasks;
-        break;
-      }
-      case "fusion.subagent": {
-        state.hasFusionEvents = true;
-        const existing = subagentIndex.get(event.id);
-        if (existing !== undefined) {
-          const prev = state.subagents[existing]!;
-          state.subagents[existing] = {
-            ...prev,
-            status: event.status,
-            attempt: event.attempt ?? prev.attempt,
-            chars: event.chars ?? prev.chars,
-            durationMs: event.durationMs ?? prev.durationMs,
-            error: event.error ?? (event.status === "completed" ? undefined : prev.error),
-          };
-        } else {
-          subagentIndex.set(event.id, state.subagents.length);
-          state.subagents.push({
-            id: event.id,
-            focus: event.focus,
-            model: event.model,
-            status: event.status,
-            attempt: event.attempt,
-            chars: event.chars,
-            durationMs: event.durationMs,
-            error: event.error,
-            startedAtMs: Date.parse(event.at),
-          });
-        }
-        break;
-      }
-      case "fusion.summary": {
-        state.hasFusionEvents = true;
-        state.summaries.push({ label: event.label, text: event.text, at: event.at });
-        break;
-      }
-      case "fusion.pipeline.completed": {
-        state.hasFusionEvents = true;
-        state.completed = { totalMs: event.totalMs, trace: event.trace as FusionTraceLike | undefined };
-        break;
-      }
-      default:
-        break;
-    }
-  }
-  return state;
-}
-
-/** Reconstruct a minimal pipeline state from a stored fusion trace (no events). */
-function stateFromTrace(trace: FusionTraceLike): PipelineState {
-  const phases: PhaseState[] = (trace.steps ?? []).map((step) => ({
-    key: normalizeStepType(step.type),
-    status: "completed" as const,
-    durationMs: step.durationMs,
-    modelRouting: step.modelRouting,
-    at: "",
-  }));
-  return {
-    hasFusionEvents: false,
-    started:
-      trace.complexityScore !== undefined
-        ? {
-            effort: trace.effort ?? 0,
-            fusionEffort: trace.fusionEffort,
-            complexityScore: trace.complexityScore,
-            complexityReason: trace.complexityReason ?? "",
-            logicalModel: trace.fusedByModelRouting ?? "",
-            stream: false,
-          }
-        : undefined,
-    phases,
-    caches: trace.cacheHit !== undefined ? [{ kind: "subtask", hit: trace.cacheHit }] : [],
-    subTasks: [],
-    subagents: (trace.subagentDetails ?? []).map((sa) => ({
-      id: sa.id,
-      focus: sa.focus_area,
-      model: sa.modelRouting,
-      status: sa.success ? ("completed" as const) : ("failed" as const),
-      chars: sa.outputLength,
-      durationMs: sa.durationMs,
-    })),
-    summaries: [],
-    completed: { totalMs: 0, trace },
-  };
-}
-
-function normalizeStepType(type: string): PhaseKey {
-  switch (type) {
-    case "image_preprocessing":
-    case "complexity_scoring":
-    case "task_division":
-    case "subagent_execution":
-    case "synthesis":
-      return type;
-    case "effort_1_fast_path":
-      return "fast_path";
-    default:
-      return "complexity_scoring";
-  }
-}
+export type { FusionTraceLike } from "./fusion-pipeline-state";
 
 // ── Component ─────────────────────────────────────────────────────────
 
@@ -496,9 +247,11 @@ export function FusionPipelineView({
 function PhaseChip({ phase, live }: { phase: PhaseState; live: boolean }): React.ReactElement {
   const tone: BadgeTone =
     phase.status === "completed" ? "phosphor" : phase.status === "failed" ? "danger" : "warning";
+  const reason = typeof phase.detail?.["reason"] === "string" ? phase.detail["reason"] : undefined;
+  const decision = typeof phase.detail?.["decision"] === "string" ? phase.detail["decision"] : undefined;
   return (
     <div
-      className={`flex items-center gap-2 rounded-sm bg-ink-900 px-2.5 py-1.5 shadow-edge ${
+      className={`flex max-w-full items-center gap-2 rounded-sm bg-ink-900 px-2.5 py-1.5 shadow-edge ${
         phase.status === "running" && live ? "animate-pulse" : ""
       }`}
     >
@@ -513,6 +266,12 @@ function PhaseChip({ phase, live }: { phase: PhaseState; live: boolean }): React
       ) : null}
       {phase.modelRouting !== undefined ? (
         <span className="hidden font-mono text-[9px] text-bone-300 sm:inline">{phase.modelRouting}</span>
+      ) : null}
+      {decision !== undefined || reason !== undefined ? (
+        <span className="hidden max-w-56 truncate font-mono text-[9px] text-bone-300 md:inline">
+          {decision !== undefined ? `${decision}${reason !== undefined ? ": " : ""}` : ""}
+          {reason}
+        </span>
       ) : null}
     </div>
   );
@@ -549,6 +308,21 @@ function SubagentLane({
   const elapsedMs =
     agent.durationMs ??
     (isActive && live && agent.startedAtMs !== undefined ? Math.max(0, now - agent.startedAtMs) : undefined);
+  const contextWindow = asNumber(agent.detail?.["contextWindow"]);
+  const inputBudget = asNumber(agent.detail?.["inputBudgetTokens"]);
+  const outputBudget = asNumber(agent.detail?.["outputBudgetTokens"]);
+  const contextMessages = asNumber(agent.detail?.["contextMessageCount"]);
+  const droppedMessages = asNumber(agent.detail?.["droppedMessageCount"]);
+  const packedTokens = asNumber(agent.detail?.["packedContextTokens"]);
+  const stage = typeof agent.detail?.["stage"] === "string" ? agent.detail["stage"] : undefined;
+  const hasContextPackStats =
+    contextWindow !== undefined ||
+    inputBudget !== undefined ||
+    outputBudget !== undefined ||
+    contextMessages !== undefined ||
+    droppedMessages !== undefined ||
+    packedTokens !== undefined ||
+    stage !== undefined;
 
   return (
     <div className="rounded-sm bg-ink-900 px-3 py-2 shadow-edge">
@@ -573,6 +347,17 @@ function SubagentLane({
         <span className="truncate font-mono text-[9px] text-bone-300">{agent.model}</span>
         {isActive && live ? <ActivityBar /> : null}
       </div>
+      {hasContextPackStats ? (
+        <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-ink-700 pt-2 sm:grid-cols-4">
+          {stage !== undefined ? <MiniStat label="stage" value={stage.replace(/_/g, " ")} /> : null}
+          {contextWindow !== undefined ? <MiniStat label="window" value={`${formatCount(contextWindow)} tok`} /> : null}
+          {inputBudget !== undefined ? <MiniStat label="input" value={`${formatCount(inputBudget)} tok`} /> : null}
+          {outputBudget !== undefined ? <MiniStat label="output" value={`${formatCount(outputBudget)} tok`} /> : null}
+          {contextMessages !== undefined ? <MiniStat label="msgs" value={formatCount(contextMessages)} /> : null}
+          {droppedMessages !== undefined ? <MiniStat label="dropped" value={formatCount(droppedMessages)} /> : null}
+          {packedTokens !== undefined ? <MiniStat label="packed" value={`${formatCount(packedTokens)} tok`} /> : null}
+        </div>
+      ) : null}
       {agent.error !== undefined && agent.status === "failed" ? (
         <div className="mt-1 truncate font-mono text-[10px] text-alert-500">{agent.error}</div>
       ) : null}
@@ -596,4 +381,17 @@ function Stat({ label, value }: { label: string; value: string }): React.ReactEl
       <div className="truncate font-mono text-[11px] text-bone-700">{value}</div>
     </div>
   );
+}
+
+function MiniStat({ label, value }: { label: string; value: string }): React.ReactElement {
+  return (
+    <div className="min-w-0">
+      <div className="font-mono text-[8px] uppercase tracking-[0.14em] text-bone-300">{label}</div>
+      <div className="truncate font-mono text-[10px] text-bone-600">{value}</div>
+    </div>
+  );
+}
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }

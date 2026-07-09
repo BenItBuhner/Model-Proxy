@@ -214,6 +214,7 @@ export type RequestEvent =
       chars?: number;
       durationMs?: number;
       error?: string;
+      detail?: Record<string, unknown>;
     }
   | {
       type: "fusion.summary";

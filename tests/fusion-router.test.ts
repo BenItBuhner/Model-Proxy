@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import { FusionRouter } from "../src/routing/fusion/fusion-router.ts";
 import { formatReasoningChunk } from "../src/routing/fusion/reasoning-summarizer.ts";
-import type { FusionRequestContext } from "../src/routing/fusion/types.ts";
+import type { ComplexityScore, FusionRequestContext } from "../src/routing/fusion/types.ts";
 import type { FusionConfig } from "../shared/schemas/fusion.ts";
 
 const testFusionConfig: FusionConfig = {
@@ -139,5 +139,73 @@ describe("FusionRouter", () => {
     expect(chunk).toContain("reasoning_content");
     expect(chunk).toContain("Subagent completed useful work.");
     expect(chunk).not.toContain("\"content\"");
+  });
+
+  it("skips subagents for moderate F2 work without strong parallel-reasoning signals", () => {
+    const ctx: FusionRequestContext = {
+      logicalModel: "fusion-beta",
+      fusionConfig: testFusionConfig,
+      requestData: {
+        messages: [{ role: "user", content: "Explain the tradeoffs in this small helper." }],
+      },
+      clientProtocol: "openai",
+      messages: [{ role: "user", content: "Explain the tradeoffs in this small helper." }],
+      runtimeEffort: 2,
+      resolvedFusionEffort: "F2",
+    };
+    const score: ComplexityScore = {
+      score: 0.3,
+      effort: 2,
+      fusionEffort: "F2",
+      reason: "moderate",
+      tokenCount: 2000,
+    };
+
+    const decision = (router as unknown as {
+      evaluateSubagentNeed: (ctx: FusionRequestContext, score: ComplexityScore) => { useSubagents: boolean; reason: string };
+    }).evaluateSubagentNeed(ctx, score);
+
+    expect(decision.useSubagents).toBe(false);
+    expect(decision.reason).toContain("within synthesis model context");
+  });
+
+  it("uses subagents for high effort or broad tool surfaces", () => {
+    const tools = Array.from({ length: 10 }, (_, i) => ({
+      type: "function",
+      function: { name: `tool_${i}`, parameters: { type: "object", properties: {} } },
+    }));
+    const ctx: FusionRequestContext = {
+      logicalModel: "fusion-beta",
+      fusionConfig: testFusionConfig,
+      requestData: {
+        messages: [{ role: "user", content: "Triage this ambiguous agent task." }],
+        tools,
+      },
+      clientProtocol: "openai",
+      messages: [{ role: "user", content: "Triage this ambiguous agent task." }],
+      runtimeEffort: 2,
+      resolvedFusionEffort: "F2",
+    };
+    const score: ComplexityScore = {
+      score: 0.4,
+      effort: 2,
+      fusionEffort: "F2",
+      reason: "many tools",
+      tokenCount: 3000,
+    };
+
+    const decision = (router as unknown as {
+      evaluateSubagentNeed: (ctx: FusionRequestContext, score: ComplexityScore) => { useSubagents: boolean; reason: string };
+    }).evaluateSubagentNeed(ctx, score);
+
+    expect(decision.useSubagents).toBe(true);
+    expect(decision.reason).toContain("tool surface");
+
+    ctx.resolvedFusionEffort = "F3";
+    const highDecision = (router as unknown as {
+      evaluateSubagentNeed: (ctx: FusionRequestContext, score: ComplexityScore) => { useSubagents: boolean; reason: string };
+    }).evaluateSubagentNeed(ctx, score);
+    expect(highDecision.useSubagents).toBe(true);
+    expect(highDecision.reason).toContain("F3");
   });
 });

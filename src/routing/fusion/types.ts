@@ -108,6 +108,18 @@ export interface SubagentResult {
   /** Error message if failed. */
   error?: string;
   durationMs: number;
+  /** Declared context window used when packing this subagent request. */
+  contextWindow?: number;
+  /** Input budget allocated to conversation/context briefing. */
+  inputBudgetTokens?: number;
+  /** Output budget reserved for this subagent's response. */
+  outputBudgetTokens?: number;
+  /** Number of original conversation messages supplied verbatim in the packed request. */
+  contextMessageCount?: number;
+  /** Number of original conversation messages omitted by adaptive packing. */
+  droppedMessageCount?: number;
+  /** Estimated tokens for the packed verbatim context messages. */
+  packedContextTokens?: number;
 }
 
 // ── Complexity Score Result ──────────────────────────────────────────
@@ -186,6 +198,12 @@ export interface FusionTrace {
     modelRouting: string;
     durationMs: number;
     outputLength: number;
+    contextWindow?: number;
+    inputBudgetTokens?: number;
+    outputBudgetTokens?: number;
+    contextMessageCount?: number;
+    droppedMessageCount?: number;
+    packedContextTokens?: number;
   }>;
   /** Cost breakdown across all model calls in the pipeline. */
   costs: FusionCostEntry[];

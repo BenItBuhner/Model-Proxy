@@ -8,7 +8,7 @@ import {
   stripToolCallArtifacts,
   type SummarySegment,
 } from "./reasoning-summarizer.ts";
-import { ResearchToolbox } from "./subagent-tools.ts";
+import { SYSTEM_DEFAULT_CONTEXT_WINDOW } from "../context-window.ts";
 import { emitFusion, nowIso } from "./fusion-events.ts";
 import {
   finishFusionSubagentRun,
@@ -22,9 +22,6 @@ const log = createLogger("routing.fusion.subagent");
 /** Maximum retries per subagent before giving up. */
 const MAX_SUBAGENT_RETRIES = 3;
 
-/** Maximum research-tool rounds within a single attempt. */
-const MAX_TOOL_ROUNDS = 5;
-
 /** Delay between retries (ms). */
 const RETRY_DELAY_MS = 500;
 
@@ -33,6 +30,12 @@ const DEFAULT_MAX_OUTPUT_TOKENS = 131072;
 
 /** Max input messages to include (safety ceiling). */
 const MAX_CONTEXT_MESSAGES = 200;
+
+/** Minimum input budget to reserve for subagent context, even for small local models. */
+const MIN_SUBAGENT_INPUT_TOKENS = 8_000;
+
+/** Output headroom is important, but should not consume the whole context on smaller models. */
+const MAX_OUTPUT_RESERVE_RATIO = 0.25;
 
 /** Minimum trailing characters worth flushing as a final summary segment. */
 const MIN_FLUSH_SEGMENT_CHARS = 120;
@@ -66,32 +69,25 @@ const GOALPOST_PATTERNS = [
   { type: "finding", pattern: /found|identified|discovered|determined|analyzed/i },
 ];
 
-/** Render a research tool invocation as plain prose for the summarizer. */
-function describeToolUse(name: string, argumentsJson: string): string {
-  let args: Record<string, unknown> = {};
-  try {
-    args = JSON.parse(argumentsJson || "{}") as Record<string, unknown>;
-  } catch { /* fall back to generic description */ }
-  switch (name) {
-    case "search_context":
-      return `Searching the conversation context for "${String(args["query"] ?? "").slice(0, 120)}".`;
-    case "web_search":
-      return `Searching the web for "${String(args["query"] ?? "").slice(0, 120)}".`;
-    case "fetch_url":
-      return `Reading the page at ${String(args["url"] ?? "").slice(0, 160)}.`;
-    case "execute_code":
-      return `Running a ${String(args["language"] ?? "code")} snippet in the research sandbox to verify the reasoning.`;
-    default:
-      return `Using the ${name} research tool.`;
-  }
-}
-
 // ── Streaming tool-call accumulation ──────────────────────────────────
 
 interface AccumulatedToolCall {
   id: string;
   name: string;
   arguments: string;
+}
+
+interface SubagentContextBudget {
+  contextWindow: number;
+  inputBudgetTokens: number;
+  outputBudgetTokens: number;
+}
+
+interface SubagentMessagePack {
+  messages: unknown[];
+  contextMessageCount: number;
+  droppedMessageCount: number;
+  packedContextTokens: number;
 }
 
 /** Merge OpenAI streaming tool_call deltas into complete calls. */
@@ -131,13 +127,10 @@ function mergeToolCallDeltas(
  *  - Parallel execution with configurable concurrency
  *  - Automatic retry on failure
  *  - Streaming execution with live summary segments (onSegment)
- *  - A research-only tool loop (context search, web search, sandboxed code
- *    execution — per effort-level config) executed locally by the proxy
- *
- * Subagents are research/reasoning-only. Their tools are informational and
- * sandboxed; they can NEVER touch the client's environment. Their output is
- * advisory input for the final fusion model, which is the only entity that
- * produces user-facing responses and real tool calls.
+ * Subagents are research/reasoning-only and receive NO tool schemas. The proxy
+ * pre-triages the conversation into a model-budgeted context packet before the
+ * call. Their output is advisory input for the final fusion model, which is the
+ * only entity that produces user-facing responses and real tool calls.
  */
 export class SubagentExecutor {
   private readonly fallbackRouter: FallbackRouter;
@@ -169,11 +162,10 @@ export class SubagentExecutor {
       return [];
     }
 
-    const toolbox = new ResearchToolbox(ctx.messages, this.enabledToolIds(ctx));
-    log.info("executing subagents", { count: tasks.length, tools: toolbox.toolNames });
+    log.info("executing subagents", { count: tasks.length, tools: [] });
 
     const results = await Promise.allSettled(
-      tasks.map((subTask) => this.executeSingle(ctx, subTask, toolbox, options)),
+      tasks.map((subTask) => this.executeSingle(ctx, subTask, options)),
     );
 
     const subagentResults: SubagentResult[] = [];
@@ -208,28 +200,17 @@ export class SubagentExecutor {
     return subagentResults;
   }
 
-  /** Tool IDs enabled by the active effort-level config. */
-  private enabledToolIds(ctx: FusionRequestContext): readonly string[] {
-    const runtimeEffort = ctx.runtimeEffort ?? 2;
-    const effortConfig = runtimeEffort === 3
-      ? ctx.fusionConfig.effort_levels[3]
-      : ctx.fusionConfig.effort_levels[2];
-    return effortConfig?.tools ?? ["context_search"];
-  }
-
   /**
    * Execute a single sub-task with retry logic.
    *
-   * Runs the subagent as a STREAMING completion with a local research-tool
-   * loop, so its output/reasoning can be summarized live (via onSegment)
-   * while it works. Hallucinated tool calls (tools it saw in the transcript
-   * but does not have) are answered with a firm correction and the loop
-   * continues; genuine research tools are executed by the proxy.
+   * Runs the subagent as a STREAMING completion with no tools. Output/reasoning
+   * is summarized live (via onSegment). If the upstream still emits tool calls,
+   * they are treated as invalid output and the attempt is retried with a firmer
+   * plain-text nudge instead of being executed or fed back as tool results.
    */
   private async executeSingle(
     ctx: FusionRequestContext,
     subTask: SubTask,
-    toolbox: ResearchToolbox,
     options: {
       onGoalpost?: (event: GoalpostEvent) => void;
       onSegment?: (segment: SummarySegment) => void;
@@ -261,28 +242,52 @@ export class SubagentExecutor {
     for (let attempt = 1; attempt <= MAX_SUBAGENT_RETRIES; attempt++) {
       attempts = attempt;
       try {
-        const subagentMessages = this.buildSubagentMessages(ctx, subTask, toolbox, attempt, nudgeNoTools);
+        const budget = this.subagentContextBudget(ctx, modelRouting);
+        const messagePack = this.buildSubagentMessages(ctx, subTask, modelRouting, budget, attempt, nudgeNoTools);
+        emitFusion(ctx, {
+          type: "fusion.subagent",
+          at: nowIso(),
+          id: subTask.id,
+          focus: subTask.focus_area,
+          model: modelRouting,
+          status: "progress",
+          attempt,
+          detail: {
+            stage: "context_pack",
+            contextWindow: budget.contextWindow,
+            inputBudgetTokens: budget.inputBudgetTokens,
+            outputBudgetTokens: budget.outputBudgetTokens,
+            contextMessageCount: messagePack.contextMessageCount,
+            droppedMessageCount: messagePack.droppedMessageCount,
+            packedContextTokens: messagePack.packedContextTokens,
+          },
+        });
         const attemptSignal = this.createAttemptSignal(ctx, options);
 
         try {
-          const attemptResult = await this.runToolLoop(ctx, subTask, {
+          const streamed = await this.streamAttempt(ctx, subTask, {
             modelRouting,
-            messages: subagentMessages,
-            toolbox,
+            requestData: {
+              model: modelRouting,
+              messages: messagePack.messages,
+              max_tokens: budget.outputBudgetTokens,
+              stream: true,
+              tool_choice: "none",
+            },
             signal: attemptSignal.signal,
             onSegment: options.onSegment,
           });
+          const content = stripToolCallArtifacts(streamed.content).trim();
 
-          if (attemptResult.sawUnavailableTools && attemptResult.content.trim().length === 0) {
+          if (streamed.toolCalls.length > 0 && content.length === 0) {
             nudgeNoTools = true;
-            throw new Error("subagent kept attempting unavailable tools without producing analysis; retrying with research-only nudge");
+            throw new Error("subagent attempted tool calls despite receiving no tools; retrying with plain-text-only nudge");
           }
-          if (attemptResult.content.trim().length === 0) {
+          if (content.length === 0) {
             nudgeNoTools = false;
             throw new Error("subagent produced empty content");
           }
 
-          const content = attemptResult.content;
           allContent += (allContent ? "\n\n" : "") + content;
 
           if (options.onGoalpost) {
@@ -294,7 +299,12 @@ export class SubagentExecutor {
             subTask: subTask.id,
             attempt,
             contentLength: content.length,
-            toolRounds: attemptResult.toolRounds,
+            contextWindow: budget.contextWindow,
+            inputBudgetTokens: budget.inputBudgetTokens,
+            outputBudgetTokens: budget.outputBudgetTokens,
+            contextMessageCount: messagePack.contextMessageCount,
+            droppedMessageCount: messagePack.droppedMessageCount,
+            packedContextTokens: messagePack.packedContextTokens,
             durationMs,
           });
           this.finishRun(subagentRunId, "completed", attempts, durationMs, content);
@@ -317,6 +327,12 @@ export class SubagentExecutor {
             subagentRunId,
             content,
             durationMs,
+            contextWindow: budget.contextWindow,
+            inputBudgetTokens: budget.inputBudgetTokens,
+            outputBudgetTokens: budget.outputBudgetTokens,
+            contextMessageCount: messagePack.contextMessageCount,
+            droppedMessageCount: messagePack.droppedMessageCount,
+            packedContextTokens: messagePack.packedContextTokens,
           };
         } finally {
           attemptSignal.cleanup();
@@ -385,134 +401,6 @@ export class SubagentExecutor {
       error: lastError,
       durationMs,
     };
-  }
-
-  /**
-   * Run one attempt as an agentic research loop: stream a completion, and if
-   * the subagent invokes research tools, execute them locally, append results,
-   * and continue until it produces its final written analysis.
-   */
-  private async runToolLoop(
-    ctx: FusionRequestContext,
-    subTask: SubTask,
-    args: {
-      modelRouting: string;
-      messages: unknown[];
-      toolbox: ResearchToolbox;
-      signal: AbortSignal | undefined;
-      onSegment?: (segment: SummarySegment) => void;
-    },
-  ): Promise<{ content: string; toolRounds: number; sawUnavailableTools: boolean }> {
-    const workingMessages = [...args.messages];
-    const toolSchemas = args.toolbox.schemas;
-    let combinedContent = "";
-    let sawUnavailableTools = false;
-    let roundsUsed = 0;
-
-    for (let round = 1; round <= MAX_TOOL_ROUNDS; round++) {
-      roundsUsed = round;
-      const request: Record<string, unknown> = {
-        model: args.modelRouting,
-        messages: workingMessages,
-        max_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
-        stream: true,
-      };
-      if (toolSchemas.length > 0) {
-        request["tools"] = toolSchemas;
-        request["tool_choice"] = "auto";
-      }
-
-      const streamed = await this.streamAttempt(ctx, subTask, {
-        modelRouting: args.modelRouting,
-        requestData: request,
-        signal: args.signal,
-        onSegment: args.onSegment,
-      });
-
-      const cleanContent = stripToolCallArtifacts(streamed.content).trim();
-      if (cleanContent.length > 0) {
-        combinedContent += (combinedContent ? "\n\n" : "") + cleanContent;
-      }
-
-      if (streamed.toolCalls.length === 0) {
-        break;
-      }
-
-      // The subagent asked for tools. Execute research tools locally;
-      // firmly correct hallucinated (unavailable) tools.
-      const assistantToolCalls = streamed.toolCalls.map((tc, i) => ({
-        id: tc.id || `${subTask.id}-tool-${round}-${i + 1}`,
-        type: "function",
-        function: { name: tc.name, arguments: tc.arguments || "{}" },
-      }));
-      workingMessages.push({
-        role: "assistant",
-        content: streamed.content.length > 0 ? streamed.content : null,
-        tool_calls: assistantToolCalls,
-      });
-
-      for (const call of assistantToolCalls) {
-        const name = call.function.name;
-        let result: string;
-        if (args.toolbox.has(name)) {
-          const toolStart = performance.now();
-          result = await args.toolbox.execute(name, call.function.arguments);
-          const toolMs = Math.round(performance.now() - toolStart);
-          log.info("subagent research tool executed", {
-            subTask: subTask.id,
-            tool: name,
-            round,
-            durationMs: toolMs,
-            resultChars: result.length,
-          });
-          emitFusion(ctx, {
-            type: "fusion.subagent",
-            at: nowIso(),
-            id: subTask.id,
-            focus: subTask.focus_area,
-            model: args.modelRouting,
-            status: "progress",
-            detail: { tool: name, round, durationMs: toolMs },
-          });
-          // Surface tool activity on the live reasoning channel via the
-          // summarizer, so the client sees "searched the web for X" style
-          // narration instead of silence during research.
-          args.onSegment?.({
-            label: `${subTask.id} · ${subTask.focus_area}`,
-            text: `${describeToolUse(name, call.function.arguments)}\n\nKey findings from the tool:\n${result.slice(0, 700)}`,
-          });
-        } else {
-          sawUnavailableTools = true;
-          result = args.toolbox.unavailableToolMessage(name);
-          log.info("subagent hallucinated unavailable tool; corrected", {
-            subTask: subTask.id,
-            tool: name,
-            round,
-          });
-        }
-        workingMessages.push({
-          role: "tool",
-          tool_call_id: call.id,
-          name,
-          content: result,
-        });
-      }
-
-      if (round === MAX_TOOL_ROUNDS) {
-        log.warn("subagent hit tool-round limit", { subTask: subTask.id });
-        break;
-      }
-      // Ask for the final written analysis after tool budget is half spent.
-      if (round >= Math.ceil(MAX_TOOL_ROUNDS / 2)) {
-        workingMessages.push({
-          role: "user",
-          content:
-            "Wrap up your research now. Write your complete final analysis for your assigned focus area as plain text — findings, reasoning, and concrete recommendations. Do not call any more tools.",
-        });
-      }
-    }
-
-    return { content: combinedContent, toolRounds: roundsUsed, sawUnavailableTools };
   }
 
   /**
@@ -724,19 +612,11 @@ export class SubagentExecutor {
   private buildSubagentMessages(
     ctx: FusionRequestContext,
     subTask: SubTask,
-    toolbox: ResearchToolbox,
+    modelRouting: string,
+    budget: SubagentContextBudget,
     attempt: number,
     nudgeNoTools = false,
-  ): unknown[] {
-    const { messages } = ctx;
-
-    const toolNames = toolbox.toolNames;
-    const toolsSection = toolNames.length > 0
-      ? `RESEARCH TOOLS — the ONLY tools that exist for you:
-${toolNames.map((name) => `- ${name}`).join("\n")}
-These tools are informational and sandboxed. They search, fetch, and compute in an isolated scratch environment run by the pipeline itself. They CANNOT touch the user's project, filesystem, git state, running services, or anything else outside the sandbox. Use them to strengthen your research, then write your analysis.`
-      : `You have NO tools at all in this environment.`;
-
+  ): SubagentMessagePack {
     const systemPrompt = {
       role: "system",
       content: `You are an isolated RESEARCH AND REASONING subagent inside a multi-model fusion pipeline.
@@ -747,82 +627,41 @@ Your sub-task: ${subTask.description}
 UNDERSTAND YOUR ENVIRONMENT — this is critical:
 - You run in a sealed analysis sandbox. You CANNOT create, edit, delete, or run anything in the user's environment. You have no filesystem access, no terminal, no git, no deploy powers, and no connection to the user's machine.
 - The conversation transcript below may show tools like file editors, shells, or task runners being used. Those belong to a SEPARATE agent harness that you are not part of and cannot invoke. Any attempt to call them will fail.
-- ${toolsSection}
+- You have NO tools in this environment. No function-calling tools are available to you, including search, web, code execution, shells, editors, or project readers. The Fusion proxy has already triaged context for you below.
 - You are NOT the primary assistant and the user will never see your words directly. A separate final "fusion" synthesis model reads your analysis and is the ONLY entity that produces the user-facing response and performs real actions (file edits, real tool calls, commands).
 
 RULES FOR YOUR OUTPUT:
 - NEVER claim to have created, modified, executed, or deployed anything. You physically cannot.
-- NEVER write tool-call syntax, tool-call JSON, or pseudo-invocations in your text. If you need a research tool, invoke it properly through the tool-calling interface; everything else must be plain prose and code snippets meant as recommendations.
+- NEVER write tool-call syntax, tool-call JSON, or pseudo-invocations in your text. There is no tool-calling interface for you. Everything must be plain prose and code snippets meant as recommendations.
 - Do NOT address the end user directly and do not roleplay as the primary assistant.
 
 YOUR ACTUAL JOB:
-Study the FULL conversation context below to understand the complete picture, then produce deep, specific research and reasoning for your assigned focus area: findings, root-cause analysis, edge cases, trade-offs, and concrete recommendations (exact code snippets, step-by-step guidance, precise file/function references) that the fusion model can act on.
+Study the context briefing and conversation slices below to understand the complete picture, then produce deep, specific research and reasoning for your assigned focus area: findings, root-cause analysis, edge cases, trade-offs, and concrete recommendations (exact code snippets, step-by-step guidance, precise file/function references) that the fusion model can act on.
 
 Be thorough and complete — do not truncate or trim your analysis.`,
     };
 
-    // Build context messages - include as many as possible
-    // Strategy: include ALL messages first, then trim oldest if over budget
     const systemTokens = estimateTokens(JSON.stringify(systemPrompt));
-    const availableTokens = 900_000; // Leave headroom for output (131K)
-    let contextMessages = [...messages];
-
-    // Sanitize image_url parts (already processed by preprocessor, but safety guard)
-    contextMessages = contextMessages.map((msg) => {
-      const m = msg as Record<string, unknown>;
-      const content = m["content"];
-      if (Array.isArray(content)) {
-        return {
-          ...m,
-          content: content.map((part) => {
-            const p = part as Record<string, unknown>;
-            if (p["type"] === "image_url") {
-              return { type: "text", text: "[Image]" };
-            }
-            return part;
-          }),
-        };
-      }
-      return msg;
-    });
-
-    // Token-aware truncation: drop oldest messages if context exceeds available budget
     const taskPromptTokens = estimateTokens(JSON.stringify({
       role: "user",
       content: `Please complete the following sub-task: ${subTask.description}\n\nFocus area: ${subTask.focus_area}`,
     }));
-
-    let totalTokens = systemTokens + taskPromptTokens + estimateMessageTokens(contextMessages);
-    const maxTries = 5;
-    let tries = 0;
-
-    while (totalTokens > availableTokens && contextMessages.length > 1 && tries < maxTries) {
-      // Drop the oldest non-system message
-      contextMessages.shift();
-      totalTokens = systemTokens + taskPromptTokens + estimateMessageTokens(contextMessages);
-      tries++;
-    }
-
-    // Further cap total message count to safety limit
-    if (contextMessages.length > MAX_CONTEXT_MESSAGES) {
-      // Drop from the middle first to keep conversation start + most recent
-      const keepCount = MAX_CONTEXT_MESSAGES;
-      const dropCount = contextMessages.length - keepCount;
-      contextMessages = [
-        ...contextMessages.slice(0, Math.min(5, dropCount)), // Keep first few for context
-        ...contextMessages.slice(dropCount), // Keep the rest (most recent)
-      ];
-      // If still too many, just keep the most recent
-      if (contextMessages.length > MAX_CONTEXT_MESSAGES) {
-        contextMessages = contextMessages.slice(contextMessages.length - MAX_CONTEXT_MESSAGES);
-      }
-    }
+    const contextBudget = Math.max(
+      MIN_SUBAGENT_INPUT_TOKENS,
+      budget.inputBudgetTokens - systemTokens - taskPromptTokens,
+    );
+    const { contextMessages, briefing, estimatedTokens, droppedMessages } =
+      this.buildAdaptiveContextPack(ctx, subTask, contextBudget);
 
     const nudge = nudgeNoTools
-      ? " REMINDER: the harness tools in the transcript do NOT exist for you and calling them will fail — use only your listed research tools (if any), and write your full analysis and recommendations as plain text for the fusion model."
+      ? " REMINDER: you have no tools. Do not call or describe tool calls. Write your full analysis and recommendations as plain text for the fusion model."
       : "";
     const focusedMessages = [
       systemPrompt,
+      {
+        role: "user",
+        content: briefing,
+      },
       ...contextMessages,
       {
         role: "user",
@@ -834,12 +673,187 @@ Be thorough and complete — do not truncate or trim your analysis.`,
 
     log.info("subagent context built", {
       subTask: subTask.id,
+      modelRouting,
+      modelContextWindow: budget.contextWindow,
+      inputBudgetTokens: budget.inputBudgetTokens,
+      outputBudgetTokens: budget.outputBudgetTokens,
       totalMessages: focusedMessages.length,
       contextMessages: contextMessages.length,
-      estimatedTokens: totalTokens,
+      estimatedTokens,
+      droppedMessages,
     });
 
-    return focusedMessages;
+    return {
+      messages: focusedMessages,
+      contextMessageCount: contextMessages.length,
+      droppedMessageCount: droppedMessages,
+      packedContextTokens: estimatedTokens,
+    };
+  }
+
+  private subagentContextBudget(ctx: FusionRequestContext, modelRouting: string): SubagentContextBudget {
+    const contextWindow = Math.max(
+      4096,
+      Math.min(ctx.fusionConfig.context_window, this.resolveDeclaredContextWindow(modelRouting)),
+    );
+    const outputReserve = Math.min(
+      DEFAULT_MAX_OUTPUT_TOKENS,
+      Math.max(1024, Math.floor(contextWindow * MAX_OUTPUT_RESERVE_RATIO)),
+    );
+    const inputBudgetTokens = Math.max(
+      MIN_SUBAGENT_INPUT_TOKENS,
+      contextWindow - outputReserve,
+    );
+    return {
+      contextWindow,
+      inputBudgetTokens,
+      outputBudgetTokens: outputReserve,
+    };
+  }
+
+  private resolveDeclaredContextWindow(modelRouting: string): number {
+    try {
+      const cfg = modelConfigLoader.loadConfig(modelRouting);
+      const primary = cfg.model_routings[0];
+      return primary?.context_window ?? cfg.context_window ?? SYSTEM_DEFAULT_CONTEXT_WINDOW;
+    } catch {
+      return SYSTEM_DEFAULT_CONTEXT_WINDOW;
+    }
+  }
+
+  private buildAdaptiveContextPack(
+    ctx: FusionRequestContext,
+    subTask: SubTask,
+    tokenBudget: number,
+  ): {
+    contextMessages: unknown[];
+    briefing: string;
+    estimatedTokens: number;
+    droppedMessages: number;
+  } {
+    const sanitized = ctx.messages.map((msg) => this.sanitizeContextMessage(msg));
+    const taskTerms = `${subTask.focus_area} ${subTask.description}`;
+    const firstCount = Math.min(3, sanitized.length);
+    const recentTarget = Math.min(80, Math.max(20, Math.floor(tokenBudget / 1600)));
+    const relevantTarget = Math.min(24, Math.max(6, Math.floor(tokenBudget / 6000)));
+    const anchorTarget = Math.min(24, Math.max(4, Math.floor(tokenBudget / 8000)));
+    const relevantHits = this.scoreMessages(sanitized, taskTerms).slice(0, relevantTarget);
+    const selectedIndexes = new Set<number>();
+
+    for (let i = 0; i < firstCount; i++) selectedIndexes.add(i);
+    for (const hit of relevantHits) selectedIndexes.add(hit.index);
+    for (const index of this.sampleMiddleIndexes(sanitized.length, firstCount, recentTarget, anchorTarget)) {
+      selectedIndexes.add(index);
+    }
+    for (let i = Math.max(firstCount, sanitized.length - recentTarget); i < sanitized.length; i++) {
+      selectedIndexes.add(i);
+    }
+
+    let contextMessages = [...selectedIndexes]
+      .sort((a, b) => a - b)
+      .map((index) => sanitized[index])
+      .filter((message): message is unknown => message !== undefined);
+    let estimatedTokens = estimateMessageTokens(contextMessages);
+
+    while (estimatedTokens > tokenBudget && contextMessages.length > 1) {
+      const firstProtected = contextMessages.length > 4 ? 1 : 0;
+      const removeAt = firstProtected + Math.floor((contextMessages.length - firstProtected) / 2);
+      contextMessages.splice(removeAt, 1);
+      estimatedTokens = estimateMessageTokens(contextMessages);
+    }
+
+    if (contextMessages.length > MAX_CONTEXT_MESSAGES) {
+      contextMessages = contextMessages.slice(contextMessages.length - MAX_CONTEXT_MESSAGES);
+      estimatedTokens = estimateMessageTokens(contextMessages);
+    }
+
+    const relevantExcerpt = this.keywordContextBrief(relevantHits);
+    const droppedMessages = Math.max(0, sanitized.length - contextMessages.length);
+    const briefing = [
+      "Fusion proxy context briefing for this subagent:",
+      `- Logical Fusion context window: ${ctx.fusionConfig.context_window} tokens.`,
+      `- Your routed model context budget is smaller/adaptive; this packet targets about ${tokenBudget} input tokens.`,
+      `- Conversation messages supplied verbatim: ${contextMessages.length}/${sanitized.length}.`,
+      `- Stratified context mix before final budget pruning: first=${firstCount}, relevant<=${relevantTarget}, middle_anchors<=${anchorTarget}, recent<=${recentTarget}.`,
+      droppedMessages > 0
+        ? `- ${droppedMessages} older or lower-priority messages were omitted to preserve room for reasoning.`
+        : "- No messages were omitted from this context packet.",
+      "- Relevant excerpts selected by the proxy before your call:",
+      relevantExcerpt,
+      "",
+      "Use only the supplied briefing and message slices. If something is missing, state the uncertainty and recommend what the fusion model should inspect next.",
+    ].join("\n");
+
+    return { contextMessages, briefing, estimatedTokens, droppedMessages };
+  }
+
+  private scoreMessages(messages: unknown[], query: string): Array<{ index: number; role: string; text: string; score: number }> {
+    const terms = query
+      .toLowerCase()
+      .split(/\W+/)
+      .filter((term) => term.length > 3);
+    if (terms.length === 0) return [];
+
+    const hits: Array<{ index: number; role: string; text: string; score: number }> = [];
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i] as Record<string, unknown>;
+      const text = this.messageText(msg);
+      const lower = text.toLowerCase();
+      const score = terms.reduce((sum, term) => sum + (lower.includes(term) ? 1 : 0), 0);
+      if (score > 0) {
+        hits.push({ index: i, role: String(msg["role"] ?? "unknown"), text, score });
+      }
+    }
+    return hits.sort((a, b) => b.score - a.score);
+  }
+
+  private sampleMiddleIndexes(
+    messageCount: number,
+    firstCount: number,
+    recentTarget: number,
+    anchorTarget: number,
+  ): number[] {
+    const middleStart = firstCount;
+    const middleEndExclusive = Math.max(middleStart, messageCount - recentTarget);
+    const middleCount = middleEndExclusive - middleStart;
+    if (middleCount <= 0 || anchorTarget <= 0) return [];
+    const count = Math.min(anchorTarget, middleCount);
+    const indexes: number[] = [];
+    for (let i = 1; i <= count; i++) {
+      indexes.push(middleStart + Math.floor((i * middleCount) / (count + 1)));
+    }
+    return indexes;
+  }
+
+  private keywordContextBrief(hits: Array<{ index: number; role: string; text: string; score: number }>): string {
+    if (hits.length === 0) return "No context slices directly matched the sub-task focus keywords.";
+
+    return hits
+      .slice(0, 8)
+      .map((hit) => {
+        const excerpt = hit.text.length > 800 ? `${hit.text.slice(0, 800)}\n[excerpt truncated]` : hit.text;
+        return `[message ${hit.index + 1}, role=${hit.role}, score=${hit.score}]\n${excerpt}`;
+      })
+      .join("\n\n");
+  }
+
+  private sanitizeContextMessage(msg: unknown): unknown {
+    const m = msg as Record<string, unknown>;
+    const content = m["content"];
+    if (!Array.isArray(content)) return msg;
+    return {
+      ...m,
+      content: content.map((part) => {
+        const p = part as Record<string, unknown>;
+        if (p["type"] === "image_url") return { type: "text", text: "[Image]" };
+        return part;
+      }),
+    };
+  }
+
+  private messageText(msg: Record<string, unknown>): string {
+    const content = msg["content"];
+    return typeof content === "string" ? content : JSON.stringify(content ?? "");
   }
 
   private detectGoalposts(

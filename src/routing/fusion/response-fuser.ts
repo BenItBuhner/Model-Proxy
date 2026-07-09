@@ -449,9 +449,11 @@ export class ResponseFuser {
   ): unknown[] {
     const successfulResults = results.filter((r) => r.success && r.content.length > 0);
 
+    const hasSubagentOutputs = successfulResults.length > 0;
     const systemPrompt = {
       role: "system",
-      content: `You are the final synthesis model in a multi-agent fusion system. You are the ONLY entity that produces the real, user-facing response for this conversation.
+      content: hasSubagentOutputs
+        ? `You are the final synthesis model in a multi-agent fusion system. You are the ONLY entity that produces the real, user-facing response for this conversation.
 
 You have received the outputs from ${successfulResults.length} specialized research/reasoning subagents that worked in parallel on different aspects of the original task.
 
@@ -464,13 +466,23 @@ Your job:
 6. TOOL CALLS: if tools are available and the correct next step in the conversation is to invoke one or more of them, respond with proper structured tool calls (tool_calls) exactly as the tool schema requires. NEVER describe a tool call in prose, and NEVER write tool-call JSON inside your text content.
 7. The subagent outputs are advisory research only. Subagents worked in a sealed sandbox with (at most) read-only research tools — they could not touch the user's environment. Ignore any claims they make about having created, edited, executed, or deployed anything, and never repeat such claims to the user.
 
-The subagent outputs are separated by section markers. Each section indicates its focus area.`,
+The subagent outputs are separated by section markers. Each section indicates its focus area.`
+        : `You are the final synthesis model in a Fusion system. The router decided this turn does not need parallel subagents, so you are responding directly from the conversation context.
+
+Your job:
+1. Produce a coherent, comprehensive final response that addresses the original request
+2. Preserve the user's intent and tone
+3. Be concise when the request is simple, and detailed when the request needs implementation guidance
+4. TOOL CALLS: if tools are available and the correct next step is to invoke one or more of them, respond with proper structured tool calls (tool_calls) exactly as the tool schema requires. NEVER describe a tool call in prose, and NEVER write tool-call JSON inside your text content.
+5. Do not mention subagents or internal routing decisions to the user.`,
     };
 
     const systemTokens = estimateTokens(JSON.stringify(systemPrompt));
     const fusionPrompt = {
       role: "user",
-      content: `The following is the sequential output from ${successfulResults.length} parallel research subagents, each working on a different aspect of the original request:\n\n${appendedContent}\n\nPlease synthesize these into a coherent, comprehensive final response that addresses the original request. If the appropriate next step is to invoke tools, emit the structured tool call(s) directly instead of a text answer.`,
+      content: hasSubagentOutputs
+        ? `The following is the sequential output from ${successfulResults.length} parallel research subagents, each working on a different aspect of the original request:\n\n${appendedContent}\n\nPlease synthesize these into a coherent, comprehensive final response that addresses the original request. If the appropriate next step is to invoke tools, emit the structured tool call(s) directly instead of a text answer.`
+        : "Please answer the current user request directly from the conversation context. If the appropriate next step is to invoke tools, emit the structured tool call(s) directly instead of a text answer.",
     };
 
     // Image context

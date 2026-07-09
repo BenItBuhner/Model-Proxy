@@ -290,6 +290,54 @@ describe("Fusion Tool Calls", () => {
     }
   }, 60000);
 
+  it("skips divider and subagents for resolved F2 turns without strong signals", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      upstreamCalls++;
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const response = {
+        id: "chatcmpl-skip-subagents",
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model: body["model"] ?? "fake-fusion-model",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Direct synthesis is sufficient for this moderate request.",
+            },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 },
+      };
+      return new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const ctx: FusionRequestContext = {
+      logicalModel: "fusion-beta",
+      fusionConfig: testFusionConfig,
+      requestData: {
+        messages: [{ role: "user", content: "Explain the tradeoff in this small helper." }],
+        reasoning_effort: "high",
+      },
+      clientProtocol: "openai",
+      messages: [{ role: "user", content: "Explain the tradeoff in this small helper." }],
+    };
+
+    const result = await router.route(ctx);
+
+    expect(result.content).toContain("Direct synthesis");
+    expect(result.subagentResults).toHaveLength(0);
+    expect(result.fusionTrace?.subTaskCount).toBe(0);
+    expect(result.fusionTrace?.steps.some((step) => step.label === "Subagent Execution Skipped")).toBe(true);
+    expect(upstreamCalls).toBe(1);
+  }, 60000);
+
   // ── Tool choice handling ──────────────────────────────────────────
 
   it("respects tool_choice: none (should not call tools)", async () => {
