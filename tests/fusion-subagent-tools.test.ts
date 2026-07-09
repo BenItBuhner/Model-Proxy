@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect } from "bun:test";
 import { SubagentExecutor } from "../src/routing/fusion/subagent-executor.ts";
-import { ResearchToolbox, searchConversationContext } from "../src/routing/fusion/subagent-tools.ts";
+import { searchConversationContext } from "../src/routing/fusion/context-search.ts";
 import type { FusionRequestContext, SubTask } from "../src/routing/fusion/types.ts";
 import type { FusionConfig } from "../shared/schemas/fusion.ts";
 import type { SummarySegment } from "../src/routing/fusion/reasoning-summarizer.ts";
@@ -308,25 +308,7 @@ describe("SubagentExecutor reasoning-only subagents", () => {
   }, 20000);
 });
 
-// ── ResearchToolbox unit behavior ─────────────────────────────────────
-
-describe("ResearchToolbox", () => {
-  it("exposes schemas per enabled config tools", () => {
-    const contextOnly = new ResearchToolbox([], ["context_search"]);
-    expect(contextOnly.toolNames).toEqual(["search_context"]);
-
-    const full = new ResearchToolbox([], ["context_search", "web_search", "code_execution"]);
-    expect(full.toolNames).toEqual(["search_context", "web_search", "fetch_url", "execute_code"]);
-  });
-
-  it("answers unavailable tools with a firm research-only correction", () => {
-    const toolbox = new ResearchToolbox([], ["context_search"]);
-    const message = toolbox.unavailableToolMessage("edit_file");
-    expect(message).toContain('"edit_file" does not exist');
-    expect(message).toContain("search_context");
-    expect(message).toContain("cannot edit files");
-  });
-
+describe("searchConversationContext", () => {
   it("searches conversation context by keywords", () => {
     const messages = [
       { role: "user", content: "The websocket handler drops frames under load." },
@@ -335,21 +317,5 @@ describe("ResearchToolbox", () => {
     const result = searchConversationContext(messages, "websocket frames");
     expect(result).toContain("websocket handler");
     expect(result).toContain("role=user");
-  });
-
-  it("executes sandboxed code when enabled", async () => {
-    const toolbox = new ResearchToolbox([], ["code_execution"]);
-    const result = await toolbox.execute("execute_code", JSON.stringify({
-      language: "javascript",
-      code: "console.log(6 * 7);",
-    }));
-    expect(result).toContain("42");
-    expect(result).toContain("exit_code: 0");
-  });
-
-  it("handles malformed tool arguments gracefully", async () => {
-    const toolbox = new ResearchToolbox([], ["context_search"]);
-    const result = await toolbox.execute("search_context", "{not json");
-    expect(result).toContain("invalid JSON");
   });
 });

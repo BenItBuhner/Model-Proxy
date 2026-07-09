@@ -1,7 +1,7 @@
 import { createLogger } from "../../observability/logger.ts";
 import { FallbackRouter } from "../fallback.ts";
 import type { FusionRequestContext, SubTask } from "./types.ts";
-import { searchConversationContext } from "./subagent-tools.ts";
+import { searchConversationContext } from "./context-search.ts";
 
 const log = createLogger("routing.fusion.task-divider");
 
