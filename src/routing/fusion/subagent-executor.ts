@@ -779,7 +779,7 @@ Be thorough and complete — do not truncate or trim your analysis.`,
     const recentTarget = Math.min(80, Math.max(20, Math.floor(tokenBudget / 1600)));
     const relevantTarget = Math.min(24, Math.max(6, Math.floor(tokenBudget / 6000)));
     const anchorTarget = Math.min(24, Math.max(4, Math.floor(tokenBudget / 8000)));
-    const relevantHits = this.scoreMessages(sanitized, taskTerms).slice(0, relevantTarget);
+    const relevantHits = this.selectRelevantHits(this.scoreMessages(sanitized, taskTerms), relevantTarget, sanitized.length);
     const selected = new Map<number, SelectedContextMessage>();
     const addSelected = (index: number, priority: number) => {
       const message = sanitized[index];
@@ -959,6 +959,39 @@ Be thorough and complete — do not truncate or trim your analysis.`,
       }
     }
     return hits.sort((a, b) => b.score - a.score);
+  }
+
+  private selectRelevantHits(
+    hits: Array<{ index: number; role: string; text: string; score: number }>,
+    target: number,
+    messageCount: number,
+  ): Array<{ index: number; role: string; text: string; score: number }> {
+    if (target <= 0 || hits.length <= target) return hits.slice(0, target);
+
+    const selected = new Map<number, { index: number; role: string; text: string; score: number }>();
+    const bucketCount = Math.min(target, Math.max(1, Math.ceil(Math.sqrt(messageCount))));
+    const bucketSize = Math.max(1, Math.ceil(messageCount / bucketCount));
+
+    for (let bucket = 0; bucket < bucketCount && selected.size < target; bucket++) {
+      const start = bucket * bucketSize;
+      const end = Math.min(messageCount, start + bucketSize);
+      const center = (start + end - 1) / 2;
+      const best = hits
+        .filter((hit) => hit.index >= start && hit.index < end)
+        .sort((a, b) =>
+          b.score - a.score ||
+          Math.abs(a.index - center) - Math.abs(b.index - center) ||
+          a.index - b.index
+        )[0];
+      if (best !== undefined) selected.set(best.index, best);
+    }
+
+    for (const hit of hits) {
+      if (selected.size >= target) break;
+      selected.set(hit.index, hit);
+    }
+
+    return [...selected.values()].sort((a, b) => b.score - a.score || a.index - b.index);
   }
 
   private sampleMiddleIndexes(

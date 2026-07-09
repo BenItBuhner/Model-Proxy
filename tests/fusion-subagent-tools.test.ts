@@ -246,6 +246,40 @@ describe("SubagentExecutor reasoning-only subagents", () => {
     expect(body["max_tokens"]).toBe(16000);
   }, 20000);
 
+  it("spreads tied relevant context across the transcript instead of clustering at the start", async () => {
+    const capturedBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      capturedBodies.push(body);
+      return sseResponse(contentEvents("The context pack retained relevant notes from multiple transcript regions."));
+    }) as unknown as typeof fetch;
+
+    const filler = "large low priority payload ".repeat(450);
+    const messages = Array.from({ length: 120 }, (_, index) => ({
+      role: index % 6 === 0 ? "assistant" : "user",
+      content: `message-${index} retry behavior fallback router ${filler}`,
+    }));
+    messages[44] = {
+      role: "user",
+      content: `RELEVANT_BUCKET_SENTINEL_A retry behavior fallback router ${filler}`,
+    };
+    messages[80] = {
+      role: "assistant",
+      content: `RELEVANT_BUCKET_SENTINEL_B retry behavior fallback router ${filler}`,
+    };
+
+    const ctx = makeCtx(messages);
+    const results = await executor.execute(ctx, [subTask]);
+
+    expect(results[0].success).toBe(true);
+    expect(results[0].droppedMessageCount).toBeGreaterThan(70);
+    const body = capturedBodies[0];
+    const packedText = JSON.stringify(body["messages"]);
+    expect(packedText).toContain("RELEVANT_BUCKET_SENTINEL_A");
+    expect(packedText).toContain("RELEVANT_BUCKET_SENTINEL_B");
+    expect(packedText).toContain("Relevant excerpts selected by the proxy");
+  }, 20000);
+
   it("preserves high-scoring relevant context when budget pruning large packets", async () => {
     const capturedBodies: Array<Record<string, unknown>> = [];
     globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
