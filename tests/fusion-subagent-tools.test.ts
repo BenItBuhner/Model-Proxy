@@ -243,7 +243,10 @@ describe("SubagentExecutor reasoning-only subagents", () => {
       return sseResponse(contentEvents("The oversized context packet was reduced to fit the subagent route budget."));
     }) as unknown as typeof fetch;
 
-    const oversized = "fallback router retry behavior ".repeat(30_000);
+    const oversized = [
+      "fallback router retry behavior ".repeat(30_000),
+      "OVERSIZED_TAIL_SENTINEL final diagnostic result",
+    ].join("\n");
     const ctx = makeCtx([
       {
         role: "user",
@@ -258,6 +261,7 @@ describe("SubagentExecutor reasoning-only subagents", () => {
     const messages = body["messages"] as Array<Record<string, unknown>>;
     const packetText = JSON.stringify(messages);
     expect(packetText).toContain("OVERSIZED_RELEVANT_SENTINEL");
+    expect(packetText).toContain("OVERSIZED_TAIL_SENTINEL");
     expect(packetText).toContain("context message truncated to fit subagent route budget");
     expect(packetText.length).toBeLessThan(oversized.length);
     expect(body["max_tokens"]).toBe(16_000);

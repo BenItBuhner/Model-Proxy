@@ -252,6 +252,7 @@ describe("ResponseFuser synthesis context packing", () => {
     const hugeOriginalMessage = [
       "SYNTHESIS_CONTEXT_HEAD_SENTINEL keep the opening instruction.",
       "oversized original context ".repeat(20_000),
+      "SYNTHESIS_CONTEXT_TAIL_SENTINEL keep the final diagnostic result.",
     ].join("\n");
     const results = [subagentResult("Analyze the oversized original context.")];
     const messages = fuser.buildSynthesisMessages(
@@ -264,6 +265,7 @@ describe("ResponseFuser synthesis context packing", () => {
 
     const joined = JSON.stringify(messages);
     expect(joined).toContain("SYNTHESIS_CONTEXT_HEAD_SENTINEL");
+    expect(joined).toContain("SYNTHESIS_CONTEXT_TAIL_SENTINEL");
     expect(joined).toContain("synthesis context message truncated to fit route budget");
     expect(joined.length).toBeLessThan(hugeOriginalMessage.length);
   });

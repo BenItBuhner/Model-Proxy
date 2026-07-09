@@ -887,15 +887,26 @@ Be thorough and complete — do not truncate or trim your analysis.`,
       if (content.length <= maxContentChars) return message;
       return {
         ...msg,
-        content: `${content.slice(0, maxContentChars)}\n[context message truncated to fit subagent route budget]`,
+        content: this.truncateMiddleText(content, maxContentChars, "context message truncated to fit subagent route budget"),
       };
     }
     const serialized = JSON.stringify(content ?? "");
     if (serialized.length <= maxContentChars) return message;
     return {
       ...msg,
-      content: `${serialized.slice(0, maxContentChars)}\n[context message truncated to fit subagent route budget]`,
+      content: this.truncateMiddleText(serialized, maxContentChars, "context message truncated to fit subagent route budget"),
     };
+  }
+
+  private truncateMiddleText(text: string, maxChars: number, note: string): string {
+    const marker = `\n[${note}; omitted middle]\n`;
+    const available = Math.max(0, maxChars - marker.length);
+    if (available <= 0) return marker.trim();
+    const headChars = Math.max(1, Math.floor(available * 0.65));
+    const tailChars = Math.max(1, available - headChars);
+    const head = text.slice(0, headChars).replace(/\s+\S*$/, "").trimEnd();
+    const tail = text.slice(text.length - tailChars).replace(/^\S*\s+/, "").trimStart();
+    return `${head}${marker}${tail}`;
   }
 
   private scoreMessages(messages: unknown[], query: string): Array<{ index: number; role: string; text: string; score: number }> {
