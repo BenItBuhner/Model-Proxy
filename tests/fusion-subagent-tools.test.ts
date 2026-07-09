@@ -98,6 +98,17 @@ describe("SubagentExecutor reasoning-only subagents", () => {
       }),
     );
     fs.writeFileSync(
+      path.join(tmpRoot, "models", "tiny-window.json"),
+      JSON.stringify({
+        logical_name: "tiny-window",
+        timeout_seconds: 5,
+        context_window: 4096,
+        default_cooldown_seconds: 0,
+        model_routings: [{ provider: "openai", model: "fake-tiny-subagent-model", api_key_env: ["FAKE_SUBAGENT_API_KEY"] }],
+        fallback_model_routings: [],
+      }),
+    );
+    fs.writeFileSync(
       path.join(tmpRoot, "providers", "openai.json"),
       JSON.stringify({
         name: "openai",
@@ -301,6 +312,52 @@ describe("SubagentExecutor reasoning-only subagents", () => {
     expect(packetText).toContain("context message truncated to fit subagent route budget");
     expect(packetText.length).toBeLessThan(oversized.length);
     expect(body["max_tokens"]).toBe(16_000);
+  }, 20000);
+
+  it("keeps packed input and output within a tiny subagent model context window", async () => {
+    const capturedBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      capturedBodies.push(body);
+      return sseResponse(contentEvents("The tiny model received a compact but valid research packet."));
+    }) as unknown as typeof fetch;
+
+    const tinyTask: SubTask = {
+      ...subTask,
+      suggested_model_routing: "tiny-window",
+    };
+    const ctx = makeCtx([
+      {
+        role: "user",
+        content: `TINY_OPENING_SENTINEL ${"fallback router retry behavior ".repeat(1200)} TINY_TAIL_SENTINEL`,
+      },
+    ]);
+    const effort2 = ctx.fusionConfig.effort_levels[2]!;
+    ctx.fusionConfig = {
+      ...ctx.fusionConfig,
+      effort_levels: {
+        ...ctx.fusionConfig.effort_levels,
+        2: {
+          subagent_count: effort2.subagent_count,
+          model_routings: ["tiny-window"],
+          tools: effort2.tools,
+        },
+      },
+    };
+
+    const results = await executor.execute(ctx, [tinyTask]);
+
+    expect(results[0].success).toBe(true);
+    expect(results[0].contextWindow).toBe(4096);
+    expect(results[0].outputBudgetTokens).toBe(1024);
+    expect(results[0].inputBudgetTokens).toBe(3072);
+    expect(results[0].packedContextTokens).toBeLessThanOrEqual(3072);
+    const body = capturedBodies[0];
+    expect(body["max_tokens"]).toBe(1024);
+    const packetText = JSON.stringify(body["messages"]);
+    expect(packetText).toContain("TINY_OPENING_SENTINEL");
+    expect(packetText).toContain("TINY_TAIL_SENTINEL");
+    expect(packetText).toContain("context message truncated to fit subagent route budget");
   }, 20000);
 
   it("retries hallucinated tool-call-only output and still gets final analysis", async () => {

@@ -32,8 +32,8 @@ const DEFAULT_MAX_OUTPUT_TOKENS = 131072;
 /** Max input messages to include (safety ceiling). */
 const MAX_CONTEXT_MESSAGES = 200;
 
-/** Minimum input budget to reserve for subagent context, even for small local models. */
-const MIN_SUBAGENT_INPUT_TOKENS = 8_000;
+/** Minimum usable context packet for very small subagent routes. */
+const MIN_SUBAGENT_CONTEXT_PACKET_TOKENS = 512;
 
 /** Output headroom is important, but should not consume the whole context on smaller models. */
 const MAX_OUTPUT_RESERVE_RATIO = 0.25;
@@ -691,7 +691,7 @@ Be thorough and complete — do not truncate or trim your analysis.`,
       content: `Please complete the following sub-task: ${subTask.description}\n\nFocus area: ${subTask.focus_area}`,
     }));
     const contextBudget = Math.max(
-      MIN_SUBAGENT_INPUT_TOKENS,
+      MIN_SUBAGENT_CONTEXT_PACKET_TOKENS,
       budget.inputBudgetTokens - systemTokens - taskPromptTokens,
     );
     const { contextMessages, briefing, estimatedTokens, droppedMessages } =
@@ -743,11 +743,9 @@ Be thorough and complete — do not truncate or trim your analysis.`,
     const outputReserve = Math.min(
       DEFAULT_MAX_OUTPUT_TOKENS,
       Math.max(1024, Math.floor(contextWindow * MAX_OUTPUT_RESERVE_RATIO)),
+      Math.max(512, contextWindow - 1024),
     );
-    const inputBudgetTokens = Math.max(
-      MIN_SUBAGENT_INPUT_TOKENS,
-      contextWindow - outputReserve,
-    );
+    const inputBudgetTokens = Math.max(MIN_SUBAGENT_CONTEXT_PACKET_TOKENS, contextWindow - outputReserve);
     return {
       contextWindow,
       inputBudgetTokens,
