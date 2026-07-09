@@ -247,6 +247,26 @@ describe("ResponseFuser synthesis context packing", () => {
     expect(joined).toContain("fusion advisory excerpt truncated");
     expect(joined.length).toBeLessThan(appended.length);
   });
+
+  it("truncates an oversized original message in the synthesis context pack", () => {
+    const hugeOriginalMessage = [
+      "SYNTHESIS_CONTEXT_HEAD_SENTINEL keep the opening instruction.",
+      "oversized original context ".repeat(20_000),
+    ].join("\n");
+    const results = [subagentResult("Analyze the oversized original context.")];
+    const messages = fuser.buildSynthesisMessages(
+      [{ role: "user", content: hugeOriginalMessage }],
+      fuser.buildSequentialAppend(results),
+      results,
+      undefined,
+      { contextWindow: 16_000, inputBudgetTokens: 12_000, outputBudgetTokens: 4_000 },
+    );
+
+    const joined = JSON.stringify(messages);
+    expect(joined).toContain("SYNTHESIS_CONTEXT_HEAD_SENTINEL");
+    expect(joined).toContain("synthesis context message truncated to fit route budget");
+    expect(joined.length).toBeLessThan(hugeOriginalMessage.length);
+  });
 });
 
 // ── SSE parsing helpers ───────────────────────────────────────────────

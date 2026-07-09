@@ -692,6 +692,11 @@ Your job:
       estimatedTokens = estimateMessageTokens(messages);
     }
 
+    if (estimatedTokens > tokenBudget && messages.length > 0) {
+      messages = this.truncateOversizedContextMessages(messages, tokenBudget);
+      estimatedTokens = estimateMessageTokens(messages);
+    }
+
     return {
       messages,
       estimatedTokens,
@@ -710,6 +715,31 @@ Your job:
       .slice()
       .sort((a, b) => a.index - b.index)
       .map((candidate) => candidate.message);
+  }
+
+  private truncateOversizedContextMessages(messages: unknown[], tokenBudget: number): unknown[] {
+    if (messages.length === 0 || tokenBudget <= 0) return [];
+    const perMessageTokens = Math.max(256, Math.floor(tokenBudget / messages.length));
+    const maxContentChars = Math.max(512, perMessageTokens * 4);
+    return messages.map((message) => this.truncateContextMessage(message, maxContentChars));
+  }
+
+  private truncateContextMessage(message: unknown, maxContentChars: number): unknown {
+    const msg = message as Record<string, unknown>;
+    const content = msg["content"];
+    if (typeof content === "string") {
+      if (content.length <= maxContentChars) return message;
+      return {
+        ...msg,
+        content: `${content.slice(0, maxContentChars)}\n[synthesis context message truncated to fit route budget]`,
+      };
+    }
+    const serialized = JSON.stringify(content ?? "");
+    if (serialized.length <= maxContentChars) return message;
+    return {
+      ...msg,
+      content: `${serialized.slice(0, maxContentChars)}\n[synthesis context message truncated to fit route budget]`,
+    };
   }
 
   private scoreMessages(messages: unknown[], query: string): Array<{ index: number; score: number }> {
