@@ -123,6 +123,42 @@ export function stripToolCallArtifacts(text: string): string {
   return cleaned;
 }
 
+const SUBAGENT_IMPOSSIBLE_ACTION_CLAIM =
+  /\b(?:I|I've|I have|I just|I already|we|we've|we have|we just|we already)\s+(?:successfully\s+|already\s+|just\s+)?(?:applied|changed|committed|created|deleted|deployed|edited|executed|fixed|installed|modified|moved|patched|pushed|ran|removed|renamed|run|updated|wrote)\b/i;
+
+const SUBAGENT_ACTION_CLAIM_REPLACEMENT =
+  "[subagent invalid action claim removed: subagents cannot modify files, run commands, commit, push, or deploy]";
+
+/**
+ * Remove first-person action claims from reasoning-only subagents. Subagents
+ * can analyze and recommend, but the primary assistant is the only component
+ * allowed to execute tools or mutate the repository.
+ */
+export function stripSubagentActionClaims(text: string): string {
+  let cleaned = text.split(/(\n+)/).map((part) => {
+    if (part.startsWith("\n")) return part;
+    if (!SUBAGENT_IMPOSSIBLE_ACTION_CLAIM.test(part)) return part;
+    return part.match(/^\s/)?.[0] ? ` ${SUBAGENT_ACTION_CLAIM_REPLACEMENT}` : SUBAGENT_ACTION_CLAIM_REPLACEMENT;
+  }).join("");
+
+  cleaned = cleaned
+    .replace(
+      new RegExp(
+        `${escapeRegExp(SUBAGENT_ACTION_CLAIM_REPLACEMENT)}(?:\\s+${escapeRegExp(SUBAGENT_ACTION_CLAIM_REPLACEMENT)})+`,
+        "g",
+      ),
+      SUBAGENT_ACTION_CLAIM_REPLACEMENT,
+    )
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n");
+
+  return cleaned;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * Streaming filter that removes <think>/<thinking> spans from text arriving
  * in arbitrary token boundaries. Some summarizer routings (GLM family) leak

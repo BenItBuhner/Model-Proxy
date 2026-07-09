@@ -355,6 +355,31 @@ describe("SubagentExecutor reasoning-only subagents", () => {
     }
   }, 20000);
 
+  it("strips impossible action claims from subagent content and segments", async () => {
+    globalThis.fetch = (async () => {
+      return sseResponse(contentEvents(
+        "I edited src/routing/fusion/fallback.ts and ran bun test.\n\nRecommendation: update the retry predicate to treat transport resets as retryable.",
+      ));
+    }) as unknown as typeof fetch;
+
+    const segments: SummarySegment[] = [];
+    const ctx = makeCtx([{ role: "user", content: "Investigate retry behavior." }]);
+    const results = await executor.execute(ctx, [subTask], {
+      onSegment: (segment) => segments.push(segment),
+    });
+
+    expect(results[0].success).toBe(true);
+    expect(results[0].content).not.toContain("I edited");
+    expect(results[0].content).not.toContain("ran bun test");
+    expect(results[0].content).toContain("subagent invalid action claim removed");
+    expect(results[0].content).toContain("Recommendation: update the retry predicate");
+    for (const segment of segments) {
+      expect(segment.text).not.toContain("I edited");
+      expect(segment.text).not.toContain("ran bun test");
+      expect(segment.text).toContain("Recommendation: update the retry predicate");
+    }
+  }, 20000);
+
   it("subagent system prompt spells out the sealed environment", async () => {
     let systemPrompt = "";
     globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {

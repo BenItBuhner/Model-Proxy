@@ -5,6 +5,7 @@ import type { FusionRequestContext, SubTask, SubagentResult, GoalpostEvent } fro
 import {
   parseOpenAIDelta,
   splitSseEvents,
+  stripSubagentActionClaims,
   stripToolCallArtifacts,
   type SummarySegment,
 } from "./reasoning-summarizer.ts";
@@ -287,7 +288,7 @@ export class SubagentExecutor {
             signal: attemptSignal.signal,
             onSegment: options.onSegment,
           });
-          const content = stripToolCallArtifacts(streamed.content).trim();
+          const content = stripSubagentActionClaims(stripToolCallArtifacts(streamed.content)).trim();
 
           if (streamed.toolCalls.length > 0 && content.length === 0) {
             nudgeNoTools = true;
@@ -470,7 +471,7 @@ export class SubagentExecutor {
     const toolCallAcc = new Map<number, AccumulatedToolCall>();
 
     const emitSegmentText = (text: string) => {
-      const sanitized = stripToolCallArtifacts(text);
+      const sanitized = stripSubagentActionClaims(stripToolCallArtifacts(text));
       if (sanitized.trim().length === 0) return;
       args.onSegment?.({ label, text: sanitized });
       emitFusion(ctx, {
