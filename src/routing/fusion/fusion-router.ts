@@ -1079,6 +1079,11 @@ export class FusionRouter {
     const text = JSON.stringify(ctx.messages).toLowerCase();
     const hasCodeOrFileWork =
       /\b(refactor|implement|edit|modify|patch|debug|fix|test|typescript|javascript|tsx|schema|database|migration|api|route|component)\b/.test(text);
+    const referencedFiles = text.match(/\b[\w./-]+\.(?:ts|tsx|js|jsx|json|md|css|py|go|rs|java|kt|sql|ya?ml)\b/g) ?? [];
+    const hasLargeEditIntent =
+      /\b(multi[-\s]?file|multiple files|across (?:the )?(?:repo|repository|codebase|modules|packages)|large (?:file )?(?:edit|refactor|migration)|end[-\s]?to[-\s]?end|full implementation|repo[-\s]?wide|repository[-\s]?wide)\b/.test(text) ||
+      /\b(refactor|implement|migrate|update)\b[\s\S]{0,160}\b(tests?|docs?|schemas?|routes?|components?|providers?|configs?)\b/.test(text) ||
+      referencedFiles.length >= 3;
     const hasToolResults = ctx.messages.some((msg) =>
       typeof msg === "object" &&
       msg !== null &&
@@ -1104,6 +1109,8 @@ export class FusionRouter {
       longConversation,
       hasToolResults,
       hasCodeOrFileWork,
+      hasLargeEditIntent,
+      referencedFileCount: referencedFiles.length,
       images,
     };
 
@@ -1121,6 +1128,9 @@ export class FusionRouter {
     }
     if (manyTools) {
       return { useSubagents: true, reason: "large tool surface benefits from parallel risk analysis", signals };
+    }
+    if (hasCodeOrFileWork && hasLargeEditIntent) {
+      return { useSubagents: true, reason: "large implementation plan benefits from parallel review before synthesis", signals };
     }
     if (hasToolResults && (hasCodeOrFileWork || score.tokenCount >= 8_000)) {
       return { useSubagents: true, reason: "tool results introduced substantial implementation context", signals };

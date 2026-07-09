@@ -214,6 +214,44 @@ describe("FusionRouter", () => {
     expect(highDecision.reason).toContain("F3");
   });
 
+  it("uses subagents for broad multi-file implementation plans before tool results exist", () => {
+    const message = [
+      "Plan and implement a repo-wide migration across the router, config schema, dashboard component, and tests.",
+      "Coordinate src/routing/fusion/fusion-router.ts, shared/schemas/fusion.ts, web/components/observability/fusion-pipeline-view.tsx, and tests/fusion-router.test.ts.",
+    ].join(" ");
+    const ctx: FusionRequestContext = {
+      logicalModel: "fusion-beta",
+      fusionConfig: testFusionConfig,
+      requestData: {
+        messages: [{ role: "user", content: message }],
+      },
+      clientProtocol: "openai",
+      messages: [{ role: "user", content: message }],
+      runtimeEffort: 2,
+      resolvedFusionEffort: "F2",
+    };
+    const score: ComplexityScore = {
+      score: 0.38,
+      effort: 2,
+      fusionEffort: "F2",
+      reason: "moderate implementation plan",
+      tokenCount: 4000,
+    };
+
+    const decision = (router as unknown as {
+      evaluateSubagentNeed: (ctx: FusionRequestContext, score: ComplexityScore) => {
+        useSubagents: boolean;
+        reason: string;
+        signals: Record<string, unknown>;
+      };
+    }).evaluateSubagentNeed(ctx, score);
+
+    expect(decision.useSubagents).toBe(true);
+    expect(decision.reason).toContain("large implementation plan");
+    expect(decision.signals["hasLargeEditIntent"]).toBe(true);
+    expect(decision.signals["referencedFileCount"]).toBeGreaterThanOrEqual(3);
+  });
+
   it("does not spawn subagents for a disabled tool surface alone", () => {
     const tools = Array.from({ length: 12 }, (_, i) => ({
       type: "function",
