@@ -1,7 +1,7 @@
 # Fusion Quality Evaluation Scratchpad
 
 ## Current Focus
-Add a score separation margin so expected-pass cases must stay meaningfully above expected-fail controls.
+Add command-level regression coverage for the scorecard benchmark gate output.
 
 ## To-Dos
 - [x] Inspect current model diversity and handoff behavior.
@@ -21,6 +21,7 @@ Add a score separation margin so expected-pass cases must stay meaningfully abov
 - [x] Add compact benchmark gate fields for pass/fail counts and resource headroom.
 - [x] Add `docs/model-fusion-quality-review.md`.
 - [x] Add positive-vs-negative score separation margin to the scorecard gate.
+- [x] Add `tests/fusion-scorecard-benchmark.test.ts` and include it in `eval:fusion-quality`.
 
 ## Findings
 - `fusion-beta` already exposes a diverse candidate pool for Effort 2/3: GLM, Kimi code, MiniMax, DeepSeek, Mimo, and Nemotron routes.
@@ -43,6 +44,7 @@ Add a score separation margin so expected-pass cases must stay meaningfully abov
 - The scorecard benchmark now emits a top-level gate summary with passed, expectedPassCount, expectedFailureCount, unexpectedCount, elapsedHeadroomMs, and rssHeadroomMb.
 - `docs/model-fusion-quality-review.md` summarizes current local evidence, safe commands, resource posture, explicit non-proof of live GPT-5.5/Fable parity, and live-eval prerequisites.
 - The scorecard benchmark now requires expected-pass cases to clear expected-fail controls by at least 0.25 overall score; current margin is 0.399.
+- `bun run eval:fusion-quality` now executes the scorecard benchmark command and asserts its gate, expected failure, separation, and resource headroom.
 
 ## Test Results
 - 2026-07-09: `bun test tests/fusion-complexity-scorer.test.ts tests/fusion-quality-gauntlet.test.ts` passed, 8 tests / 59 assertions.
@@ -50,6 +52,11 @@ Add a score separation margin so expected-pass cases must stay meaningfully abov
 - 2026-07-09: `bun test tests/fusion-complex-scenarios.test.ts` passed, 4 tests / 136 assertions.
 - 2026-07-09: `bun test tests/multi-user-auth.test.ts` passed, 4 tests / 22 assertions after a transient full-suite timeout.
 - 2026-07-09: `bun test` passed, 358 tests / 1409 assertions.
+- 2026-07-09: `bun run typecheck` passed.
+- 2026-07-09: `bun run build` passed.
+- 2026-07-09: `git diff --check` passed.
+- 2026-07-09: `bun test tests/fusion-scorecard-benchmark.test.ts` passed, 1 test / 14 assertions.
+- 2026-07-09: `bun run eval:fusion-quality` passed, 12 tests / 109 assertions after adding benchmark command regression coverage.
 - 2026-07-09: `bun run typecheck` passed.
 - 2026-07-09: `bun run build` passed.
 - 2026-07-09: `git diff --check` passed.

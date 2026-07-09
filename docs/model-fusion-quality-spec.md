@@ -20,6 +20,7 @@ Push `fusion-beta` beyond plumbing correctness by measuring whether it produces 
 ## Scope
 - Add a lightweight local evaluation harness under `tests/` or `benchmarks/` that uses mocked providers rather than live model calls.
 - Add regression tests that cover task quality signals, model-route diversity, terse advisory packing, cache behavior, and SWE/math prompts.
+- Add regression coverage for the scorecard benchmark command output itself.
 - Add a deterministic scorecard and review summary that turn Fusion trace/prompt shape into reviewable SWE/math/diversity/context/terse-handoff metrics.
 - Apply the scorecard to actual mocked Fusion gauntlet output, not only to a standalone fixture.
 - Keep a durable human-readable review in `docs/model-fusion-quality-review.md`.
@@ -47,6 +48,7 @@ Push `fusion-beta` beyond plumbing correctness by measuring whether it produces 
 - [x] Scorecard benchmark includes an expected-fail negative control.
 - [x] Scorecard benchmark reports compact gate and resource-headroom fields.
 - [x] Scorecard benchmark enforces a positive-vs-negative score separation margin.
+- [x] Focused Fusion quality eval executes and validates the scorecard benchmark command.
 - [x] Scorecard has a low-resource command and regression tests.
 - [x] Scorecard is applied to the live mocked Fusion gauntlet output.
 - [x] Scorecard command reports elapsed time and RSS delta budget checks across multiple hard-case fixtures.

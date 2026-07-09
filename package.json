@@ -9,7 +9,7 @@
     "start": "bun run ./src/cli/main.ts",
     "build": "bun build ./src/cli/main.ts --target=bun --outfile=./dist/server.js",
     "build:web": "cd web && bun install && bun run build",
-    "eval:fusion-quality": "bun test tests/fusion-complexity-scorer.test.ts tests/fusion-quality-gauntlet.test.ts tests/fusion-quality-scorecard.test.ts",
+    "eval:fusion-quality": "bun test tests/fusion-complexity-scorer.test.ts tests/fusion-quality-gauntlet.test.ts tests/fusion-quality-scorecard.test.ts tests/fusion-scorecard-benchmark.test.ts",
     "eval:fusion-scorecard": "bun run benchmarks/fusion-quality-scorecard.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
