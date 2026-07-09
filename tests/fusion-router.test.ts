@@ -350,4 +350,91 @@ describe("FusionRouter", () => {
     expect(decision.signals["toolUseAllowed"]).toBe(false);
     expect(decision.signals["manyTools"]).toBe(false);
   });
+
+  it("does not spawn subagents for trivial tool confirmations", () => {
+    const messages = [
+      { role: "user", content: "Fix the small TypeScript helper and keep going." },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ id: "call_confirm", type: "function", function: { name: "apply_patch", arguments: "{}" } }],
+      },
+      { role: "tool", tool_call_id: "call_confirm", content: "Done." },
+    ];
+    const ctx: FusionRequestContext = {
+      logicalModel: "fusion-beta",
+      fusionConfig: testFusionConfig,
+      requestData: { messages },
+      clientProtocol: "openai",
+      messages,
+      runtimeEffort: 2,
+      resolvedFusionEffort: "F2",
+    };
+    const score: ComplexityScore = {
+      score: 0.43,
+      effort: 2,
+      fusionEffort: "F2",
+      reason: "moderate tool loop",
+      tokenCount: 5000,
+    };
+
+    const decision = (router as unknown as {
+      evaluateSubagentNeed: (ctx: FusionRequestContext, score: ComplexityScore) => {
+        useSubagents: boolean;
+        reason: string;
+        signals: Record<string, unknown>;
+      };
+    }).evaluateSubagentNeed(ctx, score);
+
+    expect(decision.useSubagents).toBe(false);
+    expect(decision.reason).toContain("within synthesis model context");
+    expect(decision.signals["hasToolResults"]).toBe(true);
+    expect(decision.signals["significantToolResults"]).toBe(false);
+    expect(decision.signals["toolResultReason"]).toContain("trivial updates");
+  });
+
+  it("uses subagents when tool results add substantial implementation context", () => {
+    const messages = [
+      { role: "user", content: "Debug and fix the auth middleware implementation." },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ id: "call_read", type: "function", function: { name: "read_file", arguments: "{}" } }],
+      },
+      {
+        role: "tool",
+        tool_call_id: "call_read",
+        content: "export function authenticate(req) { return req.headers.authorization !== undefined; }",
+      },
+    ];
+    const ctx: FusionRequestContext = {
+      logicalModel: "fusion-beta",
+      fusionConfig: testFusionConfig,
+      requestData: { messages },
+      clientProtocol: "openai",
+      messages,
+      runtimeEffort: 2,
+      resolvedFusionEffort: "F2",
+    };
+    const score: ComplexityScore = {
+      score: 0.44,
+      effort: 2,
+      fusionEffort: "F2",
+      reason: "moderate tool loop",
+      tokenCount: 5000,
+    };
+
+    const decision = (router as unknown as {
+      evaluateSubagentNeed: (ctx: FusionRequestContext, score: ComplexityScore) => {
+        useSubagents: boolean;
+        reason: string;
+        signals: Record<string, unknown>;
+      };
+    }).evaluateSubagentNeed(ctx, score);
+
+    expect(decision.useSubagents).toBe(true);
+    expect(decision.reason).toContain("tool results");
+    expect(decision.signals["significantToolResults"]).toBe(true);
+    expect(decision.signals["toolResultReason"]).toContain("read_file");
+  });
 });

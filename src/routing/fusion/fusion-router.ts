@@ -3,7 +3,7 @@ import { ComplexityScorer } from "./complexity-scorer.ts";
 import { TaskDividerAgent } from "./task-divider.ts";
 import { SubagentExecutor } from "./subagent-executor.ts";
 import { ResponseFuser } from "./response-fuser.ts";
-import { ReasoningCache } from "./reasoning-cache.ts";
+import { classifyConversationDelta, ReasoningCache } from "./reasoning-cache.ts";
 import { ReasoningSummarizer, SummaryPump, paceReasoningText } from "./reasoning-summarizer.ts";
 import { resolveFusionEffort } from "./effort-resolver.ts";
 import type {
@@ -1135,13 +1135,18 @@ export class FusionRouter {
       /\b(multi[-\s]?file|multiple files|across (?:the )?(?:repo|repository|codebase|modules|packages)|large (?:file )?(?:edit|refactor|migration)|end[-\s]?to[-\s]?end|full implementation|repo[-\s]?wide|repository[-\s]?wide)\b/.test(text) ||
       /\b(refactor|implement|migrate|update)\b[\s\S]{0,160}\b(tests?|docs?|schemas?|routes?|components?|providers?|configs?)\b/.test(text) ||
       referencedFiles.length >= 3;
-    const hasToolResults = ctx.messages.some((msg) =>
+    const toolResultMessages = ctx.messages.filter((msg) =>
       typeof msg === "object" &&
       msg !== null &&
       ((msg as Record<string, unknown>)["role"] === "tool" ||
         (Array.isArray((msg as Record<string, unknown>)["content"]) &&
           ((msg as Record<string, unknown>)["content"] as unknown[]).some((part) =>
             typeof part === "object" && part !== null && (part as Record<string, unknown>)["type"] === "tool_result"))));
+    const hasToolResults = toolResultMessages.length > 0;
+    const toolDeltaClassification = hasToolResults
+      ? classifyConversationDelta(ctx.messages, toolResultMessages)
+      : undefined;
+    const significantToolResults = toolDeltaClassification?.significant === true;
     const declaredFusionContextWindow = this.resolveDeclaredContextWindow(ctx.fusionConfig.fusion.model_routing);
     const activeFusionContextWindow = this.activeFusionContextWindow(ctx, declaredFusionContextWindow);
     const largeContextThreshold = this.largeContextThreshold(activeFusionContextWindow);
@@ -1165,6 +1170,8 @@ export class FusionRouter {
       manyTools,
       longConversation,
       hasToolResults,
+      significantToolResults,
+      toolResultReason: toolDeltaClassification?.reason,
       hasCodeOrFileWork,
       hasLargeEditIntent,
       referencedFileCount: referencedFiles.length,
@@ -1189,7 +1196,7 @@ export class FusionRouter {
     if (hasCodeOrFileWork && hasLargeEditIntent) {
       return { useSubagents: true, reason: "large implementation plan benefits from parallel review before synthesis", signals };
     }
-    if (hasToolResults && (hasCodeOrFileWork || score.tokenCount >= 8_000)) {
+    if (significantToolResults && (hasCodeOrFileWork || score.tokenCount >= 8_000)) {
       return { useSubagents: true, reason: "tool results introduced substantial implementation context", signals };
     }
     if (longConversation && hasCodeOrFileWork) {
