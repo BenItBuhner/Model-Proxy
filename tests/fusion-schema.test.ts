@@ -19,12 +19,10 @@ describe("Fusion Config Schema", () => {
           2: {
             subagent_count: { min: 2, max: 4 },
             model_routings: ["glm-5.2", "kimi-k2.7-code", "minimax-m3-free"],
-            tools: ["context_search"],
           },
           3: {
             subagent_count: { min: 4, max: 8 },
             model_routings: ["glm-5.2", "kimi-k2.7-code", "minimax-m3-free", "nemotron-3-ultra", "greg-2-ultra"],
-            tools: ["context_search", "web_search", "code_execution"],
           },
         },
         fusion: { model_routing: "glm-5.2", strategy: "sequential_append", wire_protocol: "openai" },
@@ -40,6 +38,8 @@ describe("Fusion Config Schema", () => {
     expect(parsed.fusion?.effort_levels[1].model_routing).toBe("glm-5.2");
     expect(parsed.fusion?.effort_levels[2]?.model_routings).toEqual(["glm-5.2", "kimi-k2.7-code", "minimax-m3-free"]);
     expect(parsed.fusion?.effort_levels[3]?.model_routings).toEqual(["glm-5.2", "kimi-k2.7-code", "minimax-m3-free", "nemotron-3-ultra", "greg-2-ultra"]);
+    expect(parsed.fusion?.effort_levels[2]?.tools).toEqual([]);
+    expect(parsed.fusion?.effort_levels[3]?.tools).toEqual([]);
     expect(parsed.fusion?.fusion.model_routing).toBe("glm-5.2");
     expect(parsed.fusion?.fusion.wire_protocol).toBe("openai");
     expect(parsed.fusion?.cache.enabled).toBe(true);
@@ -101,6 +101,29 @@ describe("Fusion Config Schema", () => {
     expect(minimal.fusion.wire_protocol).toBe("openai");
     expect(minimal.cache.enabled).toBe(true);
     expect(minimal.scheduler.allow_nested_fusion).toBe(false);
+  });
+
+  it("accepts legacy effort tools but normal runtime ignores them", () => {
+    const parsed = FusionConfigSchema.parse({
+      enabled: true,
+      effort_levels: {
+        1: { model_routing: "turbo" },
+        2: {
+          subagent_count: { min: 2, max: 4 },
+          model_routings: ["complete"],
+          tools: ["context_search"],
+        },
+        3: {
+          subagent_count: { min: 4, max: 8 },
+          model_routings: ["complete"],
+          tools: ["context_search", "code_execution"],
+        },
+      },
+      fusion: { model_routing: "complete" },
+    });
+
+    expect(parsed.effort_levels[2]?.tools).toEqual(["context_search"]);
+    expect(parsed.effort_levels[3]?.tools).toEqual(["context_search", "code_execution"]);
   });
 
   it("validates effort 1 thresholds must be <= effort 2 thresholds", () => {
