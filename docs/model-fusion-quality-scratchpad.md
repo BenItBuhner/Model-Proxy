@@ -1,7 +1,7 @@
 # Fusion Quality Evaluation Scratchpad
 
 ## Current Focus
-Add an expected-fail scorecard benchmark control so the low-resource eval proves it can reject bad traces.
+Add a compact benchmark gate summary with expected pass/fail counts and resource headroom.
 
 ## To-Dos
 - [x] Inspect current model diversity and handoff behavior.
@@ -18,6 +18,7 @@ Add an expected-fail scorecard benchmark control so the low-resource eval proves
 - [x] Add regression coverage for duplicated advisories with varied model labels.
 - [x] Add deterministic scorecard review summaries for strengths and risks.
 - [x] Add an expected-fail benchmark case for duplicated, unsafe, low-context advisories.
+- [x] Add compact benchmark gate fields for pass/fail counts and resource headroom.
 
 ## Findings
 - `fusion-beta` already exposes a diverse candidate pool for Effort 2/3: GLM, Kimi code, MiniMax, DeepSeek, Mimo, and Nemotron routes.
@@ -37,6 +38,7 @@ Add an expected-fail scorecard benchmark control so the low-resource eval proves
 - A focused regression proved that varied model labels are not enough: duplicated generic advisories with 25% average context coverage now fail with advisory similarity and context coverage checks.
 - `reviewFusionQualityScorecard` now emits pass/warn/fail, one-line summaries, strengths, and risks so scorecard output can be reviewed without manually interpreting every metric.
 - `bun run eval:fusion-scorecard` now includes three expected-pass hard cases plus one expected-fail negative control with duplicated advisories, fake tool artifacts, missing final tools, subagent tools, and low context coverage.
+- The scorecard benchmark now emits a top-level gate summary with passed, expectedPassCount, expectedFailureCount, unexpectedCount, elapsedHeadroomMs, and rssHeadroomMb.
 
 ## Test Results
 - 2026-07-09: `bun test tests/fusion-complexity-scorer.test.ts tests/fusion-quality-gauntlet.test.ts` passed, 8 tests / 59 assertions.
@@ -44,6 +46,11 @@ Add an expected-fail scorecard benchmark control so the low-resource eval proves
 - 2026-07-09: `bun test tests/fusion-complex-scenarios.test.ts` passed, 4 tests / 136 assertions.
 - 2026-07-09: `bun test tests/multi-user-auth.test.ts` passed, 4 tests / 22 assertions after a transient full-suite timeout.
 - 2026-07-09: `bun test` passed, 358 tests / 1409 assertions.
+- 2026-07-09: `bun run typecheck` passed.
+- 2026-07-09: `bun run build` passed.
+- 2026-07-09: `git diff --check` passed.
+- 2026-07-09: `bun run eval:fusion-scorecard` passed with gate.passed true, expectedPassCount 3, expectedFailureCount 1, unexpectedCount 0, elapsedHeadroomMs 987.65, and rssHeadroomMb 60.5.
+- 2026-07-09: `bun run eval:fusion-quality` passed, 11 tests / 95 assertions after adding compact gate fields.
 - 2026-07-09: `bun run typecheck` passed.
 - 2026-07-09: `bun run build` passed.
 - 2026-07-09: `git diff --check` passed.

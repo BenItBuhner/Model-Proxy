@@ -270,7 +270,21 @@ const expectedFailureCases = results.filter((result) =>
 );
 const elapsedMs = Math.round((performance.now() - startedAt) * 100) / 100;
 const rssDeltaMb = Math.round(((process.memoryUsage.rss() - startRss) / 1024 / 1024) * 100) / 100;
+const maxElapsedMs = 1000;
+const maxRssDeltaMb = 64;
+const gatePassed = unexpectedCases.length === 0 &&
+  unexpectedPassingCases.length === 0 &&
+  elapsedMs <= maxElapsedMs &&
+  rssDeltaMb <= maxRssDeltaMb;
 const report = {
+  gate: {
+    passed: gatePassed,
+    expectedPassCount: results.filter((result) => result.expectedStatus === "pass").length,
+    expectedFailureCount: expectedFailureCases.length,
+    unexpectedCount: unexpectedCases.length + unexpectedPassingCases.length,
+    elapsedHeadroomMs: Math.round((maxElapsedMs - elapsedMs) * 100) / 100,
+    rssHeadroomMb: Math.round((maxRssDeltaMb - rssDeltaMb) * 100) / 100,
+  },
   cases: results,
   summary: {
     caseCount: cases.length,
@@ -283,18 +297,15 @@ const report = {
   resource: {
     elapsedMs,
     rssDeltaMb,
-    maxElapsedMs: 1000,
-    maxRssDeltaMb: 64,
+    maxElapsedMs,
+    maxRssDeltaMb,
   },
 };
 
 console.log(JSON.stringify(report, null, 2));
 
 if (
-  unexpectedCases.length > 0 ||
-  unexpectedPassingCases.length > 0 ||
-  elapsedMs > report.resource.maxElapsedMs ||
-  rssDeltaMb > report.resource.maxRssDeltaMb
+  !gatePassed
 ) {
   process.exitCode = 1;
 }
