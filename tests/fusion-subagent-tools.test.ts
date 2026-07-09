@@ -235,6 +235,42 @@ describe("SubagentExecutor reasoning-only subagents", () => {
     expect(body["max_tokens"]).toBe(16000);
   }, 20000);
 
+  it("preserves high-scoring relevant context when budget pruning large packets", async () => {
+    const capturedBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      capturedBodies.push(body);
+      return sseResponse(contentEvents("The pruned packet retained the important diagnostic context."));
+    }) as unknown as typeof fetch;
+
+    const hugeFiller = "low priority context filler ".repeat(500);
+    const messages: Array<Record<string, unknown>> = Array.from({ length: 120 }, (_, index) => ({
+      role: index % 5 === 0 ? "assistant" : "user",
+      content: `bulk-message-${index} ${hugeFiller}`,
+    }));
+    messages[0] = { role: "user", content: `OPENING_PRUNE_SENTINEL ${hugeFiller}` };
+    messages[58] = {
+      role: "tool",
+      tool_call_id: "call_retry_scan",
+      content: `PRUNE_RELEVANT_SENTINEL fallback router retry behavior root cause: provider timeout status is misclassified. ${hugeFiller}`,
+    };
+    messages[119] = { role: "user", content: `RECENT_PRUNE_SENTINEL final instruction ${hugeFiller}` };
+
+    const ctx = makeCtx(messages);
+    const results = await executor.execute(ctx, [subTask]);
+
+    expect(results[0].success).toBe(true);
+    expect(results[0].packedContextTokens).toBeLessThanOrEqual(48_000);
+    expect(results[0].droppedMessageCount).toBeGreaterThan(70);
+    const body = capturedBodies[0];
+    const packedMessages = body["messages"] as Array<Record<string, unknown>>;
+    const packedText = JSON.stringify(packedMessages);
+    expect(packedText).toContain("OPENING_PRUNE_SENTINEL");
+    expect(packedText).toContain("PRUNE_RELEVANT_SENTINEL");
+    expect(packedText).toContain("RECENT_PRUNE_SENTINEL");
+    expect(packedMessages.length).toBeLessThan(messages.length / 2);
+  }, 20000);
+
   it("truncates an oversized selected message so the packet fits the route budget", async () => {
     const capturedBodies: Array<Record<string, unknown>> = [];
     globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {

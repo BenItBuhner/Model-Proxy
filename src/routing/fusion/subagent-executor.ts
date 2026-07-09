@@ -90,6 +90,12 @@ interface SubagentMessagePack {
   packedContextTokens: number;
 }
 
+interface SelectedContextMessage {
+  index: number;
+  message: unknown;
+  priority: number;
+}
+
 /** Merge OpenAI streaming tool_call deltas into complete calls. */
 function mergeToolCallDeltas(
   acc: Map<number, AccumulatedToolCall>,
@@ -775,24 +781,32 @@ Be thorough and complete — do not truncate or trim your analysis.`,
     const relevantTarget = Math.min(24, Math.max(6, Math.floor(tokenBudget / 6000)));
     const anchorTarget = Math.min(24, Math.max(4, Math.floor(tokenBudget / 8000)));
     const relevantHits = this.scoreMessages(sanitized, taskTerms).slice(0, relevantTarget);
-    const selectedIndexes = new Set<number>();
+    const selected = new Map<number, SelectedContextMessage>();
+    const addSelected = (index: number, priority: number) => {
+      const message = sanitized[index];
+      if (message === undefined) return;
+      const existing = selected.get(index);
+      selected.set(index, {
+        index,
+        message,
+        priority: Math.max(priority, existing?.priority ?? 0),
+      });
+    };
 
-    for (let i = 0; i < firstCount; i++) selectedIndexes.add(i);
-    for (const hit of relevantHits) selectedIndexes.add(hit.index);
+    for (let i = 0; i < firstCount; i++) addSelected(i, 100);
+    for (const hit of relevantHits) addSelected(hit.index, 80 + hit.score);
     for (const index of this.sampleMiddleIndexes(sanitized.length, firstCount, recentTarget, anchorTarget)) {
-      selectedIndexes.add(index);
+      addSelected(index, 20);
     }
     for (let i = Math.max(firstCount, sanitized.length - recentTarget); i < sanitized.length; i++) {
-      selectedIndexes.add(i);
+      addSelected(i, 60);
     }
 
-    let contextMessages = [...selectedIndexes]
-      .sort((a, b) => a - b)
-      .map((index) => sanitized[index])
-      .filter((message): message is unknown => message !== undefined);
-    if (contextMessages.length > MAX_CONTEXT_MESSAGES) {
-      contextMessages = contextMessages.slice(contextMessages.length - MAX_CONTEXT_MESSAGES);
+    let selectedMessages = [...selected.values()].sort((a, b) => a.index - b.index);
+    while (selectedMessages.length > MAX_CONTEXT_MESSAGES) {
+      selectedMessages.splice(this.lowestPriorityRemovalIndex(selectedMessages), 1);
     }
+    let contextMessages = selectedMessages.map((item) => item.message);
 
     const relevantExcerpt = this.keywordContextBrief(relevantHits);
     let droppedMessages = Math.max(0, sanitized.length - contextMessages.length);
@@ -811,9 +825,8 @@ Be thorough and complete — do not truncate or trim your analysis.`,
     let estimatedTokens = this.estimateContextPacketTokens(contextMessages, briefing);
 
     while (estimatedTokens > tokenBudget && contextMessages.length > 1) {
-      const firstProtected = contextMessages.length > 4 ? 1 : 0;
-      const removeAt = firstProtected + Math.floor((contextMessages.length - firstProtected) / 2);
-      contextMessages.splice(removeAt, 1);
+      selectedMessages.splice(this.lowestPriorityRemovalIndex(selectedMessages), 1);
+      contextMessages = selectedMessages.map((item) => item.message);
       droppedMessages = Math.max(0, sanitized.length - contextMessages.length);
       briefing = this.buildContextBriefing({
         logicalContextWindow: ctx.fusionConfig.context_window,
@@ -836,6 +849,26 @@ Be thorough and complete — do not truncate or trim your analysis.`,
     }
 
     return { contextMessages, briefing, estimatedTokens, droppedMessages };
+  }
+
+  private lowestPriorityRemovalIndex(messages: SelectedContextMessage[]): number {
+    let removeAt = 0;
+    let lowestPriority = Number.POSITIVE_INFINITY;
+    let closestToMiddle = Number.POSITIVE_INFINITY;
+    const middle = (messages.length - 1) / 2;
+    for (let i = 0; i < messages.length; i++) {
+      const item = messages[i]!;
+      const distance = Math.abs(i - middle);
+      if (
+        item.priority < lowestPriority ||
+        (item.priority === lowestPriority && distance < closestToMiddle)
+      ) {
+        removeAt = i;
+        lowestPriority = item.priority;
+        closestToMiddle = distance;
+      }
+    }
+    return removeAt;
   }
 
   private buildContextBriefing(args: {
