@@ -7,6 +7,7 @@ Continue hardening Fusion toward production-grade reasoning quality: sealed suba
 - [x] Audit whether cached legacy subagent outputs can reintroduce action/tool-call claims into summaries, traces, or fuser handoff.
 - [x] Normalize deprecated effort-level subagent `tools` config to `[]` at parse time so legacy config cannot carry a tool surface forward.
 - [x] Replace synthetic Anthropic Fusion streaming with the live Fusion streaming pipeline and preserve completed trace events for `/v1/messages`.
+- [x] Add a dedicated Fusion admin page/tab that prefilters fusion-beta runs and reuses the live/completed pipeline detail view.
 - [ ] Add another complex scenario/backtest that exercises ambiguous tool-heavy turns with cache reuse and synthesis quality guardrails.
 - [ ] Continue improving live/completed observability where trace detail exists but the dashboard does not surface it clearly.
 - [x] Run full validation after every scoped change: `bun test`, `bun run typecheck`, relevant web checks, builds, and `git diff --check`.
@@ -33,9 +34,10 @@ Continue hardening Fusion toward production-grade reasoning quality: sealed suba
 - [x] **Synthesis handoff:** subagent findings are converted to bounded advisory records with tool-call artifact stripping and final-model instructions not to echo internal labels.
 - [x] **Observability:** live/completed Fusion dashboard shows decision triggers/suppressors, context-pack coverage, logical vs route budgets, selected ranges, summary feed, cache reuse, and reconstructed historical traces.
 - [x] **Anthropic Fusion streaming:** `/v1/messages` streaming now uses `FusionRouter.stream`, translates OpenAI-compatible synthesis chunks into Anthropic SSE events when needed, and records the completed stream trace.
+- [x] **Admin UI tab:** `web/app/fusion/page.tsx` adds a dedicated Fusion tab filtered to `fusion-beta`, with active/completed metrics, cache/streaming summaries, request history, live event trace subscription, and the Fusion pipeline detail panel.
 
 ## Deferred / Future Work
-- [ ] **Admin UI tab** (`web/app/fusion/`) — needs Next.js UI components
+- [x] **Admin UI tab** (`web/app/fusion/`) — dedicated Next.js UI page added and linked from app navigation
 - [x] **Anthropic wire protocol integration** — handler in `anthropic.ts` supports Fusion dispatch for streaming and non-streaming `/v1/messages`
 - [x] **Goalpost streaming via SSE** — real-time reasoning summaries flowing to client during subagent execution
 - [ ] **Integration tests** for full pipeline (task-divider → subagent-executor → response-fuser with real providers)
@@ -59,5 +61,12 @@ None yet
 - 2026-07-09: Focused Fusion/admin suite passed: `bun test tests/fusion-router.test.ts tests/fusion-subagent-tools.test.ts tests/fusion-complex-scenarios.test.ts tests/fusion-tool-calls.test.ts tests/fusion-summarizer-stream.test.ts tests/admin-events.test.ts`, 61 tests.
 - 2026-07-09: `bun run typecheck` passed after Anthropic streaming changes.
 - 2026-07-09: `bun test` passed, 355 tests.
+- 2026-07-09: `bun run build` passed.
+- 2026-07-09: `git diff --check` passed.
+- 2026-07-09: `cd web && bun run typecheck` passed after adding `web/app/fusion/page.tsx`.
+- 2026-07-09: `bun run build:web` passed and listed `/fusion` as a static route.
+- 2026-07-09: Local dev server verified `http://localhost:3000/fusion/` returned `200 OK` and loaded `app/fusion/page.js`; server stopped afterward.
+- 2026-07-09: `bun test` passed, 355 tests.
+- 2026-07-09: `bun run typecheck` passed.
 - 2026-07-09: `bun run build` passed.
 - 2026-07-09: `git diff --check` passed.

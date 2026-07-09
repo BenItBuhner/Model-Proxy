@@ -34,6 +34,7 @@ const NAV: NavItem[] = [
   { label: "Config", href: "/config", audience: "admin" },
   { label: "Test environment", href: "/test-environment", audience: "admin" },
   { label: "Observability", href: "/observability", audience: "admin" },
+  { label: "Fusion", href: "/fusion", audience: "admin" },
   { label: "Proxies", href: "/proxies", audience: "admin" },
   { label: "Users", href: "/users", audience: "admin" },
   { label: "Invites", href: "/invites", audience: "admin" },
