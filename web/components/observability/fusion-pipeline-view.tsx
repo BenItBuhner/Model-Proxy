@@ -394,6 +394,11 @@ function SubagentLane({
   const droppedMessages = asNumber(agent.detail?.["droppedMessageCount"]);
   const packedTokens = asNumber(agent.detail?.["packedContextTokens"]);
   const contextPack = asRecord(agent.detail?.["contextPack"]);
+  const logicalWindow = asNumber(contextPack?.["logicalContextWindow"]);
+  const routeTokenBudget = asNumber(contextPack?.["tokenBudget"]);
+  const totalMessages = asNumber(contextPack?.["totalMessages"]);
+  const suppliedMessages = asNumber(contextPack?.["suppliedMessages"]);
+  const contextPackDropped = asNumber(contextPack?.["droppedMessages"]);
   const coveragePercent = asNumber(contextPack?.["coveragePercent"]);
   const relevantHits = asNumber(contextPack?.["relevantHitCount"]);
   const selectedRanges = typeof contextPack?.["selectedRanges"] === "string" ? contextPack["selectedRanges"] : undefined;
@@ -409,6 +414,11 @@ function SubagentLane({
     contextMessages !== undefined ||
     droppedMessages !== undefined ||
     packedTokens !== undefined ||
+    logicalWindow !== undefined ||
+    routeTokenBudget !== undefined ||
+    totalMessages !== undefined ||
+    suppliedMessages !== undefined ||
+    contextPackDropped !== undefined ||
     coveragePercent !== undefined ||
     relevantHits !== undefined ||
     selectedRanges !== undefined ||
@@ -439,22 +449,108 @@ function SubagentLane({
         {isActive && live ? <ActivityBar /> : null}
       </div>
       {hasContextPackStats ? (
-        <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-ink-700 pt-2 sm:grid-cols-4">
-          {stage !== undefined ? <MiniStat label="stage" value={stage.replace(/_/g, " ")} /> : null}
-          {contextWindow !== undefined ? <MiniStat label="window" value={`${formatCount(contextWindow)} tok`} /> : null}
-          {inputBudget !== undefined ? <MiniStat label="input" value={`${formatCount(inputBudget)} tok`} /> : null}
-          {outputBudget !== undefined ? <MiniStat label="output" value={`${formatCount(outputBudget)} tok`} /> : null}
-          {contextMessages !== undefined ? <MiniStat label="msgs" value={formatCount(contextMessages)} /> : null}
-          {droppedMessages !== undefined ? <MiniStat label="dropped" value={formatCount(droppedMessages)} /> : null}
-          {packedTokens !== undefined ? <MiniStat label="packed" value={`${formatCount(packedTokens)} tok`} /> : null}
-          {coveragePercent !== undefined ? <MiniStat label="coverage" value={`${coveragePercent}%`} /> : null}
-          {relevantHits !== undefined ? <MiniStat label="hits" value={formatCount(relevantHits)} /> : null}
-          {mixText !== undefined ? <MiniStat label="mix" value={mixText} /> : null}
-          {selectedRanges !== undefined ? <MiniStat label="ranges" value={selectedRanges} /> : null}
-        </div>
+        <ContextPackDetail
+          stage={stage}
+          contextWindow={contextWindow}
+          inputBudget={inputBudget}
+          outputBudget={outputBudget}
+          contextMessages={contextMessages}
+          droppedMessages={droppedMessages}
+          packedTokens={packedTokens}
+          logicalWindow={logicalWindow}
+          routeTokenBudget={routeTokenBudget}
+          totalMessages={totalMessages}
+          suppliedMessages={suppliedMessages}
+          contextPackDropped={contextPackDropped}
+          coveragePercent={coveragePercent}
+          relevantHits={relevantHits}
+          selectedRanges={selectedRanges}
+          mixText={mixText}
+        />
       ) : null}
       {agent.error !== undefined && agent.status === "failed" ? (
         <div className="mt-1 truncate font-mono text-[10px] text-alert-500">{agent.error}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function ContextPackDetail({
+  stage,
+  contextWindow,
+  inputBudget,
+  outputBudget,
+  contextMessages,
+  droppedMessages,
+  packedTokens,
+  logicalWindow,
+  routeTokenBudget,
+  totalMessages,
+  suppliedMessages,
+  contextPackDropped,
+  coveragePercent,
+  relevantHits,
+  selectedRanges,
+  mixText,
+}: {
+  stage?: string;
+  contextWindow?: number;
+  inputBudget?: number;
+  outputBudget?: number;
+  contextMessages?: number;
+  droppedMessages?: number;
+  packedTokens?: number;
+  logicalWindow?: number;
+  routeTokenBudget?: number;
+  totalMessages?: number;
+  suppliedMessages?: number;
+  contextPackDropped?: number;
+  coveragePercent?: number;
+  relevantHits?: number;
+  selectedRanges?: string;
+  mixText?: string;
+}): React.ReactElement {
+  const clampedCoverage = Math.min(100, Math.max(0, coveragePercent ?? 0));
+  const supplied = suppliedMessages ?? contextMessages;
+  const dropped = contextPackDropped ?? droppedMessages;
+
+  return (
+    <div className="mt-2 space-y-2 border-t border-ink-700 pt-2">
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1 sm:grid-cols-4">
+        {stage !== undefined ? <MiniStat label="stage" value={stage.replace(/_/g, " ")} /> : null}
+        {logicalWindow !== undefined ? <MiniStat label="logical" value={`${formatCount(logicalWindow)} tok`} /> : null}
+        {contextWindow !== undefined ? <MiniStat label="route window" value={`${formatCount(contextWindow)} tok`} /> : null}
+        {routeTokenBudget !== undefined ? <MiniStat label="pack budget" value={`${formatCount(routeTokenBudget)} tok`} /> : null}
+        {inputBudget !== undefined ? <MiniStat label="input" value={`${formatCount(inputBudget)} tok`} /> : null}
+        {outputBudget !== undefined ? <MiniStat label="output" value={`${formatCount(outputBudget)} tok`} /> : null}
+        {packedTokens !== undefined ? <MiniStat label="packed" value={`${formatCount(packedTokens)} tok`} /> : null}
+        {relevantHits !== undefined ? <MiniStat label="relevant hits" value={formatCount(relevantHits)} /> : null}
+        {totalMessages !== undefined ? <MiniStat label="total msgs" value={formatCount(totalMessages)} /> : null}
+        {supplied !== undefined ? <MiniStat label="supplied" value={formatCount(supplied)} /> : null}
+        {dropped !== undefined ? <MiniStat label="dropped" value={formatCount(dropped)} /> : null}
+        {mixText !== undefined ? <MiniStat label="mix" value={mixText} /> : null}
+      </div>
+      {coveragePercent !== undefined ? (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-mono text-[8px] uppercase tracking-[0.14em] text-bone-300">
+              context coverage
+            </span>
+            <span className="font-mono text-[10px] text-bone-600">{coveragePercent}%</span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-ink-700">
+            <div
+              className="h-full rounded-full bg-phosphor-500 transition-all duration-700"
+              style={{ width: `${clampedCoverage}%` }}
+            />
+          </div>
+        </div>
+      ) : null}
+      {selectedRanges !== undefined ? (
+        <div className="space-y-0.5">
+          <div className="font-mono text-[8px] uppercase tracking-[0.14em] text-bone-300">selected ranges</div>
+          <div className="break-words font-mono text-[10px] leading-4 text-bone-600">{selectedRanges}</div>
+        </div>
       ) : null}
     </div>
   );
