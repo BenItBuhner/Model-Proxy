@@ -12,7 +12,7 @@ Step 1: Create FusionConfig schema (shared/schemas/fusion.ts) and integrate into
 - [ ] Step 5: Create `src/routing/fusion/subagent-executor.ts`
 - [ ] Step 6: Create `src/routing/fusion/response-fuser.ts`
 - [ ] Step 7: Create `src/routing/fusion/reasoning-cache.ts`
-- [ ] Step 8: Create `src/routing/fusion/sandbox/` (wasm-executor, wasm-runtime, fetch-shim, types)
+- [ ] Step 8: Harden reasoning-only subagents and adaptive context packing
 - [ ] Step 9: Integrate goalpost streaming into fusion-router
 - [ ] Step 10: Create `web/app/fusion/` admin UI pages
 - [ ] Step 11: Anthropic wire protocol support for fusion output
@@ -26,10 +26,10 @@ Step 1: Create FusionConfig schema (shared/schemas/fusion.ts) and integrate into
 - [x] **Step 2:** `src/routing/fusion/fusion-router.ts` — full orchestrator with cache lookup → complexity scoring → task division → subagent execution → response fusion
 - [x] **Step 3:** `src/routing/fusion/complexity-scorer.ts` — 8-dimension heuristic scoring (token count, tools, turns, code, reasoning, context, multi-turn)
 - [x] **Step 4:** `src/routing/fusion/task-divider.ts` — tool-calling agent using GLM-5.2 with search_context + divide_task tools
-- [x] **Step 5:** `src/routing/fusion/subagent-executor.ts` — parallel subagent execution with retry, goalpost detection, concurrency limits
+- [x] **Step 5:** `src/routing/fusion/subagent-executor.ts` — parallel reasoning-only subagent execution with no tools, adaptive context packing, retry, and concurrency limits
 - [x] **Step 6:** `src/routing/fusion/response-fuser.ts` — sequential append + fusion model synthesis (streaming + non-streaming)
 - [x] **Step 7:** `src/routing/fusion/reasoning-cache.ts` — permanent on-disk cache with SHA-256 keying, full CRUD
-- [x] **Step 8:** `src/routing/fusion/sandbox/` — WASM sandbox stub (Bun subprocess), fetch shim with domain allow-listing
+- [x] **Step 8:** Subagent tool/sandbox backend removed — subagents now receive no tools or execution surface
 - [x] **Step 9:** `src/routing/fusion/types.ts` — all Fusion types/interfaces
 - [x] **Integration:** FusionRouter dispatch wired into `src/server/routes/openai.ts` — streaming + non-streaming
 - [x] **Config:** `config/models/fusion-beta.json` — complete fusion model config
@@ -39,15 +39,14 @@ Step 1: Create FusionConfig schema (shared/schemas/fusion.ts) and integrate into
 ## Deferred / Future Work
 - [ ] **Admin UI tab** (`web/app/fusion/`) — needs Next.js UI components
 - [ ] **Anthropic wire protocol integration** — handler in `anthropic.ts` for fusion dispatch
-- [ ] **WASM runtime swap** — replace Bun subprocess stub with real wasmtime/Pyodide
-- [ ] **Goalpost streaming via SSE** — real-time reasoning summaries flowing to client during subagent execution
+- [x] **Goalpost streaming via SSE** — real-time reasoning summaries flowing to client during subagent execution
 - [ ] **Integration tests** for full pipeline (task-divider → subagent-executor → response-fuser with real providers)
 
 ## Blockers (none)
 None yet
 
 ## Findings / Decisions
-- WASM sandbox will be stubbed with Bun subprocess execution initially (same API surface, trivially swappable)
+- Subagents are sealed reasoning-only workers; the proxy pre-packs context and the final fusion model performs any real tool calls/actions.
 - All subagent model references point to existing model routings (complete, turbo, glm-5.2, etc.)
 
 ## Test Results

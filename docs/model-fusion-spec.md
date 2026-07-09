@@ -8,7 +8,7 @@ Implement the full 5-layer Model Fusion architecture in Model-Proxy-ts, enabling
 ### Included
 - `shared/schemas/fusion.ts` — Fusion config Zod schema
 - `src/routing/fusion/` — All fusion routing modules (fusion-router, complexity-scorer, task-divider, subagent-executor, response-fuser, reasoning-cache)
-- `src/routing/fusion/sandbox/` — WASM-based code execution sandbox (wasm-executor, wasm-runtime, fetch-shim)
+- `src/routing/fusion/context-search.ts` — Conversation context search for task division
 - Integration with existing OpenAI and Anthropic route handlers
 - Goalpost-triggered reasoning summary streaming (SSE)
 - Config model `config/models/fusion-beta.json`
@@ -16,7 +16,7 @@ Implement the full 5-layer Model Fusion architecture in Model-Proxy-ts, enabling
 - Full test suite in `tests/`
 
 ### Excluded (deferred)
-- Real WASM runtime integration (Pyodide/quickjs-wasm) — we will stub the sandbox with a Bun subprocess-based execution that mirrors the WASM API, making it trivially swappable for a real WASM runtime later
+- Subagent tool execution surfaces. Subagents are sealed reasoning-only workers; final tool/action behavior remains outside subagent execution.
 - Production Docker image changes beyond the base config
 
 ## Constraints & Requirements
@@ -36,7 +36,7 @@ Implement the full 5-layer Model Fusion architecture in Model-Proxy-ts, enabling
 5. SubagentExecutor
 6. ResponseFuser
 7. ReasoningCache
-8. WASM sandbox (stubbed with Bun subprocess)
+8. Subagent hardening and adaptive context packing
 9. Goalpost streaming
 10. Admin UI
 11. Anthropic wire protocol support
@@ -56,10 +56,10 @@ Implement the full 5-layer Model Fusion architecture in Model-Proxy-ts, enabling
 - [ ] Step 2: FusionRouter shell dispatches Effort 1 to FallbackRouter
 - [ ] Step 3: ComplexityScorer correctly ranks tasks
 - [ ] Step 4: TaskDividerAgent uses tool-calling to divide tasks
-- [ ] Step 5: SubagentExecutor runs parallel subagents referencing existing model routings
+- [ ] Step 5: SubagentExecutor runs parallel reasoning-only subagents referencing existing model routings, with no tools or execution surface
 - [ ] Step 6: ResponseFuser appends sequentially and feeds fusion model
 - [ ] Step 7: ReasoningCache stores/retrieves subagent outputs permanently
-- [ ] Step 8: WASM sandbox stub executes code safely
+- [ ] Step 8: Subagent tool/sandbox backend removed; context is pre-packed by the proxy
 - [ ] Step 9: Goalpost-triggered SSE streaming works
 - [ ] Step 10: Admin UI Fusion tab visible
 - [ ] Step 11: Both OpenAI and Anthropic wire protocols supported

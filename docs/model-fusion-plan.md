@@ -4,30 +4,19 @@
 
 ---
 
-## 1. Code Execution Sandbox
+## 1. Subagent Execution Surface
 
-**Decision: WASM-based sandbox via `wasmtime`**
+**Decision: reasoning-only sealed subagents**
 
-Given the Docker deployment and the need for controlled network access, WASM provides the best balance of security and practicality:
-
-| Approach | Pros | Cons | Verdict |
-|---|---|---|---|
-| Subprocess + seccomp | Simple, fast | Coarse isolation, large syscall surface | Too risky |
-| Docker-in-Docker | Strong isolation | High overhead per subagent, slow startup | Overkill |
-| **WASM sandbox** | **Fine-grained capability control, fast startup, cross-platform, fuel metering** | Requires WASM-compiled runtimes for Python/JS | **Selected** |
+Fusion subagents are advisory model calls, not execution workers. They receive no tools, no function schemas, and no filesystem, network, terminal, or git access. The proxy pre-packs the relevant conversation context for each subagent according to the selected model route's actual context window, while preserving Fusion's logical 10M-token context claim at the orchestration layer.
 
 **Implementation:**
-- Runtime: `wasmtime` SDK via Bun (child process or embedded via FFI)
-- **Python:** Use Pyodide (CPython compiled to WASM) — supports `numpy`, `requests`, standard library
-- **JavaScript/TypeScript:** Use `quickjs-wasm` or Bun's own `Bun.spawn` for JS-only (V8/JavaScriptCore is inherently sandboxed)
-- **Network:** Provide a `fetch` shim in the WASM runtime that routes through Model-Proxy's own `upstream-fetch.ts` with:
-  - Allow-list of allowed domains (default: any HTTPS)
-  - Timeout enforcement
-  - Bandwidth limits
-  - Logging via existing observability system
-- **Filesystem:** In-memory virtual FS only (no host filesystem access)
-- **CPU/Memory:** WASM fuel metering (gas) + runtime memory limits
-- **Storage:** Code execution outputs captured inline — no persistent FS
+- Subagent requests set `tool_choice: "none"` and omit tool definitions.
+- The subagent system prompt explicitly states that the environment is sealed and that tool-call syntax is invalid.
+- The proxy builds a stratified context packet from opening messages, relevant matches, middle anchors, and recent messages.
+- Each packet is bounded by the resolved model route context window and reserves output budget for the subagent's answer.
+- Empty, invalid, and tool-call-only outputs are retried until retries are exhausted.
+- Failed subagents do not cascade into request failure, and incomplete subagent result sets are not cached.
 
 ---
 
@@ -60,9 +49,10 @@ Client POST /v1/chat/completions { model: "fusion-beta", messages: [...] }
        ├─ [Layer 4] SubagentExecutor.execute(subtasks, effort)
        │    ├─ Spawns N parallel subagents (via adapted HedgedRouter infrastructure)
        │    ├─ Each subagent uses an existing model routing (complete, turbo, etc.)
-       │    ├─ Each subagent gets tools: context_search, web_search, code_execution
-       │    ├─ SSE streaming: goalpost-triggered reasoning summaries to client
-       │    └─ Error handling: retry "via any means" until success or exhausted
+       │    ├─ Subagents receive no tools and no function schemas (`tool_choice: "none"`)
+       │    ├─ The proxy pre-packs a stratified, model-budgeted context packet
+       │    ├─ SSE streaming: live reasoning summaries to client
+       │    └─ Error handling: retry invalid/empty/tool-call-only output until exhausted
        │
        ├─ [Layer 5] ResponseFuser.fuse(subagentOutputs, originalRequest)
        │    ├─ Append all subagent outputs sequentially (NOT merged/interleaved)
@@ -84,11 +74,7 @@ src/routing/fusion/
 ├── subagent-executor.ts      # Layer 4: parallel subagent execution
 ├── response-fuser.ts         # Layer 5: sequential append + synthesis
 ├── reasoning-cache.ts        # Layer 1: permanent fusion cache
-├── sandbox/
-│   ├── wasm-executor.ts      # Code execution sandbox (Pyodide/quickjs-wasm)
-│   ├── wasm-runtime.ts       # WASM runtime lifecycle management
-│   ├── fetch-shim.ts         # Controlled network proxy for WASM
-│   └── types.ts
+├── context-search.ts         # Conversation context search for task division
 └── types.ts                  # Fusion-specific types/interfaces
 
 shared/schemas/
@@ -149,7 +135,7 @@ export const FusionConfigSchema = z.object({
         max: z.number().int().min(1).default(4),
       }),
       model_routings: z.array(z.string()).min(1),
-      tools: z.array(z.enum(["context_search", "web_search"])).default(["context_search"]),
+      tools: z.array(z.enum(["context_search", "web_search"])).default([]), // deprecated/no-op
     }),
     3: z.object({
       subagent_count: z.object({
@@ -157,7 +143,7 @@ export const FusionConfigSchema = z.object({
         max: z.number().int().min(1).default(8),
       }),
       model_routings: z.array(z.string()).min(1),
-      tools: z.array(z.enum(["context_search", "web_search", "code_execution"])),
+      tools: z.array(z.enum(["context_search", "web_search", "code_execution"])).default([]), // deprecated/no-op
     }),
   }),
 
@@ -190,7 +176,7 @@ Goalposts are **key events in subagent reasoning traces** that trigger summariza
 
 | Event Type | Triggers Summary |
 |---|---|
-| **Tool call** (any) | Summarize what the tool did and its result |
+| **Subagent reasoning segment** | Summarize what the subagent is analyzing |
 | **Assistant response** (key content produced) | Summarize what the subagent concluded |
 | **Task division complete** | Summarize how tasks were divided |
 | **Subagent complete** | Summarize subagent's findings |
@@ -220,14 +206,14 @@ The summarizing model (configurable, defaults to `turbo`) receives a portion of 
 
 | Question | Decision |
 |---|---|
-| **Code execution sandbox** | WASM via `wasmtime` (Pyodide for Python, quickjs-wasm for JS/TS), controlled network via fetch shim |
+| **Subagent tools** | None. Subagents are sealed reasoning-only workers; task divider/fuser are the only tool-capable model calls. |
 | **Cost guardrails** | Not needed — all models are free/unlimited |
 | **Streaming UX** | Goalpost-triggered reasoning summaries streamed via SSE during subagent work |
-| **Error semantics** | Retry "via any means" — subagent failures never cascade, just produce empty/null |
+| **Error semantics** | Retry invalid/empty/tool-call-only subagent output; failed subagents do not cascade and incomplete result sets are not cached |
 | **Fusion vs standalone routing** | Fusion references existing model routings — inherits full reliability pipeline |
 | **Task divider model** | GLM-5.2 default, tool-calling to divide, searches full context unfiltered |
 | **Effort 1 context exception** | Auto-escalate to Effort 2 when context window exceeded |
-| **Cache scoping** | Permanent, full subagent outputs saved, reconstructable on cache hit |
+| **Cache scoping** | Permanent successful subagent output sets saved, reconstructable on cache hit |
 | **Effort 2 vs 3 granularity** | More subagents, greater division effort, enforced verbosity/terseness |
 | **Fusion response strategy** | Sequential append (no merge), then fusion model streams reasoning + response |
 | **Anthropic wire protocol** | Supported — fusion output can emit OpenAI or Anthropic format |
@@ -245,7 +231,7 @@ The summarizing model (configurable, defaults to `turbo`) receives a portion of 
 5. **SubagentExecutor** — `subagent-executor.ts`, adapted from HedgedRouter parallel patterns
 6. **ResponseFuser** — `response-fuser.ts`, sequential append + final model synthesis
 7. **ReasoningCache** — `reasoning-cache.ts`, permanent cache with hit detection
-8. **WASM sandbox** — `sandbox/wasm-executor.ts`, Pyodide + quickjs-wasm integration
+8. **Subagent hardening** — reasoning-only sealed subagents, adaptive context packing, retry handling
 9. **Goalpost streaming** — SSE reasoning traces during subagent execution
 10. **Admin UI** — Fusion tab in web app
 11. **Anthropic wire protocol support** — Guarantee fusion output works with Anthropic SDKs
