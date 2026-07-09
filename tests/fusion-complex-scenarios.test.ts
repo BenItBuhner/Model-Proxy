@@ -282,8 +282,9 @@ describe("Fusion complex scenarios", () => {
 
       captured.fuser.push(body);
       const text = extractMessageText(messages);
-      expect(text).toContain("[Research Focus: repository]");
-      expect(text).toContain("[Research Focus: testing]");
+      expect(text).toContain("Advisory note 1");
+      expect(text).toContain("Focus: repository");
+      expect(text).toContain("Focus: testing");
       expect(text).toContain("analysis recommends focused cleanup");
       expect(text).not.toContain("\"tool_calls\"");
       return chatResponse({
@@ -495,8 +496,9 @@ describe("Fusion complex scenarios", () => {
       if (body["stream"] === true) {
         captured.fuser.push(body);
         const text = extractMessageText(messages);
-        expect(text).toContain("[Research Focus: repository]");
-        expect(text).toContain("[Research Focus: testing]");
+        expect(text).toContain("Advisory note 1");
+        expect(text).toContain("Focus: repository");
+        expect(text).toContain("Focus: testing");
         return streamContentResponse([
           captured.fuser.length === 1
             ? "Fresh streamed fusion answer."

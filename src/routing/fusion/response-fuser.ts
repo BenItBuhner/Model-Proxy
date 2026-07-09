@@ -464,19 +464,41 @@ export class ResponseFuser {
     if (results.length === 0) return "";
 
     const parts: string[] = [];
+    let noteIndex = 1;
     for (const result of results) {
       if (!result.success || !result.content) continue;
-      parts.push(`[Research Focus: ${result.subTask.focus_area}]`);
-      parts.push(`${result.subTask.description}`);
-      parts.push("");
       // Strip any hallucinated tool-call syntax so the synthesis model never
       // sees (or mimics) fake invocations from subagent transcripts.
-      parts.push(stripToolCallArtifacts(result.content).trim());
+      const advisory = stripToolCallArtifacts(result.content).trim();
+      if (advisory.length === 0) continue;
+
+      parts.push(`Advisory note ${noteIndex}`);
+      parts.push(`Focus: ${this.cleanAdvisoryField(result.subTask.focus_area)}`);
+      parts.push(`Requested analysis: ${this.cleanAdvisoryField(result.subTask.description)}`);
+      parts.push(`Model route: ${this.cleanAdvisoryField(result.usedModelRouting)}`);
+      const coverage = this.formatContextPackForAdvisory(result.contextPack);
+      if (coverage !== undefined) parts.push(`Context coverage: ${coverage}`);
+      parts.push("Findings:");
+      parts.push(advisory);
       parts.push("");
-      parts.push("---");
+      parts.push("End advisory note");
       parts.push("");
+      noteIndex++;
     }
     return parts.join("\n");
+  }
+
+  private cleanAdvisoryField(value: string): string {
+    const cleaned = stripToolCallArtifacts(value)
+      .replace(/\s+/g, " ")
+      .trim();
+    if (cleaned.length <= 240) return cleaned;
+    return `${cleaned.slice(0, 237).trimEnd()}...`;
+  }
+
+  private formatContextPackForAdvisory(contextPack: SubagentResult["contextPack"]): string | undefined {
+    if (contextPack === undefined) return undefined;
+    return `${contextPack.coveragePercent}% of conversation messages supplied; selected ranges ${contextPack.selectedRanges}; ${contextPack.relevantHitCount} relevance hit(s)`;
   }
 
   private buildSynthesisMessages(
@@ -505,7 +527,7 @@ Your job:
 6. TOOL CALLS: if tools are available and the correct next step in the conversation is to invoke one or more of them, respond with proper structured tool calls (tool_calls) exactly as the tool schema requires. NEVER describe a tool call in prose, and NEVER write tool-call JSON inside your text content.
 7. The internal notes are advisory research only. They came from a sealed sandbox with no tools — no file edits, commands, deployments, or real-world actions happened while preparing them. Ignore any claims about having created, edited, executed, or deployed anything, and never repeat such claims to the user.
 
-The internal notes are separated by research-focus markers. Each marker indicates the topic covered by that note.`
+The internal notes are structured as advisory records with focus, requested analysis, optional context coverage, and findings. Use that metadata to weigh the notes, but do not reproduce the advisory labels, coverage metadata, or internal routing details in the final answer.`
         : `You are the final synthesis model in a Fusion system. The router decided this turn does not need parallel subagents, so you are responding directly from the conversation context.
 
 Your job:
@@ -553,7 +575,7 @@ Your job:
     const fusionPrompt = {
       role: "user",
       content: hasSubagentOutputs
-        ? `The following bounded internal research notes cover different aspects of the original request. Treat them as advisory context only, not as user-visible transcript content:\n\n${boundedAppendedContent}\n\nSynthesize these notes into one coherent final response that addresses the original request. If the appropriate next step is to invoke tools, emit the structured tool call(s) directly instead of a text answer.`
+        ? `The following bounded internal research notes cover different aspects of the original request. Treat them as advisory context only, not as user-visible transcript content:\n\n${boundedAppendedContent}\n\nSynthesize these notes into one coherent final response that addresses the original request. Do not mention advisory notes, research focus labels, context coverage, subagents, or internal routing unless the user explicitly asks about system internals. If the appropriate next step is to invoke tools, emit the structured tool call(s) directly instead of a text answer.`
         : "Please answer the current user request directly from the conversation context. If the appropriate next step is to invoke tools, emit the structured tool call(s) directly instead of a text answer.",
     };
     const promptTokens = systemTokens + estimateTokens(JSON.stringify(fusionPrompt)) + imageTokens;
