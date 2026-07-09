@@ -1039,6 +1039,12 @@ export class FusionRouter {
     ctx.conversationId ??= identity.conversationId;
     ctx.turnId ??= identity.turnId;
     ctx.inputFingerprint ??= identity.inputFingerprint;
+    const runtimeIdentity = {
+      ...identity,
+      conversationId: ctx.conversationId,
+      turnId: ctx.turnId,
+      inputFingerprint: ctx.inputFingerprint,
+    };
     ctx.fusionRunId ??= makeFusionRunId(ctx.requestId);
     const scheduler = ctx.fusionConfig.scheduler;
     ctx.execution ??= {
@@ -1051,7 +1057,7 @@ export class FusionRouter {
     };
     try {
       recordFusionConversationTurn({
-        identity,
+        identity: runtimeIdentity,
         requestId: ctx.requestId,
         principalId: ctx.principal?.id,
       });

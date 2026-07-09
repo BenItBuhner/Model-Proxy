@@ -4,6 +4,7 @@ import type { FusionConfig } from "../shared/schemas/fusion.ts";
 import { modelConfigLoader } from "../src/config/model-loader.ts";
 import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { resetKeyState } from "../src/providers/api-key-manager.ts";
+import { closeOperationalDbForTests, getOperationalDb } from "../src/storage/operational-db.ts";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -192,6 +193,7 @@ describe("Fusion complex scenarios", () => {
 
   afterAll(() => {
     globalThis.fetch = originalFetch;
+    closeOperationalDbForTests();
     fs.rmSync(tmpRoot, { recursive: true, force: true });
     delete process.env.FAKE_FUSION_API_KEY;
     if (originalXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
@@ -306,6 +308,18 @@ describe("Fusion complex scenarios", () => {
     expect(first.fusionTrace?.subagentDetails?.[0]?.packedContextTokens).toBeGreaterThan(0);
     expect(first.fusionTrace?.steps.some((step) => step.label === "Subagent Decision")).toBe(true);
     expect(first.fusionTrace?.steps.some((step) => step.label === "Subagent Execution")).toBe(true);
+    const fusionRunId = first.fusionTrace?.fusionRunId;
+    expect(typeof fusionRunId).toBe("string");
+    const db = getOperationalDb();
+    const persistedRun = db
+      .query("SELECT status, cache_hit AS cacheHit FROM fusion_runs WHERE fusion_run_id = ?")
+      .get(fusionRunId as string) as { status: string; cacheHit: number } | undefined;
+    const persistedSubagents = db
+      .query("SELECT COUNT(*) AS count FROM fusion_subagent_runs WHERE fusion_run_id = ?")
+      .get(fusionRunId as string) as { count: number } | undefined;
+    expect(persistedRun?.status).toBe("completed");
+    expect(persistedRun?.cacheHit).toBe(0);
+    expect(persistedSubagents?.count).toBe(2);
     expect(captured.divider).toHaveLength(1);
     expect(captured.subagent).toHaveLength(2);
     expect(captured.fuser).toHaveLength(1);
