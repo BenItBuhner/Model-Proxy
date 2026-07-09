@@ -1,7 +1,7 @@
 # Fusion Quality Evaluation Scratchpad
 
 ## Current Focus
-Add a compact benchmark gate summary with expected pass/fail counts and resource headroom.
+Add a durable human-readable review of local Fusion quality evidence, limits, and safe next steps.
 
 ## To-Dos
 - [x] Inspect current model diversity and handoff behavior.
@@ -19,6 +19,7 @@ Add a compact benchmark gate summary with expected pass/fail counts and resource
 - [x] Add deterministic scorecard review summaries for strengths and risks.
 - [x] Add an expected-fail benchmark case for duplicated, unsafe, low-context advisories.
 - [x] Add compact benchmark gate fields for pass/fail counts and resource headroom.
+- [x] Add `docs/model-fusion-quality-review.md`.
 
 ## Findings
 - `fusion-beta` already exposes a diverse candidate pool for Effort 2/3: GLM, Kimi code, MiniMax, DeepSeek, Mimo, and Nemotron routes.
@@ -39,6 +40,7 @@ Add a compact benchmark gate summary with expected pass/fail counts and resource
 - `reviewFusionQualityScorecard` now emits pass/warn/fail, one-line summaries, strengths, and risks so scorecard output can be reviewed without manually interpreting every metric.
 - `bun run eval:fusion-scorecard` now includes three expected-pass hard cases plus one expected-fail negative control with duplicated advisories, fake tool artifacts, missing final tools, subagent tools, and low context coverage.
 - The scorecard benchmark now emits a top-level gate summary with passed, expectedPassCount, expectedFailureCount, unexpectedCount, elapsedHeadroomMs, and rssHeadroomMb.
+- `docs/model-fusion-quality-review.md` summarizes current local evidence, safe commands, resource posture, explicit non-proof of live GPT-5.5/Fable parity, and live-eval prerequisites.
 
 ## Test Results
 - 2026-07-09: `bun test tests/fusion-complexity-scorer.test.ts tests/fusion-quality-gauntlet.test.ts` passed, 8 tests / 59 assertions.
@@ -48,6 +50,9 @@ Add a compact benchmark gate summary with expected pass/fail counts and resource
 - 2026-07-09: `bun test` passed, 358 tests / 1409 assertions.
 - 2026-07-09: `bun run typecheck` passed.
 - 2026-07-09: `bun run build` passed.
+- 2026-07-09: `git diff --check` passed.
+- 2026-07-09: Added `docs/model-fusion-quality-review.md`; `bun run eval:fusion-scorecard` passed with elapsedMs 41.67 and rssDeltaMb 3.13.
+- 2026-07-09: `bun run eval:fusion-quality` passed, 11 tests / 95 assertions after adding the review doc.
 - 2026-07-09: `git diff --check` passed.
 - 2026-07-09: `bun run eval:fusion-scorecard` passed with gate.passed true, expectedPassCount 3, expectedFailureCount 1, unexpectedCount 0, elapsedHeadroomMs 987.65, and rssHeadroomMb 60.5.
 - 2026-07-09: `bun run eval:fusion-quality` passed, 11 tests / 95 assertions after adding compact gate fields.

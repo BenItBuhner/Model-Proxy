@@ -21,6 +21,7 @@ Push `fusion-beta` beyond plumbing correctness by measuring whether it produces 
 - Add regression tests that cover task quality signals, model-route diversity, terse advisory packing, cache behavior, and SWE/math prompts.
 - Add a deterministic scorecard and review summary that turn Fusion trace/prompt shape into reviewable SWE/math/diversity/context/terse-handoff metrics.
 - Apply the scorecard to actual mocked Fusion gauntlet output, not only to a standalone fixture.
+- Keep a durable human-readable review in `docs/model-fusion-quality-review.md`.
 - Document findings and remaining limits in `docs/model-fusion-quality-scratchpad.md`.
 
 ## Out Of Scope
@@ -47,3 +48,4 @@ Push `fusion-beta` beyond plumbing correctness by measuring whether it produces 
 - [x] Scorecard has a low-resource command and regression tests.
 - [x] Scorecard is applied to the live mocked Fusion gauntlet output.
 - [x] Scorecard command reports elapsed time and RSS delta budget checks across multiple hard-case fixtures.
+- [x] Human-readable review document records evidence, limits, and safe live-eval requirements.
