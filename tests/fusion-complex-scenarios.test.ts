@@ -331,6 +331,77 @@ describe("Fusion complex scenarios", () => {
     expect(captured.fuser).toHaveLength(2);
   }, 60_000);
 
+  it("does not cache incomplete subagent result sets", async () => {
+    const captured: {
+      divider: Array<Record<string, unknown>>;
+      subagent: Array<Record<string, unknown>>;
+      fuser: Array<Record<string, unknown>>;
+    } = { divider: [], subagent: [], fuser: [] };
+
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const tools = Array.isArray(body["tools"]) ? body["tools"] : [];
+      const messages = Array.isArray(body["messages"]) ? body["messages"] : [];
+
+      if (tools.some((tool) => JSON.stringify(tool).includes("divide_task"))) {
+        captured.divider.push(body);
+        return chatResponse({
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: "call_divide",
+            type: "function",
+            function: {
+              name: "divide_task",
+              arguments: JSON.stringify({
+                sub_tasks: [
+                  {
+                    id: "repo-hygiene",
+                    description: "Analyze stale branch and PR cleanup risks and recommend a safe sequence.",
+                    focus_area: "repository",
+                    suggested_model_routing: "glm-5.2",
+                  },
+                  {
+                    id: "fusion-contract",
+                    description: "Analyze fusion subagent contract and identify verification expectations.",
+                    focus_area: "testing",
+                    suggested_model_routing: "glm-5.2",
+                  },
+                ],
+              }),
+            },
+          }],
+        }, body["model"]);
+      }
+
+      if (body["stream"] === true && body["tool_choice"] === "none") {
+        captured.subagent.push(body);
+        const promptText = extractMessageText(messages);
+        if (promptText.includes("fusion subagent contract")) {
+          return streamContentResponse([""]);
+        }
+        return streamResponse("Repository hygiene analysis completed successfully.");
+      }
+
+      captured.fuser.push(body);
+      return chatResponse({
+        role: "assistant",
+        content: `Final fused response ${captured.fuser.length}.`,
+      }, body["model"]);
+    }) as unknown as typeof fetch;
+
+    const first = await router.route(makeCtx());
+    const second = await router.route(makeCtx());
+
+    expect(first.cacheHit).toBe(false);
+    expect(second.cacheHit).toBe(false);
+    expect(first.subagentResults.some((result) => !result.success)).toBe(true);
+    expect(second.subagentResults.some((result) => !result.success)).toBe(true);
+    expect(captured.divider).toHaveLength(2);
+    expect(captured.fuser).toHaveLength(2);
+    expect(captured.subagent.length).toBeGreaterThanOrEqual(8);
+  }, 60_000);
+
   it("streams summaries, preserves adaptive trace metadata, and reuses cached subagent work", async () => {
     const captured: {
       divider: Array<Record<string, unknown>>;

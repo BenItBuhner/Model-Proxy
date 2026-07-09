@@ -569,8 +569,10 @@ export class FusionRouter {
     // Layer 5: Fuse responses
     const fusionResult = await this.responseFuser.fuse(ctx, combined, steps, costs);
 
-    // Store in cache
-    if (cacheKey !== undefined) {
+    // Store only complete successful subagent sets. A transient failed
+    // subagent should get another chance on the next equivalent turn instead
+    // of being replayed from cache as degraded reasoning.
+    if (cacheKey !== undefined && this.shouldCacheSubagentResults(subagentResults)) {
       this.reasoningCache.set(
         cacheKey,
         subagentResults,
@@ -889,7 +891,7 @@ export class FusionRouter {
     setStreamTrace(subagentResults, !!cachedEntry, cacheKey);
 
     // Store in cache if not already cached
-    if (!cachedEntry && cacheKey !== undefined) {
+    if (!cachedEntry && cacheKey !== undefined && this.shouldCacheSubagentResults(subagentResults)) {
       this.reasoningCache.set(cacheKey, subagentResults, subTasks, score, undefined, requestCacheKey, {
         conversationId: ctx.conversationId,
         messages: ctx.messages,
@@ -1123,6 +1125,10 @@ export class FusionRouter {
       reason: "moderate request is within synthesis model context; subagents would add latency without clear benefit",
       signals,
     };
+  }
+
+  private shouldCacheSubagentResults(results: SubagentResult[]): boolean {
+    return results.length > 0 && results.every((result) => result.success && result.content.trim().length > 0);
   }
 
   private startRun(
