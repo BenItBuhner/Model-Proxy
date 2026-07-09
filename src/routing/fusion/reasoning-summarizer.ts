@@ -128,6 +128,7 @@ const SUBAGENT_IMPOSSIBLE_ACTION_CLAIM =
 
 const SUBAGENT_ACTION_CLAIM_REPLACEMENT =
   "[subagent invalid action claim removed: subagents cannot modify files, run commands, commit, push, or deploy]";
+const SUBAGENT_ADVISORY_MARKER = /\b(?:Analysis|Finding|Findings|Recommendation|Recommendations|Risk|Risks|Next|Suggested|Suggestion|Evidence|Rationale)\s*:/i;
 
 /**
  * Remove first-person action claims from reasoning-only subagents. Subagents
@@ -138,7 +139,10 @@ export function stripSubagentActionClaims(text: string): string {
   let cleaned = text.split(/(\n+)/).map((part) => {
     if (part.startsWith("\n")) return part;
     if (!SUBAGENT_IMPOSSIBLE_ACTION_CLAIM.test(part)) return part;
-    return part.match(/^\s/)?.[0] ? ` ${SUBAGENT_ACTION_CLAIM_REPLACEMENT}` : SUBAGENT_ACTION_CLAIM_REPLACEMENT;
+    const marker = part.match(SUBAGENT_ADVISORY_MARKER);
+    const preserved = marker?.index !== undefined && marker.index > 0 ? part.slice(marker.index).trimStart() : "";
+    const replacement = part.match(/^\s/)?.[0] ? ` ${SUBAGENT_ACTION_CLAIM_REPLACEMENT}` : SUBAGENT_ACTION_CLAIM_REPLACEMENT;
+    return preserved.length > 0 ? `${replacement}\n${preserved}` : replacement;
   }).join("");
 
   cleaned = cleaned

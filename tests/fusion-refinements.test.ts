@@ -7,6 +7,7 @@ import {
   compactFallbackSummary,
   parseOpenAIDelta,
   splitSseEvents,
+  stripSubagentActionClaims,
 } from "../src/routing/fusion/reasoning-summarizer.ts";
 
 // ── Conversation delta classification ────────────────────────────────
@@ -152,6 +153,24 @@ describe("classifyConversationDelta", () => {
     const delta = all.slice(1);
     const result = classifyConversationDelta(all, delta);
     expect(result.significant).toBe(false);
+  });
+});
+
+describe("stripSubagentActionClaims", () => {
+  it("removes impossible same-line action claims while preserving advisory content", () => {
+    const cleaned = stripSubagentActionClaims(
+      "I edited src/routing/fusion/fallback.ts and ran bun test. Recommendation: adjust retry classification before synthesis.",
+    );
+
+    expect(cleaned).not.toContain("I edited");
+    expect(cleaned).not.toContain("ran bun test");
+    expect(cleaned).toContain("subagent invalid action claim removed");
+    expect(cleaned).toContain("Recommendation: adjust retry classification before synthesis.");
+  });
+
+  it("leaves ordinary conditional recommendations unchanged", () => {
+    const text = "Recommendation: if you run the test suite, inspect failures before changing cache behavior.";
+    expect(stripSubagentActionClaims(text)).toBe(text);
   });
 });
 
