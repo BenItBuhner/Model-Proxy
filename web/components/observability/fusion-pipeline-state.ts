@@ -60,6 +60,7 @@ export interface FusionTraceLike {
   complexityReason?: string;
   subTaskCount?: number;
   subTasks?: Array<{ id: string; focus: string; model: string; description: string }>;
+  summaries?: SummaryEntry[];
   cacheHit?: boolean;
   cacheKey?: string;
   totalCostUsd?: number;
@@ -270,7 +271,7 @@ export function stateFromTrace(trace: FusionTraceLike): PipelineState {
         packedContextTokens: sa.packedContextTokens,
       },
     })),
-    summaries: [],
+    summaries: trace.summaries ?? [],
     completed: { totalMs: 0, trace },
   };
 }

@@ -58,6 +58,12 @@ export interface FusionRequestContext {
    * route handler after the stream ends to attach to `request.finished`.
    */
   streamFusionTrace?: Record<string, unknown>;
+  /** Bounded summary events captured for completed/historical Fusion traces. */
+  fusionSummaries?: Array<{
+    label: string;
+    text: string;
+    at: string;
+  }>;
   /**
    * True if the original request contained image content (image_url parts).
    * Set by the image preprocessor (or upstream) before images are stripped,
@@ -196,6 +202,12 @@ export interface FusionTrace {
     focus: string;
     model: string;
     description: string;
+  }>;
+  /** Bounded live reasoning summaries preserved for completed/historical views. */
+  summaries?: Array<{
+    label: string;
+    text: string;
+    at: string;
   }>;
   /** Which subagents executed, with their results. */
   subagentDetails?: Array<{

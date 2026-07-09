@@ -209,6 +209,7 @@ export class FusionRouter {
         ? new Set(result.subagentResults.map(r => r.subTask.id)).size
         : 0,
       subTasks: traceSubTasks(result.subagentResults),
+      summaries: ctx.fusionSummaries,
       subagentDetails: result.subagentResults.map(r => ({
         id: r.subTask.id,
         focus_area: r.subTask.focus_area,
@@ -323,6 +324,7 @@ export class FusionRouter {
             complexityReason: score.reason,
             steps: [{ type: "effort_1_fast_path", label: "Effort 1 Fast Path", durationMs: fastMs, modelRouting: fastModel }],
             subTaskCount: 0,
+            summaries: ctx.fusionSummaries,
             subagentDetails: [],
             costs: [],
             totalCostUsd: 0,
@@ -662,6 +664,7 @@ export class FusionRouter {
         steps: streamSteps,
         subTaskCount: new Set(results.map((r) => r.subTask.id)).size,
         subTasks: traceSubTasks(results),
+        summaries: ctx.fusionSummaries,
         subagentDetails: results.map((r) => ({
           id: r.subTask.id,
           focus_area: r.subTask.focus_area,

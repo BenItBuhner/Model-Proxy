@@ -173,6 +173,13 @@ describe("fusion pipeline state derivation", () => {
           description: "Analyze repository cleanup risk and verification scope.",
         },
       ],
+      summaries: [
+        {
+          label: "research-1 · repository",
+          text: "Repository cleanup risks are being checked before synthesis.",
+          at: "2026-07-09T00:00:02.000Z",
+        },
+      ],
       cacheHit: false,
       totalTokens: 120,
       fusedByModelRouting: "glm-5.2",
@@ -213,6 +220,11 @@ describe("fusion pipeline state derivation", () => {
       focus: "repository",
       model: "glm-5.2",
       description: "Analyze repository cleanup risk and verification scope.",
+    });
+    expect(state.summaries[0]).toEqual({
+      label: "research-1 · repository",
+      text: "Repository cleanup risks are being checked before synthesis.",
+      at: "2026-07-09T00:00:02.000Z",
     });
     expect(state.phases[0]?.detail?.["reason"]).toBe("moderate request is within synthesis model context");
     expect(state.caches[0]?.hit).toBe(false);

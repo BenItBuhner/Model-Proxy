@@ -31,6 +31,11 @@ interface FusionTrace {
     model: string;
     description: string;
   }>;
+  summaries?: Array<{
+    label: string;
+    text: string;
+    at: string;
+  }>;
   subagentDetails?: Array<{
     id: string;
     focus_area: string;

@@ -686,6 +686,15 @@ describe("request-scoped event tracing", () => {
     expect(summaryEvent?.text).toContain("Repository cleanup risks");
     const completed = snap.events.find((event) => event.type === "fusion.pipeline.completed");
     const finished = snap.events.find((event) => event.type === "request.finished");
+    const completedSummaries = completed?.trace?.["summaries"] as Array<Record<string, unknown>> | undefined;
+    const finishedSummaries = finished?.fusionTrace?.["summaries"] as Array<Record<string, unknown>> | undefined;
+    expect(completedSummaries?.some((summary) =>
+      String(summary["label"] ?? "").includes("stream-summary") &&
+      String(summary["text"] ?? "").includes("Repository cleanup risks")
+    )).toBe(true);
+    expect(finishedSummaries?.some((summary) =>
+      String(summary["text"] ?? "").includes("Repository cleanup risks")
+    )).toBe(true);
     expect(completed?.trace?.["subTaskCount"]).toBe(2);
     expect(completed?.trace?.["cacheHit"]).toBe(false);
     expect(finished?.fusionTrace?.["subTaskCount"]).toBe(2);
