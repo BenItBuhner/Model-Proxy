@@ -78,7 +78,7 @@ function resolveBaseUrl(providerName: string): string | undefined {
 /** Build the provider models list URL (OpenCursor-compatible rules). */
 export function resolveModelsListUrl(
   baseUrl: string,
-  wireProtocol: "openai" | "anthropic",
+  wireProtocol: "openai" | "anthropic" | "responses",
 ): string {
   const trimmed = baseUrl.trim().replace(/\/+$/, "");
   if (wireProtocol === "anthropic") {

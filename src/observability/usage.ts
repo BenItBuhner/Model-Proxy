@@ -23,7 +23,7 @@ export function emptyUsageSnapshot(): UsageSnapshot {
 }
 
 export function normalizeUsageFromResponse(
-  protocol: "openai" | "anthropic" | "audio" | undefined,
+  protocol: "openai" | "anthropic" | "audio" | "responses" | undefined,
   response: unknown,
 ): UsageSnapshot {
   if (typeof response !== "object" || response === null) return emptyUsageSnapshot();
@@ -34,7 +34,7 @@ export function normalizeUsageFromResponse(
 }
 
 export function normalizeUsageObject(
-  protocol: "openai" | "anthropic" | "audio" | undefined,
+  protocol: "openai" | "anthropic" | "audio" | "responses" | undefined,
   usage: Record<string, unknown>,
 ): UsageSnapshot {
   const out = emptyUsageSnapshot();
@@ -44,6 +44,15 @@ export function normalizeUsageObject(
     out.cacheReadTokens = numberField(usage, "cache_read_input_tokens");
     out.cacheCreationTokens = numberField(usage, "cache_creation_input_tokens");
     out.cachedTokens = out.cacheReadTokens;
+  } else if (protocol === "responses") {
+    out.promptTokens = numberField(usage, "input_tokens");
+    out.completionTokens = numberField(usage, "output_tokens");
+    out.totalTokens = numberField(usage, "total_tokens");
+    const inputDetails = usage["input_tokens_details"];
+    if (typeof inputDetails === "object" && inputDetails !== null) {
+      out.cachedTokens = numberField(inputDetails as Record<string, unknown>, "cached_tokens");
+      out.cacheReadTokens = out.cachedTokens;
+    }
   } else {
     out.promptTokens = numberField(usage, "prompt_tokens");
     out.completionTokens = numberField(usage, "completion_tokens");

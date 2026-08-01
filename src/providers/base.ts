@@ -64,10 +64,36 @@ export interface AnthropicCallArgs {
   [key: string]: unknown;
 }
 
+/** Native OpenAI Responses API request arguments. */
+export interface ResponsesCallArgs {
+  model: string;
+  input?: unknown;
+  instructions?: string;
+  temperature?: number;
+  top_p?: number;
+  max_output_tokens?: number;
+  stream?: boolean;
+  stop?: string | string[];
+  presence_penalty?: number;
+  frequency_penalty?: number;
+  user?: string;
+  tools?: unknown[];
+  tool_choice?: unknown;
+  parallel_tool_calls?: boolean;
+  metadata?: Record<string, unknown>;
+  store?: boolean;
+  previous_response_id?: string;
+  reasoning?: unknown;
+  truncation?: unknown;
+  text?: unknown;
+  include?: string[];
+  [key: string]: unknown;
+}
+
 export interface BaseProvider {
   readonly providerName: string;
   readonly config: ProviderConfig;
-  readonly wireProtocol: "openai" | "anthropic";
+  readonly wireProtocol: "openai" | "anthropic" | "responses";
 
   callOpenAI?(
     args: OpenAICallArgs,
@@ -86,18 +112,27 @@ export interface BaseProvider {
     args: AnthropicCallArgs,
     ctx: ProviderCallContext,
   ): AsyncGenerator<string, void, unknown>;
+
+  callResponses?(
+    args: ResponsesCallArgs,
+    ctx: ProviderCallContext,
+  ): Promise<Record<string, unknown>>;
+  streamResponses?(
+    args: ResponsesCallArgs,
+    ctx: ProviderCallContext,
+  ): AsyncGenerator<string, void, unknown>;
 }
 
 export abstract class AbstractProvider implements BaseProvider {
   readonly providerName: string;
   readonly config: ProviderConfig;
-  readonly wireProtocol: "openai" | "anthropic";
+  readonly wireProtocol: "openai" | "anthropic" | "responses";
 
   constructor(providerName: string) {
     this.providerName = providerName;
     this.config = providerConfigLoader.loadProvider(providerName);
     const fmt = this.config.endpoints.compatible_format ?? "openai";
-    this.wireProtocol = fmt === "anthropic" ? "anthropic" : "openai";
+    this.wireProtocol = fmt === "anthropic" ? "anthropic" : fmt === "responses" ? "responses" : "openai";
   }
 
   protected endpointUrl(

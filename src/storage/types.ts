@@ -30,7 +30,7 @@ export interface CompletionEnvelope {
     requestedModel: string;
     resolvedProvider: string | undefined;
     resolvedModel: string | undefined;
-    wireProtocol: "openai" | "anthropic" | "audio" | undefined;
+    wireProtocol: "openai" | "anthropic" | "audio" | "responses" | undefined;
     apiKeyEnvVar: string | undefined;
     keyHint: string | undefined;
   };
@@ -60,7 +60,7 @@ export interface RequestIndexRow {
   requestedModel: string;
   resolvedProvider: string | undefined;
   resolvedModel: string | undefined;
-  wireProtocol: "openai" | "anthropic" | "audio" | undefined;
+  wireProtocol: "openai" | "anthropic" | "audio" | "responses" | undefined;
   apiKeyEnvVar: string | undefined;
   keyHint: string | undefined;
   responseStatus: number | undefined;
@@ -96,7 +96,7 @@ export interface RequestMetricRow {
   requestedModel: string;
   resolvedProvider: string | undefined;
   resolvedModel: string | undefined;
-  wireProtocol: "openai" | "anthropic" | "audio" | undefined;
+  wireProtocol: "openai" | "anthropic" | "audio" | "responses" | undefined;
   apiKeyEnvVar: string | undefined;
   keyHint: string | undefined;
   userId: string | undefined;

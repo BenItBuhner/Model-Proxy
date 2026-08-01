@@ -4,6 +4,7 @@ import {
   type AnthropicCallArgs,
   type OpenAICallArgs,
   type ProviderCallContext,
+  type ResponsesCallArgs,
 } from "./base.ts";
 import { ProviderAPIError, ProviderTimeoutError } from "./errors.ts";
 import {
@@ -12,6 +13,7 @@ import {
   readBodyWithDeadline,
   upstreamFetch,
 } from "./upstream-fetch.ts";
+import { buildEndpointUrl } from "./provider-helpers.ts";
 
 const log = createLogger("provider.openai");
 
@@ -79,6 +81,85 @@ export class OpenAIProvider extends AbstractProvider {
       },
       ctx,
     );
+  }
+
+  /** Native Responses API transport for routes configured with responses wire format. */
+  async callResponses(
+    args: ResponsesCallArgs,
+    ctx: ProviderCallContext,
+  ): Promise<Record<string, unknown>> {
+    const url = buildEndpointUrl(this.config, ctx.baseUrlOverride, "responses");
+    return await this.fetchJson(
+      url,
+      {
+        method: "POST",
+        headers: this.openAIRequestHeaders(ctx, "application/json"),
+        body: JSON.stringify(this.buildResponsesPayload({ ...args, stream: false })),
+      },
+      ctx,
+    );
+  }
+
+  /** Native Responses SSE transport for routes configured with responses wire format. */
+  async *streamResponses(
+    args: ResponsesCallArgs,
+    ctx: ProviderCallContext,
+  ): AsyncGenerator<string, void, unknown> {
+    const url = buildEndpointUrl(this.config, ctx.baseUrlOverride, "responses_streaming");
+    const timeoutMs = Math.max(1, ctx.timeoutSeconds * 1000);
+    const connController = new AbortController();
+    const onCallerAbort = () => connController.abort();
+    if (ctx.signal !== undefined) {
+      if (ctx.signal.aborted) connController.abort();
+      else ctx.signal.addEventListener("abort", onCallerAbort, { once: true });
+    }
+    try {
+      const response = await upstreamFetch(url, {
+        method: "POST",
+        headers: this.openAIRequestHeaders(ctx, "text/event-stream"),
+        body: JSON.stringify(this.buildResponsesPayload({ ...args, stream: true })),
+        proxy: ctx.egressProxyUrl,
+        timeoutMs,
+        signal: connController.signal,
+      });
+      if (response.status >= 400) {
+        const body = await this.readErrorBody(response);
+        throw new ProviderAPIError(
+          `${this.providerName} Responses API error ${response.status}: ${body.slice(0, 500)}`,
+          response.status,
+          {
+            body,
+            provider: this.providerName,
+            retryAfterSeconds:
+              parseRetryAfterHeader(response) ?? parseRetryAfterFromErrorBody(body),
+          },
+        );
+      }
+      if (response.body === null) {
+        throw new ProviderAPIError(
+          `${this.providerName} Responses streaming response body was empty`,
+          502,
+          { provider: this.providerName },
+        );
+      }
+      let eventLines: string[] = [];
+      for await (const line of readSSELines(response.body)) {
+        if (line.length === 0) {
+          if (eventLines.length > 0) {
+            yield `${eventLines.join("\n")}\n\n`;
+            eventLines = [];
+          }
+        } else {
+          eventLines.push(line);
+        }
+      }
+      if (eventLines.length > 0) {
+        yield `${eventLines.join("\n")}\n\n`;
+      }
+    } finally {
+      ctx.signal?.removeEventListener("abort", onCallerAbort);
+      connController.abort();
+    }
   }
 
   async *streamOpenAI(
@@ -315,6 +396,9 @@ export class OpenAIProvider extends AbstractProvider {
     if (args.response_format !== undefined && !isGemini) {
       payload["response_format"] = args.response_format;
     }
+    if (args.reasoning !== undefined && !isGemini) {
+      payload["reasoning"] = args.reasoning;
+    }
     if (
       args.chat_template_kwargs !== undefined &&
       !isChatTemplateKwargsPassthroughDisabled()
@@ -323,6 +407,14 @@ export class OpenAIProvider extends AbstractProvider {
     }
 
     return payload;
+  }
+
+  private buildResponsesPayload(args: ResponsesCallArgs): Record<string, unknown> {
+    // Responses has a deliberately extensible request shape. Forward the
+    // complete validated request so newer official fields (background,
+    // conversation, prompt-cache options, tool-specific options, etc.) are
+    // not silently discarded by the transport.
+    return { ...args, model: args.model };
   }
 }
 
@@ -718,4 +810,3 @@ function stringifyArguments(value: unknown): string {
     return String(value);
   }
 }
-

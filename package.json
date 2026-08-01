@@ -12,6 +12,7 @@
     "eval:fusion-quality": "bun test tests/fusion-complexity-scorer.test.ts tests/fusion-quality-gauntlet.test.ts tests/fusion-quality-scorecard.test.ts tests/fusion-scorecard-benchmark.test.ts",
     "eval:fusion-scorecard": "bun run benchmarks/fusion-quality-scorecard.ts",
     "test": "bun test",
+    "test:responses-sdk": "bun run scripts/responses-openai-sdk-conformance.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -22,6 +23,7 @@
   },
   "devDependencies": {
     "@types/bun": "^1.1.14",
+    "openai": "^6.49.0",
     "typescript": "^5.6.3"
   },
   "engines": {

@@ -9,7 +9,7 @@ export type RequestEvent =
   | {
       type: "request.started";
       at: string;
-      protocol: "openai" | "anthropic" | "audio";
+      protocol: "openai" | "anthropic" | "audio" | "responses";
       endpoint: string;
       model: string;
       stream: boolean;
@@ -21,7 +21,7 @@ export type RequestEvent =
       attempt: number;
       provider: string;
       model: string;
-      wireProtocol: "openai" | "anthropic" | "audio";
+      wireProtocol: "openai" | "anthropic" | "audio" | "responses";
       isFallback: boolean;
       keyHint: string;
       apiKeyEnvVar?: string;

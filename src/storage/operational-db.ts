@@ -249,4 +249,30 @@ function runMigrations(database: Database): void {
       INSERT INTO schema_migrations (version, applied_at) VALUES (4, datetime('now'));
     `);
   }
+  if (version < 5) {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS responses (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT,
+        model TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        messages_json TEXT NOT NULL DEFAULT '[]',
+        response_json TEXT NOT NULL,
+        store_enabled INTEGER NOT NULL DEFAULT 1,
+        expires_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_responses_owner_created
+        ON responses(owner_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_responses_expires
+        ON responses(expires_at);
+      INSERT INTO schema_migrations (version, applied_at) VALUES (5, datetime('now'));
+    `);
+  }
+  if (version < 6) {
+    database.exec(`
+      ALTER TABLE responses ADD COLUMN input_json TEXT NOT NULL DEFAULT '[]';
+      INSERT INTO schema_migrations (version, applied_at) VALUES (6, datetime('now'));
+    `);
+  }
 }

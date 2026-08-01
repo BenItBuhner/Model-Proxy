@@ -225,7 +225,7 @@ class AsyncQueue<T> {
 
 function isMeaningfulStreamChunk(
   chunk: string,
-  targetProtocol: "openai" | "anthropic",
+  targetProtocol: "openai" | "anthropic" | "responses",
   minContentChars: number,
   options: { ignoreReasoning?: boolean } = {},
 ): boolean {
@@ -245,6 +245,20 @@ function isMeaningfulStreamChunk(
       if (typeof delta === "object" && delta !== null) {
         const text = (delta as Record<string, unknown>)["text"];
         if (typeof text === "string" && text.trim().length >= minContentChars) return true;
+      }
+      continue;
+    }
+    if (targetProtocol === "responses") {
+      const eventType = typeof obj["type"] === "string" ? obj["type"] : "";
+      if (
+        eventType === "response.created" ||
+        eventType === "response.in_progress" ||
+        eventType === "response.output_item.added" ||
+        eventType === "response.output_text.delta" ||
+        eventType === "response.function_call_arguments.delta" ||
+        eventType === "response.completed"
+      ) {
+        return true;
       }
       continue;
     }
@@ -317,7 +331,7 @@ async function* requireMeaningfulStream(
   stream: AsyncGenerator<string, void, unknown>,
   route: ResolvedRoute,
   requestData: Record<string, unknown>,
-  targetProtocol: "openai" | "anthropic",
+  targetProtocol: "openai" | "anthropic" | "responses",
   options: { allowEmptyPassthrough?: boolean } = {},
 ): AsyncGenerator<string, void, unknown> {
   const buffered: string[] = [];
@@ -367,7 +381,7 @@ async function* requireMeaningfulStream(
 export interface CallWithFallbackArgs {
   logicalModel: string;
   requestData: Record<string, unknown>;
-  targetProtocol: "openai" | "anthropic";
+  targetProtocol: "openai" | "anthropic" | "responses";
   maxKeyCycles?: number;
   signal?: AbortSignal;
   principal?: Principal;
@@ -1098,7 +1112,7 @@ export class FallbackRouter {
   }: {
     candidate: HedgedResolvedCandidate;
     requestData: Record<string, unknown>;
-    targetProtocol: "openai" | "anthropic";
+    targetProtocol: "openai" | "anthropic" | "responses";
     signal: AbortSignal | undefined;
     validateResponse: boolean | undefined;
     controller: AbortController;
@@ -1344,7 +1358,7 @@ export class FallbackRouter {
   }: {
     streamState: HedgedStreamState;
     requestData: Record<string, unknown>;
-    targetProtocol: "openai" | "anthropic";
+    targetProtocol: "openai" | "anthropic" | "responses";
     signal: AbortSignal | undefined;
     shared: { winner: HedgedStreamState | undefined; settled: boolean };
     queue: AsyncQueue<HedgedStreamEvent>;
@@ -1928,6 +1942,7 @@ export class FallbackRouter {
             if (signal?.aborted === true) throw err;
             const actionInfo = resolveErrorAction(route.provider, err);
             if (actionInfo.action === "auto_fix_tool_responses") {
+              if (targetProtocol === "responses") throw err;
               log.info("attempting auto-fix for missing tool responses", {
                 provider: route.provider,
                 model: route.model,
@@ -2165,6 +2180,7 @@ export class FallbackRouter {
             if (signal?.aborted === true) throw err;
             const actionInfo = resolveErrorAction(route.provider, err);
             if (actionInfo.action === "auto_fix_tool_responses") {
+              if (targetProtocol === "responses") throw err;
               const fixed =
                 targetProtocol === "anthropic"
                   ? fixMissingToolResultsAnthropic(requestData)

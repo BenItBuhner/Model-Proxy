@@ -24,7 +24,7 @@ export interface RequestLogRecord {
   resolvedModel?: string;
   apiKeyEnvVar?: string;
   keyHint?: string;
-  wireProtocol?: "openai" | "anthropic" | "audio";
+  wireProtocol?: "openai" | "anthropic" | "audio" | "responses";
   state: "running" | "completed";
   responseStatus?: number;
   responseTimeMs?: number;

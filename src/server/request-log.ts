@@ -19,7 +19,7 @@ export interface StartEntry {
   requestedModel: string;
   resolvedModel?: string;
   resolvedProvider?: string;
-  wireProtocol?: "openai" | "anthropic" | "audio";
+  wireProtocol?: "openai" | "anthropic" | "audio" | "responses";
   userId?: string;
   apiKeyId?: string;
   principalRole?: string;

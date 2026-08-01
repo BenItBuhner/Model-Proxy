@@ -19,7 +19,7 @@ export type RouteCapabilities = z.infer<typeof RouteCapabilitiesSchema>;
  */
 export const RouteConfigSchema = z
   .object({
-    wire_protocol: z.enum(["openai", "anthropic"]).optional(),
+    wire_protocol: z.enum(["openai", "anthropic", "responses"]).optional(),
     route_id: z.string().min(1).optional(),
     access_tags: z.array(z.string().min(1)).optional(),
     provider: z.string().min(1),
@@ -81,7 +81,7 @@ export type ModelRoutingConfig = z.infer<typeof ModelRoutingConfigSchema>;
  */
 export interface ResolvedRoute {
   sourceLogicalModel: string;
-  wireProtocol: "openai" | "anthropic";
+  wireProtocol: "openai" | "anthropic" | "responses";
   provider: string;
   model: string;
   baseUrl: string | undefined;

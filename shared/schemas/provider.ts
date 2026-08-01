@@ -49,13 +49,15 @@ export const EndpointsSchema = z
     base_url: EnvSubstitutedUrlSchema,
     completions: z.string().min(1),
     streaming: z.string().min(1).optional(),
+    responses: z.string().min(1).optional(),
+    responses_streaming: z.string().min(1).optional(),
     audio_transcriptions: z.string().min(1).optional(),
     audio_translations: z.string().min(1).optional(),
     audio_streaming: z.string().min(1).optional(),
     // "azure" is a Python-era alias; GitHub Models / Azure endpoints behave
     // as OpenAI-compatible at the wire level in this runtime.
     compatible_format: z
-      .enum(["openai", "anthropic", "azure"])
+      .enum(["openai", "anthropic", "azure", "responses"])
       .default("openai"),
   })
   .passthrough();

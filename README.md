@@ -119,12 +119,31 @@ Optional `context_window` on the model or on a route overrides discovery when up
 | GET | `/v1/models` | Bearer | OpenAI list + context metadata |
 | POST | `/v1/chat/completions` | Bearer | OpenAI chat |
 | POST | `/v1/chat/completions/stream` | Bearer | Forces `stream: true` |
+| POST | `/v1/responses` | Bearer | OpenAI Responses, native or routed |
+| WS | `/v1/responses` | Bearer | Streaming `response.create` events |
+| GET | `/v1/responses/:responseId` | Bearer | Retrieve a stored response |
+| DELETE | `/v1/responses/:responseId` | Bearer | Delete a stored response |
 | POST | `/v1/messages` | Bearer | Anthropic messages |
 | POST | `/v1/audio/transcriptions` | Bearer | Audio STT |
 | GET | `/setup/*` | Session or Bearer | Admin UI static assets |
 | `/v1/admin/*` | Session or Bearer | Config CRUD, logs, bundle import |
 
 Chat responses keep the **logical** `model` id the client requested.
+
+Responses requests use the logical model's routing graph. Routes with
+`wire_protocol: "responses"` invoke a provider's native Responses transport;
+OpenAI-compatible and Anthropic routes are converted at the protocol boundary.
+Stored responses and canonical input/output items back `previous_response_id`
+chaining, with SQLite persistence, TTL, and owner isolation. The official SDK
+conformance harness can be run against an isolated or deployed instance with:
+
+```bash
+CLIENT_API_KEY=... MODEL_PROXY_BASE=http://127.0.0.1:9876/v1 \
+  MODEL_PROXY_MODEL=glm-5.2 bun run test:responses-sdk
+```
+
+For a native provider, configure `endpoints.responses` and optionally
+`endpoints.responses_streaming` in addition to the normal completion paths.
 
 ### Context window resolution (`GET /v1/models`)
 

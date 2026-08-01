@@ -4,12 +4,21 @@ import {
   openaiToAnthropicRequest,
   openaiToAnthropicResponse,
 } from "../format/converters.ts";
+import {
+  anthropicStreamChunkToResponsesEvents,
+  chatResponseToResponses,
+  chatStreamChunkToResponsesEvents,
+  createResponsesStreamState,
+  finalizeResponsesStream,
+  responsesRequestToChat,
+} from "../format/responses.ts";
 import { createLogger } from "../observability/logger.ts";
 import type {
   AnthropicCallArgs,
   BaseProvider,
   OpenAICallArgs,
   ProviderCallContext,
+  ResponsesCallArgs,
 } from "../providers/base.ts";
 import {
   ProviderAPIError,
@@ -24,7 +33,7 @@ const log = createLogger("routing.executor");
 export interface ExecuteArgs {
   route: ResolvedRoute;
   requestData: Record<string, unknown>;
-  targetProtocol: "openai" | "anthropic";
+  targetProtocol: "openai" | "anthropic" | "responses";
   signal?: AbortSignal;
   validateResponse?: boolean;
 }
@@ -97,13 +106,87 @@ function anthropicArgsFromRequest(
 
 function convertRequest(
   request: Record<string, unknown>,
-  from: "openai" | "anthropic",
-  to: "openai" | "anthropic",
+  from: "openai" | "anthropic" | "responses",
+  to: "openai" | "anthropic" | "responses",
 ): Record<string, unknown> {
   if (from === to) return request;
   if (from === "anthropic" && to === "openai") return anthropicToOpenaiRequest(request);
   if (from === "openai" && to === "anthropic") return openaiToAnthropicRequest(request);
+  if (from === "responses" && to === "openai") return responsesRequestToChat(request);
+  if (from === "responses" && to === "anthropic") {
+    return openaiToAnthropicRequest(responsesRequestToChat(request));
+  }
+  if (from === "openai" && to === "responses") return openaiToResponsesRequest(request);
+  if (from === "anthropic" && to === "responses") {
+    return openaiToResponsesRequest(anthropicToOpenaiRequest(request));
+  }
   return request;
+}
+
+function openaiToResponsesRequest(request: Record<string, unknown>): Record<string, unknown> {
+  const messages = Array.isArray(request["messages"]) ? request["messages"] : [];
+  const input: Array<Record<string, unknown>> = [];
+
+  for (const msg of messages) {
+    if (typeof msg !== "object" || msg === null) continue;
+    const m = msg as Record<string, unknown>;
+    const role = m["role"];
+
+    if (role === "system") {
+      // Skip system messages - they become instructions
+      continue;
+    }
+
+    if (role === "tool") {
+      input.push({
+        type: "function_call_output",
+        call_id: m["tool_call_id"],
+        output: m["content"],
+      });
+    } else if (role === "assistant" && Array.isArray(m["tool_calls"])) {
+      for (const tc of m["tool_calls"] as Array<Record<string, unknown>>) {
+        input.push({
+          type: "function_call",
+          id: tc["id"],
+          call_id: tc["id"],
+          name: (tc["function"] as Record<string, unknown>)?.["name"],
+          arguments: (tc["function"] as Record<string, unknown>)?.["arguments"],
+        });
+      }
+    } else {
+      input.push({
+        type: "message",
+        role,
+        content: m["content"],
+      });
+    }
+  }
+
+  const responses: Record<string, unknown> = {
+    model: request["model"],
+    input,
+  };
+
+  if (request["temperature"] !== undefined) responses["temperature"] = request["temperature"];
+  if (request["top_p"] !== undefined) responses["top_p"] = request["top_p"];
+  if (request["stream"] !== undefined) responses["stream"] = request["stream"];
+  if (request["stop"] !== undefined) responses["stop"] = request["stop"];
+  if (request["presence_penalty"] !== undefined) responses["presence_penalty"] = request["presence_penalty"];
+  if (request["frequency_penalty"] !== undefined) responses["frequency_penalty"] = request["frequency_penalty"];
+  if (request["user"] !== undefined) responses["user"] = request["user"];
+  if (request["seed"] !== undefined) responses["seed"] = request["seed"];
+  if (request["tool_choice"] !== undefined) responses["tool_choice"] = request["tool_choice"];
+  if (request["parallel_tool_calls"] !== undefined) responses["parallel_tool_calls"] = request["parallel_tool_calls"];
+  if (request["response_format"] !== undefined) responses["text"] = { format: request["response_format"] };
+
+  const maxTokens = request["max_tokens"] ?? request["max_completion_tokens"];
+  if (typeof maxTokens === "number") responses["max_output_tokens"] = maxTokens;
+
+  if (Array.isArray(request["tools"])) {
+    responses["tools"] = request["tools"];
+  }
+
+  return responses;
 }
 
 function applyRouteBodyExtensions(
@@ -122,22 +205,131 @@ function applyRouteBodyExtensions(
 
 function convertResponse(
   response: Record<string, unknown>,
-  from: "openai" | "anthropic",
-  to: "openai" | "anthropic",
+  from: "openai" | "anthropic" | "responses",
+  to: "openai" | "anthropic" | "responses",
   modelName: string,
+  requestData?: Record<string, unknown>,
 ): Record<string, unknown> {
   if (from === to) return response;
   if (from === "openai" && to === "anthropic") return openaiToAnthropicResponse(response, modelName);
   if (from === "anthropic" && to === "openai") return anthropicToOpenaiResponse(response, modelName);
+  if (from === "openai" && to === "responses") {
+    return chatResponseToResponses(response, {
+      model: modelName,
+      metadata: responseMetadata(requestData),
+      parallelToolCalls: responseParallelToolCalls(requestData),
+    });
+  }
+  if (from === "anthropic" && to === "responses") {
+    return chatResponseToResponses(
+      anthropicToOpenaiResponse(response, modelName),
+      {
+        model: modelName,
+        metadata: responseMetadata(requestData),
+        parallelToolCalls: responseParallelToolCalls(requestData),
+      },
+    );
+  }
+  if (from === "responses" && to === "openai") return responsesToOpenaiResponse(response, modelName);
+  if (from === "responses" && to === "anthropic") return openaiToAnthropicResponse(responsesToOpenaiResponse(response, modelName), modelName);
   return response;
+}
+
+function responseMetadata(request: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  const metadata = request?.["metadata"];
+  return typeof metadata === "object" && metadata !== null && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown>
+    : undefined;
+}
+
+function responseParallelToolCalls(request: Record<string, unknown> | undefined): boolean | undefined {
+  return typeof request?.["parallel_tool_calls"] === "boolean"
+    ? request["parallel_tool_calls"] as boolean
+    : undefined;
+}
+
+function responsesToOpenaiResponse(response: Record<string, unknown>, modelName: string): Record<string, unknown> {
+  const output = Array.isArray(response["output"]) ? response["output"] : [];
+  const textParts: string[] = [];
+  const toolCalls: Array<Record<string, unknown>> = [];
+
+  for (const item of output) {
+    if (typeof item !== "object" || item === null) continue;
+    const obj = item as Record<string, unknown>;
+
+    if (obj["type"] === "message") {
+      const content = obj["content"];
+      if (Array.isArray(content)) {
+        for (const part of content) {
+          if (typeof part === "object" && part !== null) {
+            const p = part as Record<string, unknown>;
+            if (p["type"] === "output_text" && typeof p["text"] === "string") {
+              textParts.push(p["text"]);
+            }
+          }
+        }
+      }
+    } else if (obj["type"] === "function_call") {
+      toolCalls.push({
+        id: obj["call_id"] ?? obj["id"],
+        type: "function",
+        function: {
+          name: obj["name"],
+          arguments: obj["arguments"],
+        },
+      });
+    }
+  }
+
+  const usage = response["usage"] as Record<string, unknown> | undefined;
+
+  return {
+    id: `chatcmpl_${Date.now()}`,
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: modelName,
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: textParts.join("") || null,
+          ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+        },
+        finish_reason: response["status"] === "incomplete" ? "length" : "stop",
+      },
+    ],
+    usage: {
+      prompt_tokens: usage?.["input_tokens"] ?? 0,
+      completion_tokens: usage?.["output_tokens"] ?? 0,
+      total_tokens: usage?.["total_tokens"] ?? 0,
+    },
+  };
 }
 
 function normalizeConvertedResponse(
   response: Record<string, unknown>,
-  targetProtocol: "openai" | "anthropic",
+  targetProtocol: "openai" | "anthropic" | "responses",
   modelName: string,
 ): Record<string, unknown> {
-  if (targetProtocol !== "openai") return response;
+  if (targetProtocol === "anthropic") return response;
+  if (targetProtocol === "responses") {
+    const now = Math.floor(Date.now() / 1000);
+    const normalized: Record<string, unknown> = { ...response };
+    if (typeof normalized["id"] !== "string" || normalized["id"].length === 0) {
+      normalized["id"] = `resp_${crypto.randomUUID().replace(/-/g, "")}`;
+    }
+    if (typeof normalized["object"] !== "string" || normalized["object"].length === 0) {
+      normalized["object"] = "response";
+    }
+    if (typeof normalized["created_at"] !== "number" || !Number.isFinite(normalized["created_at"])) {
+      normalized["created_at"] = now;
+    }
+    if (typeof normalized["model"] !== "string" || normalized["model"].length === 0) {
+      normalized["model"] = modelName;
+    }
+    return normalized;
+  }
   const now = Math.floor(Date.now() / 1000);
   const normalized: Record<string, unknown> = { ...response };
   if (typeof normalized["id"] !== "string" || normalized["id"].length === 0) {
@@ -245,10 +437,17 @@ function stringifyArguments(value: unknown): string {
 
 function validateConvertedResponse(
   response: Record<string, unknown>,
-  targetProtocol: "openai" | "anthropic",
+  targetProtocol: "openai" | "anthropic" | "responses",
   route: ResolvedRoute,
 ): void {
-  if (targetProtocol !== "openai") return;
+  if (targetProtocol === "anthropic") return;
+  if (targetProtocol === "responses") {
+    const output = response["output"];
+    if (!Array.isArray(output) || output.length === 0) {
+      throwBadResponse(route, "missing output", response);
+    }
+    return;
+  }
   const choices = response["choices"];
   if (!Array.isArray(choices) || choices.length === 0) {
     throwBadResponse(route, "missing choices", response);
@@ -294,7 +493,7 @@ function throwBadResponse(
 
 async function callProvider(
   provider: BaseProvider,
-  protocol: "openai" | "anthropic",
+  protocol: "openai" | "anthropic" | "responses",
   request: Record<string, unknown>,
   route: ResolvedRoute,
   signal: AbortSignal | undefined,
@@ -308,6 +507,14 @@ async function callProvider(
     }
     return await provider.callAnthropic(anthropicArgsFromRequest(request, route.model), ctx);
   }
+  if (protocol === "responses") {
+    if (provider.callResponses === undefined) {
+      throw new Error(
+        `Provider '${provider.providerName}' does not support Responses protocol`,
+      );
+    }
+    return await provider.callResponses(request as ResponsesCallArgs, ctx);
+  }
   if (provider.callOpenAI === undefined) {
     throw new Error(
       `Provider '${provider.providerName}' does not support OpenAI protocol`,
@@ -318,7 +525,7 @@ async function callProvider(
 
 async function* streamProvider(
   provider: BaseProvider,
-  protocol: "openai" | "anthropic",
+  protocol: "openai" | "anthropic" | "responses",
   request: Record<string, unknown>,
   route: ResolvedRoute,
   signal: AbortSignal | undefined,
@@ -331,6 +538,15 @@ async function* streamProvider(
       );
     }
     yield* provider.streamAnthropic(anthropicArgsFromRequest(request, route.model), ctx);
+    return;
+  }
+  if (protocol === "responses") {
+    if (provider.streamResponses === undefined) {
+      throw new Error(
+        `Provider '${provider.providerName}' does not support Responses streaming`,
+      );
+    }
+    yield* provider.streamResponses(request as ResponsesCallArgs, ctx);
     return;
   }
   if (provider.streamOpenAI === undefined) {
@@ -372,7 +588,7 @@ export async function execute({
     const modelName =
       typeof requestData["model"] === "string" ? (requestData["model"] as string) : route.model;
     const convertedResponse = normalizeConvertedResponse(
-      convertResponse(response, sourceProtocol, targetProtocol, modelName),
+      convertResponse(response, sourceProtocol, targetProtocol, modelName, requestData),
       targetProtocol,
       modelName,
     );
@@ -404,7 +620,22 @@ export async function* executeStream({
       convertRequest(requestData, targetProtocol, sourceProtocol),
       route,
     );
-    yield* streamProvider(provider, sourceProtocol, converted, route, signal);
+    const sourceStream = streamProvider(provider, sourceProtocol, converted, route, signal);
+    if (targetProtocol !== "responses" || sourceProtocol === "responses") {
+      yield* sourceStream;
+      return;
+    }
+
+    const state = createResponsesStreamState(
+      typeof requestData["model"] === "string" ? requestData["model"] : route.model,
+    );
+    for await (const chunk of sourceStream) {
+      const events = sourceProtocol === "anthropic"
+        ? anthropicStreamChunkToResponsesEvents(chunk, state)
+        : chatStreamChunkToResponsesEvents(chunk, state);
+      for (const event of events) yield event;
+    }
+    for (const event of finalizeResponsesStream(state)) yield event;
   } catch (err) {
     if (err instanceof RouteExecutionError) throw err;
     throw wrapExecError(err, route);

@@ -15,6 +15,8 @@ export function buildEndpointUrl(
   endpointType:
     | "completions"
     | "streaming"
+    | "responses"
+    | "responses_streaming"
     | "audio_transcriptions"
     | "audio_translations"
     | "audio_streaming" = "completions",
@@ -29,17 +31,26 @@ export function buildEndpointUrl(
   base = substituteEnvVars(base);
 
   const rawPath =
-    endpointType === "streaming"
-      ? config.endpoints.streaming ?? config.endpoints.completions
-      : endpointType === "audio_transcriptions"
-        ? config.endpoints.audio_transcriptions ?? "/audio/transcriptions"
-        : endpointType === "audio_translations"
-          ? config.endpoints.audio_translations ?? "/audio/translations"
-          : endpointType === "audio_streaming"
-            ? config.endpoints.audio_streaming ??
-              config.endpoints.audio_transcriptions ??
-              "/audio/transcriptions"
-            : config.endpoints.completions;
+    endpointType === "responses"
+      ? config.endpoints.responses ??
+        (config.endpoints.compatible_format === "responses" ? config.endpoints.completions : "/responses")
+      : endpointType === "responses_streaming"
+        ? config.endpoints.responses_streaming ??
+          config.endpoints.responses ??
+          (config.endpoints.compatible_format === "responses"
+            ? config.endpoints.streaming ?? config.endpoints.completions
+            : "/responses")
+        : endpointType === "streaming"
+          ? config.endpoints.streaming ?? config.endpoints.completions
+          : endpointType === "audio_transcriptions"
+            ? config.endpoints.audio_transcriptions ?? "/audio/transcriptions"
+            : endpointType === "audio_translations"
+              ? config.endpoints.audio_translations ?? "/audio/translations"
+              : endpointType === "audio_streaming"
+                ? config.endpoints.audio_streaming ??
+                  config.endpoints.audio_transcriptions ??
+                  "/audio/transcriptions"
+                : config.endpoints.completions;
   const path = rawPath.startsWith("/") ? rawPath.slice(1) : rawPath;
 
   return base.endsWith("/") ? `${base}${path}` : `${base}/${path}`;
@@ -75,11 +86,12 @@ export function buildAuthHeaders(
 
 export function getProviderWireProtocol(
   providerName: string,
-): "openai" | "anthropic" {
+): "openai" | "anthropic" | "responses" {
   try {
     const config = providerConfigLoader.loadProvider(providerName);
     const fmt = config.endpoints.compatible_format?.toLowerCase();
     if (fmt === "anthropic") return "anthropic";
+    if (fmt === "responses") return "responses";
     return "openai";
   } catch {
     return "openai";

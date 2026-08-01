@@ -2,7 +2,10 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 
-import { OpenAIChatCompletionRequest } from "../../../shared/schemas/openai-wire.ts";
+import {
+  OpenAIChatCompletionRequest,
+  OpenAIResponsesRequest,
+} from "../../../shared/schemas/openai-wire.ts";
 import { RoutingError, type ModelRoutingConfig } from "../../../shared/schemas/routing.ts";
 import {
   ConfigNotFoundError,
@@ -10,6 +13,20 @@ import {
   ConfigValidationError,
   modelConfigLoader,
 } from "../../config/model-loader.ts";
+import {
+  chatResponseToResponses,
+  chatStreamChunkToResponsesEvents,
+  createResponsesStreamState,
+  finalizeResponsesStream,
+  responsesStreamStateToChatResponse,
+  responsesRequestToChat,
+  responsesInputItemsForStorage,
+  unsupportedResponsesToolTypes,
+} from "../../format/responses.ts";
+import {
+  getGlobalResponseStore,
+  previousResponseNotFoundError,
+} from "../../format/response-store.ts";
 import { createLogger } from "../../observability/logger.ts";
 import {
   emit,
@@ -34,6 +51,7 @@ import {
   canListModel,
 } from "../../policy/access-control.ts";
 import { FallbackRouter } from "../../routing/fallback.ts";
+import { getProviderWireProtocol } from "../../providers/provider-helpers.ts";
 import { FusionRouter } from "../../routing/fusion/fusion-router.ts";
 import type { FusionRequestContext } from "../../routing/fusion/types.ts";
 import { principal, requireAuth } from "../auth.ts";
@@ -94,6 +112,102 @@ function parsePositiveInt(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+/**
+ * Build the full chat-message array that should be stored for a response:
+ * the chat body messages plus the assistant response message(s).
+ */
+function buildStoredMessages(
+  chatMessages: Array<Record<string, unknown>>,
+  chatResponse: Record<string, unknown>,
+): Array<Record<string, unknown>> {
+  const messages = [...chatMessages];
+  const choices = Array.isArray(chatResponse["choices"]) ? chatResponse["choices"] : [];
+  for (const choice of choices) {
+    if (typeof choice === "object" && choice !== null) {
+      const msg = (choice as Record<string, unknown>)["message"];
+      if (typeof msg === "object" && msg !== null) {
+        messages.push(msg as Record<string, unknown>);
+      }
+    }
+  }
+  return messages;
+}
+
+function responsesResponseToChatResponse(
+  response: Record<string, unknown>,
+): Record<string, unknown> {
+  const output = Array.isArray(response["output"]) ? response["output"] : [];
+  const content: Array<Record<string, unknown>> = [];
+  const toolCalls: Array<Record<string, unknown>> = [];
+  for (const raw of output) {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) continue;
+    const item = raw as Record<string, unknown>;
+    if (item["type"] === "message" && Array.isArray(item["content"])) {
+      for (const rawPart of item["content"] as unknown[]) {
+        if (typeof rawPart !== "object" || rawPart === null || Array.isArray(rawPart)) continue;
+        const part = rawPart as Record<string, unknown>;
+        if (part["type"] === "output_text" && typeof part["text"] === "string") {
+          content.push({ type: "text", text: part["text"] });
+        }
+      }
+    } else if (item["type"] === "function_call") {
+      toolCalls.push({
+        id: item["call_id"] ?? item["id"],
+        type: "function",
+        function: {
+          name: item["name"],
+          arguments: item["arguments"] ?? "",
+        },
+      });
+    }
+  }
+  const message: Record<string, unknown> = {
+    role: "assistant",
+    content: content.length > 0 ? content : null,
+  };
+  if (toolCalls.length > 0) message["tool_calls"] = toolCalls;
+  const usage = response["usage"];
+  return {
+    id: typeof response["id"] === "string" ? response["id"] : `chatcmpl_${crypto.randomUUID()}`,
+    object: "chat.completion",
+    created: typeof response["created_at"] === "number" ? response["created_at"] : Math.floor(Date.now() / 1000),
+    model: response["model"],
+    choices: [{
+      index: 0,
+      message,
+      finish_reason: response["status"] === "incomplete" ? "length" : toolCalls.length > 0 ? "tool_calls" : "stop",
+    }],
+    ...(typeof usage === "object" && usage !== null ? {
+      usage: {
+        prompt_tokens: (usage as Record<string, unknown>)["input_tokens"] ?? 0,
+        completion_tokens: (usage as Record<string, unknown>)["output_tokens"] ?? 0,
+        total_tokens: (usage as Record<string, unknown>)["total_tokens"] ?? 0,
+      },
+    } : {}),
+  };
+}
+
+function completedResponseFromSseChunk(chunk: string): Record<string, unknown> | undefined {
+  for (const line of chunk.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const payload = trimmed.slice(5).trim();
+    if (payload.length === 0 || payload === "[DONE]") continue;
+    try {
+      const parsed = JSON.parse(payload) as Record<string, unknown>;
+      if (parsed["type"] === "response.completed") {
+        const response = parsed["response"];
+        if (typeof response === "object" && response !== null && !Array.isArray(response)) {
+          return response as Record<string, unknown>;
+        }
+      }
+    } catch {
+      // Partial or provider-specific SSE frames are ignored here.
+    }
+  }
+  return undefined;
+}
+
 function shouldPersistCompletion(modelOverride: boolean | undefined): boolean {
   if (modelOverride !== undefined) return modelOverride;
   return /^(1|true|yes|on)$/i.test(process.env.PERSIST_COMPLETIONS?.trim() ?? "");
@@ -107,12 +221,18 @@ function completionPersistenceForRequest(
   return p.completionLoggingEnabled === true;
 }
 
+function responseOwnerId(p: ReturnType<typeof principal>): string | undefined {
+  return p?.userId ?? p?.id;
+}
+
 export function createOpenAIRoutes(): Hono {
   const app = new Hono();
   // Scope auth to OpenAI-only paths so this router does not gate
   // admin/auth/health endpoints when mounted at root.
   app.use("/v1/models", requireAuth({ allowSession: true }));
   app.use("/v1/chat/*", requireAuth({ allowSession: true }));
+  app.use("/v1/responses", requireAuth({ allowSession: true }));
+  app.use("/v1/responses/*", requireAuth({ allowSession: true }));
 
   app.get("/v1/models", async (c) => {
     const p = principal(c);
@@ -145,7 +265,388 @@ export function createOpenAIRoutes(): Hono {
     handleChatCompletions(c, "/v1/chat/completions/stream", { forceStream: true }),
   );
 
+  app.post("/v1/responses", async (c) => handleResponsesNative(c, "/v1/responses"));
+
+  app.get("/v1/responses/:responseId", (c) => {
+    const responseId = c.req.param("responseId");
+    const entry = getGlobalResponseStore().get(responseId, responseOwnerId(principal(c)));
+    if (entry === undefined) {
+      return c.json(previousResponseNotFoundError(responseId), 404);
+    }
+    return c.json(entry.response);
+  });
+
+  app.delete("/v1/responses/:responseId", (c) => {
+    const responseId = c.req.param("responseId");
+    const store = getGlobalResponseStore();
+    const ownerId = responseOwnerId(principal(c));
+    if (store.get(responseId, ownerId) === undefined) {
+      return c.json(previousResponseNotFoundError(responseId), 404);
+    }
+    store.delete(responseId, ownerId);
+    return c.json({ id: responseId, object: "response", deleted: true });
+  });
+
   return app;
+}
+
+/** First-class Responses route. The router may use native Responses upstreams or
+ * convert the request through the existing OpenAI/Anthropic provider paths. */
+async function handleResponsesNative(c: Context, endpointPath: string): Promise<Response> {
+  const requestId = c.get("requestId");
+  const p = principal(c);
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(formatOpenAIError(400, "Invalid JSON body", "invalid_request_error"), 400);
+  }
+  const parsed = OpenAIResponsesRequest.safeParse(body);
+  if (!parsed.success) {
+    return c.json(formatOpenAIError(400, `Invalid request: ${parsed.error.message}`, "invalid_request_error"), 400);
+  }
+
+  const inputRequest = parsed.data as Record<string, unknown>;
+  const storeEnabled = inputRequest["store"] !== false;
+  const effectiveRequest = { ...inputRequest };
+  const previousId = typeof inputRequest["previous_response_id"] === "string"
+    ? inputRequest["previous_response_id"]
+    : undefined;
+  if (previousId !== undefined) {
+    const previous = getGlobalResponseStore().get(previousId, responseOwnerId(p));
+    if (previous === undefined) {
+      return c.json(previousResponseNotFoundError(previousId), 400);
+    }
+    // Rehydrate locally so the same semantics work for native Responses,
+    // OpenAI-compatible, and Anthropic upstreams alike.
+    effectiveRequest["input"] = previous.inputItems ?? previous.messages;
+    const currentInput = inputRequest["input"];
+    if (currentInput !== undefined) {
+      const history = Array.isArray(effectiveRequest["input"])
+        ? [...effectiveRequest["input"] as unknown[]]
+        : [effectiveRequest["input"]];
+      const additions = Array.isArray(currentInput) ? currentInput : [currentInput];
+      effectiveRequest["input"] = [...history, ...additions];
+    }
+    delete effectiveRequest["previous_response_id"];
+  }
+
+  const model = effectiveRequest["model"];
+  if (typeof model !== "string" || model.length === 0) {
+    return c.json(formatOpenAIError(400, "model is required", "invalid_request_error"), 400);
+  }
+  const requestDict = { ...effectiveRequest };
+  const isStream = requestDict["stream"] === true;
+  const estimatedPromptTokens = estimateRequestTokens(requestDict);
+  try {
+    assertCanUseLogicalModel(p, model);
+  } catch (err) {
+    if (err instanceof AccessDeniedError) {
+      return c.json(formatOpenAIError(404, `Model '${model}' not found`, "invalid_request_error"), 404);
+    }
+    throw err;
+  }
+  const limitDecision = reserveRequest(p, estimatedPromptTokens ?? 0);
+  if (!limitDecision.allowed) {
+    return c.json(formatOpenAIError(429, limitDecision.reason ?? "Rate limit exceeded", "rate_limit_exceeded"), 429);
+  }
+
+  let modelConfig: ModelRoutingConfig;
+  try {
+    modelConfig = modelConfigLoader.loadConfig(model);
+  } catch (err) {
+    if (err instanceof ConfigNotFoundError || err instanceof ConfigParseError || err instanceof ConfigValidationError) {
+      return c.json(formatOpenAIError(400, `Model '${model}' not found in routing configuration`, "invalid_request_error"), 400);
+    }
+    throw err;
+  }
+
+  const hasNativeResponsesRoute = modelConfig.model_routings.some((routing) => {
+    if (routing.wire_protocol === "responses") return true;
+    if (routing.wire_protocol !== undefined) return false;
+    try {
+      return getProviderWireProtocol(routing.provider) === "responses";
+    } catch {
+      return false;
+    }
+  });
+  const unsupportedTools = unsupportedResponsesToolTypes(requestDict);
+  if (unsupportedTools.length > 0 && !hasNativeResponsesRoute) {
+    return c.json(
+      formatOpenAIError(
+        400,
+        `Responses tool types are not supported by this model route: ${unsupportedTools.join(", ")}`,
+        "invalid_request_error",
+      ),
+      400,
+    );
+  }
+  if (requestDict["background"] === true && !hasNativeResponsesRoute) {
+    return c.json(
+      formatOpenAIError(400, "background Responses are only supported by native Responses routes", "invalid_request_error"),
+      400,
+    );
+  }
+  if (requestDict["conversation"] !== undefined && !hasNativeResponsesRoute) {
+    return c.json(
+      formatOpenAIError(400, "conversation state is only supported by native Responses routes", "invalid_request_error"),
+      400,
+    );
+  }
+
+  if (modelConfig.fusion?.enabled === true) {
+    return handleResponsesFusion(c, requestDict, model, modelConfig, isStream, endpointPath);
+  }
+
+  recordRequestStart({
+    requestId,
+    endpoint: endpointPath,
+    method: "POST",
+    requestedModel: model,
+    resolvedModel: model,
+    wireProtocol: "responses",
+    isStreaming: isStream,
+    enforceMode: false,
+    promptTokens: estimatedPromptTokens,
+    promptTokensEstimated: true,
+    requestBody: inputRequest,
+    persistCompletions: completionPersistenceForRequest(p, undefined),
+    userId: p?.userId,
+    apiKeyId: p?.apiKeyId,
+    principalRole: p?.role,
+    ownerBypass: p?.ownerBypass,
+  });
+  emit({
+    type: "request.started",
+    at: nowIso(),
+    protocol: "responses",
+    endpoint: endpointPath,
+    model,
+    stream: isStream,
+    enforceEnabled: false,
+  });
+
+  const fallback = new FallbackRouter({ principal: p });
+  const extraHeaders = buildUpstreamExtraHeaders(c);
+  const signal = c.req.raw.signal;
+
+  if (isStream) {
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const encoder = new TextEncoder();
+        let completed: Record<string, unknown> | undefined;
+        const started = performance.now();
+        try {
+          const generator = fallback.streamWithFallback({
+            logicalModel: model,
+            requestData: requestDict,
+            targetProtocol: "responses",
+            extraHeaders,
+            ...(signal !== undefined ? { signal } : {}),
+            ...(p !== undefined ? { principal: p } : {}),
+          });
+          for await (const chunk of generator) {
+            completed = completedResponseFromSseChunk(chunk) ?? completed;
+            const bytes = encoder.encode(chunk);
+            controller.enqueue(bytes);
+            recordRequestProgress({ requestId, streamBytes: bytes.byteLength, streamChunkCount: 1 });
+          }
+          if (storeEnabled && completed !== undefined && typeof completed["id"] === "string") {
+            const chatRequest = responsesRequestToChat(requestDict);
+            const chatResponse = responsesResponseToChatResponse(completed);
+            getGlobalResponseStore().set({
+              id: completed["id"] as string,
+              ownerId: responseOwnerId(p),
+              model,
+              createdAt: typeof completed["created_at"] === "number" ? completed["created_at"] : Math.floor(Date.now() / 1000),
+              status: typeof completed["status"] === "string" ? completed["status"] : "completed",
+              messages: buildStoredMessages((chatRequest["messages"] as Array<Record<string, unknown>>) ?? [], chatResponse),
+              inputItems: responsesInputItemsForStorage(requestDict, completed),
+              response: completed,
+              store: true,
+            });
+          }
+          controller.close();
+          const totalMs = Math.round(performance.now() - started);
+          recordRequestFinish({ requestId, responseStatus: 200, responseTimeMs: totalMs });
+          emit({ type: "request.finished", at: nowIso(), status: 200, totalMs });
+        } catch (err) {
+          const status = err instanceof RoutingError ? routingErrorStatus(err).status : err instanceof RouteExecutionError ? (err.statusCode ?? 502) : 500;
+          const message = err instanceof Error ? err.message : String(err);
+          controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ type: "error", error: { message } })}\n\n`));
+          controller.close();
+          const totalMs = Math.round(performance.now() - started);
+          recordRequestFinish({ requestId, responseStatus: status, responseTimeMs: totalMs, errorMessage: message, errorType: err instanceof Error ? err.name : "Unknown" });
+          emit({ type: "request.finished", at: nowIso(), status, totalMs, errorMessage: message, errorType: err instanceof Error ? err.name : "Unknown" });
+        }
+      },
+    });
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  }
+
+  const started = performance.now();
+  try {
+    const response = await fallback.callWithFallback({
+      logicalModel: model,
+      requestData: requestDict,
+      targetProtocol: "responses",
+      extraHeaders,
+      ...(signal !== undefined ? { signal } : {}),
+      ...(p !== undefined ? { principal: p } : {}),
+    });
+    if (storeEnabled && typeof response["id"] === "string") {
+      const chatRequest = responsesRequestToChat(requestDict);
+      const chatResponse = responsesResponseToChatResponse(response);
+      getGlobalResponseStore().set({
+        id: response["id"] as string,
+        ownerId: responseOwnerId(p),
+        model,
+        createdAt: typeof response["created_at"] === "number" ? response["created_at"] : Math.floor(Date.now() / 1000),
+        status: typeof response["status"] === "string" ? response["status"] : "completed",
+        messages: buildStoredMessages((chatRequest["messages"] as Array<Record<string, unknown>>) ?? [], chatResponse),
+        inputItems: responsesInputItemsForStorage(requestDict, response),
+        response,
+        store: true,
+      });
+    }
+    const usage = typeof response["usage"] === "object" && response["usage"] !== null ? response["usage"] as Record<string, unknown> : {};
+    recordRequestFinish({
+      requestId,
+      responseStatus: 200,
+      responseTimeMs: Math.round(performance.now() - started),
+      responseBody: response,
+      promptTokens: typeof usage["input_tokens"] === "number" ? usage["input_tokens"] : undefined,
+      completionTokens: typeof usage["output_tokens"] === "number" ? usage["output_tokens"] : undefined,
+      totalTokens: typeof usage["total_tokens"] === "number" ? usage["total_tokens"] : undefined,
+    });
+    emit({ type: "request.finished", at: nowIso(), status: 200, totalMs: Math.round(performance.now() - started) });
+    return c.json(response);
+  } catch (err) {
+    const status = err instanceof RoutingError ? routingErrorStatus(err).status : err instanceof RouteExecutionError ? (err.statusCode ?? 502) : 500;
+    const message = err instanceof Error ? err.message : String(err);
+    recordRequestFinish({ requestId, responseStatus: status, responseTimeMs: Math.round(performance.now() - started), errorMessage: message, errorType: err instanceof Error ? err.name : "Unknown" });
+    emit({ type: "request.finished", at: nowIso(), status, totalMs: Math.round(performance.now() - started), errorMessage: message, errorType: err instanceof Error ? err.name : "Unknown" });
+    return c.json(formatOpenAIError(status, message, status >= 500 ? "api_error" : "invalid_request_error"), status as ContentfulStatusCode);
+  }
+}
+
+/** Run the existing fusion engine on its canonical chat representation while
+ * keeping the public Responses response and event contract. */
+async function handleResponsesFusion(
+  c: Context,
+  requestData: Record<string, unknown>,
+  model: string,
+  modelConfig: ModelRoutingConfig,
+  isStream: boolean,
+  endpointPath: string,
+): Promise<Response> {
+  const fusionResponse = await handleFusionRequest(
+    c,
+    responsesRequestToChat(requestData),
+    model,
+    modelConfig,
+    isStream,
+    endpointPath,
+  );
+  if (!isStream || fusionResponse.body === null) {
+    if (isStream) return fusionResponse;
+    const body = await fusionResponse.json() as Record<string, unknown>;
+    if (!Array.isArray(body["choices"])) return c.json(body, fusionResponse.status as ContentfulStatusCode);
+    const response = chatResponseToResponses(body, {
+      model,
+      metadata: typeof requestData["metadata"] === "object" && requestData["metadata"] !== null
+        ? requestData["metadata"] as Record<string, unknown>
+        : undefined,
+      parallelToolCalls: typeof requestData["parallel_tool_calls"] === "boolean"
+        ? requestData["parallel_tool_calls"]
+        : undefined,
+    });
+    if (requestData["store"] !== false && typeof response["id"] === "string") {
+      const chatRequest = responsesRequestToChat(requestData);
+      getGlobalResponseStore().set({
+        id: response["id"] as string,
+        ownerId: responseOwnerId(principal(c)),
+        model,
+        createdAt: typeof response["created_at"] === "number" ? response["created_at"] : Math.floor(Date.now() / 1000),
+        status: typeof response["status"] === "string" ? response["status"] : "completed",
+        messages: buildStoredMessages((chatRequest["messages"] as Array<Record<string, unknown>>) ?? [], body),
+        inputItems: responsesInputItemsForStorage(requestData, response),
+        response,
+        store: true,
+      });
+    }
+    return c.json(response, fusionResponse.status as ContentfulStatusCode);
+  }
+
+  const state = createResponsesStreamState(model);
+  const reader = fusionResponse.body.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let buffer = "";
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const chunks = buffer.split(/(?=data: )/);
+          buffer = chunks.pop() ?? "";
+          for (const chunk of chunks) {
+            for (const event of chatStreamChunkToResponsesEvents(chunk, state)) {
+              controller.enqueue(encoder.encode(event));
+            }
+          }
+        }
+        buffer += decoder.decode();
+        if (buffer.length > 0) {
+          for (const event of chatStreamChunkToResponsesEvents(buffer, state)) {
+            controller.enqueue(encoder.encode(event));
+          }
+        }
+        for (const event of finalizeResponsesStream(state)) {
+          controller.enqueue(encoder.encode(event));
+        }
+        const response = chatResponseToResponses(responsesStreamStateToChatResponse(state), { model });
+        if (requestData["store"] !== false && typeof response["id"] === "string") {
+          const chatRequest = responsesRequestToChat(requestData);
+          getGlobalResponseStore().set({
+            id: response["id"] as string,
+            ownerId: responseOwnerId(principal(c)),
+            model,
+            createdAt: typeof response["created_at"] === "number" ? response["created_at"] : Math.floor(Date.now() / 1000),
+            status: typeof response["status"] === "string" ? response["status"] : "completed",
+            messages: buildStoredMessages((chatRequest["messages"] as Array<Record<string, unknown>>) ?? [], responsesStreamStateToChatResponse(state)),
+            inputItems: responsesInputItemsForStorage(requestData, response),
+            response,
+            store: true,
+          });
+        }
+        controller.close();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ type: "error", error: { message } })}\n\n`));
+        controller.close();
+      } finally {
+        reader.releaseLock();
+      }
+    },
+  });
+  return new Response(stream, {
+    status: fusionResponse.status,
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    },
+  });
 }
 
 async function handleChatCompletions(

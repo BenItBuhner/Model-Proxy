@@ -2,6 +2,13 @@ import { createApp } from "../server/app.ts";
 import { markDraining } from "../server/lifecycle.ts";
 import { activeRequestCount } from "../server/request-log.ts";
 import { createLogger, setLogLevel, type LogLevel } from "../observability/logger.ts";
+import {
+  isResponsesWsPath,
+  onWsClose,
+  onWsDrain,
+  onWsMessage,
+  onWsOpen,
+} from "../server/routes/responses-ws.ts";
 
 const log = createLogger("cli");
 
@@ -94,15 +101,30 @@ function main(): void {
 
   const app = createApp();
 
-  const server = Bun.serve({
-    fetch: app.fetch,
+  const server = Bun.serve<{ request: Request }>({
+    fetch(req, server) {
+      const url = new URL(req.url);
+      const upgradeHeader = req.headers.get("upgrade")?.toLowerCase();
+      if (isResponsesWsPath(url.pathname) && upgradeHeader === "websocket") {
+        const upgraded = server.upgrade(req, {
+          data: { request: req },
+        });
+        if (!upgraded) {
+          return new Response("WebSocket upgrade failed", { status: 426 });
+        }
+        return;
+      }
+      return app.fetch(req, server);
+    },
+    websocket: {
+      open(ws) { onWsOpen(ws); },
+      message(ws, raw) { onWsMessage(ws, raw); },
+      close(ws) { onWsClose(ws); },
+      drain(ws) { onWsDrain(ws); },
+    },
     hostname: args.host,
     port: args.port,
     development: process.env.NODE_ENV !== "production",
-    // Bun's default idleTimeout is 10s, which kills streaming responses
-    // whenever an upstream model stays quiet (long reasoning, provider
-    // queueing, fusion subagent execution). 240s + SSE heartbeats keeps
-    // legitimate streams alive while still reaping dead connections.
     idleTimeout: 240,
   });
 

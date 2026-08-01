@@ -16,7 +16,7 @@ export interface RequestLogRecord {
   resolvedModel: string | undefined;
   apiKeyEnvVar: string | undefined;
   keyHint: string | undefined;
-  wireProtocol: "openai" | "anthropic" | "audio" | undefined;
+  wireProtocol: "openai" | "anthropic" | "audio" | "responses" | undefined;
   userId: string | undefined;
   apiKeyId: string | undefined;
   principalRole: string | undefined;
