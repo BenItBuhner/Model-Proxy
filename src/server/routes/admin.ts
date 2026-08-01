@@ -499,6 +499,18 @@ export function createAdminRoutes(): Hono {
     });
   });
 
+  protectedApp.get("/v1/user/analytics/timeseries", (c) => {
+    const p = principal(c);
+    if (p?.userId === undefined) return c.json({ error: "A persisted user account is required." }, 400);
+    const filters: RequestLogFilters = { ...filtersFromQuery((name) => c.req.query(name)), userId: p.userId };
+    const bucket = c.req.query("bucket") === "day" ? "day" : "hour";
+    return c.json({
+      bucket,
+      filters_applied: filters,
+      points: getAnalyticsTimeseries(filters, bucket),
+    });
+  });
+
   protectedApp.post("/v1/user/api-keys", async (c) => {
     const p = principal(c);
     if (p?.userId === undefined) return c.json({ error: "A persisted user account is required." }, 400);

@@ -14,35 +14,53 @@ export function getAnalyticsSummary(filters: RequestLogFilters = {}, activeReque
   return summary;
 }
 
-export function getAnalyticsTimeseries(filters: RequestLogFilters = {}, bucket: "hour" | "day" = "hour"): Array<{
+export interface AnalyticsTimeseriesPoint {
   bucket: string;
   requests: number;
+  promptTokens: number;
+  completionTokens: number;
   totalTokens: number;
   userCostUsd: number;
   typicalCostUsd: number;
   savedCostUsd: number;
-}> {
+}
+
+export function getAnalyticsTimeseries(
+  filters: RequestLogFilters = {},
+  bucket: "hour" | "day" = "hour",
+): AnalyticsTimeseriesPoint[] {
   const rows = listRequestMetricRows({ limit: undefined, offset: 0, filters }).records;
-  const buckets = new Map<string, { bucket: string; requests: number; totalTokens: number; userCostUsd: number; typicalCostUsd: number; savedCostUsd: number }>();
+  const buckets = new Map<string, AnalyticsTimeseriesPoint>();
   for (const row of rows) {
     const costs = costsForRow(row);
     const key = bucketKey(row.timestamp, bucket);
     const current = buckets.get(key) ?? {
       bucket: key,
       requests: 0,
+      promptTokens: 0,
+      completionTokens: 0,
       totalTokens: 0,
       userCostUsd: 0,
       typicalCostUsd: 0,
       savedCostUsd: 0,
     };
     current.requests += 1;
+    current.promptTokens += row.promptTokens ?? 0;
+    current.completionTokens += row.completionTokens ?? 0;
     current.totalTokens += row.totalTokens ?? 0;
     current.userCostUsd += costs.userCostUsd;
     current.typicalCostUsd += costs.typicalCostUsd;
     current.savedCostUsd += costs.savedCostUsd;
     buckets.set(key, current);
   }
-  return Array.from(buckets.values()).sort((a, b) => a.bucket.localeCompare(b.bucket));
+  return Array.from(buckets.values())
+    .sort((a, b) => a.bucket.localeCompare(b.bucket))
+    .map((point) => ({
+      ...point,
+      userCostUsd: roundMoney(point.userCostUsd),
+      typicalCostUsd: roundMoney(point.typicalCostUsd),
+      savedCostUsd: roundMoney(point.savedCostUsd),
+    }));
 }
 
 function summarizeRows(rows: RequestMetricRow[], activeRequests: number): AnalyticsSummary {

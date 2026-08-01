@@ -182,6 +182,23 @@ export async function getLogs(limit = 100, offset = 0, filters: ObservabilityFil
   return apiFetch(`/v1/admin/logs?${observabilityQuery({ limit, offset, filters })}`);
 }
 
+export interface AnalyticsTimeseriesPoint {
+  bucket: string;
+  requests: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens: number;
+  userCostUsd: number;
+  typicalCostUsd: number;
+  savedCostUsd: number;
+}
+
+export interface AnalyticsTimeseriesResponse {
+  bucket: "hour" | "day";
+  filters_applied: ObservabilityFilters;
+  points: AnalyticsTimeseriesPoint[];
+}
+
 export function getAnalytics(filters: ObservabilityFilters = {}): Promise<{
   filters_applied: ObservabilityFilters;
   summary: AnalyticsSummary;
@@ -189,18 +206,10 @@ export function getAnalytics(filters: ObservabilityFilters = {}): Promise<{
   return apiFetch(`/v1/admin/analytics?${observabilityQuery({ filters })}`);
 }
 
-export function getAnalyticsTimeseries(filters: ObservabilityFilters = {}, bucket: "hour" | "day" = "hour"): Promise<{
-  bucket: "hour" | "day";
-  filters_applied: ObservabilityFilters;
-  points: Array<{
-    bucket: string;
-    requests: number;
-    totalTokens: number;
-    userCostUsd: number;
-    typicalCostUsd: number;
-    savedCostUsd: number;
-  }>;
-}> {
+export function getAnalyticsTimeseries(
+  filters: ObservabilityFilters = {},
+  bucket: "hour" | "day" = "hour",
+): Promise<AnalyticsTimeseriesResponse> {
   return apiFetch(`/v1/admin/analytics/timeseries?${observabilityQuery({ filters, extra: { bucket } })}`);
 }
 
@@ -377,6 +386,13 @@ export function getCurrentUserAnalytics(filters: ObservabilityFilters = {}): Pro
   summary: AnalyticsSummary;
 }> {
   return apiFetch(`/v1/user/analytics?${observabilityQuery({ filters })}`);
+}
+
+export function getCurrentUserAnalyticsTimeseries(
+  filters: ObservabilityFilters = {},
+  bucket: "hour" | "day" = "hour",
+): Promise<AnalyticsTimeseriesResponse> {
+  return apiFetch(`/v1/user/analytics/timeseries?${observabilityQuery({ filters, extra: { bucket } })}`);
 }
 
 export function listUsersAdmin(): Promise<{ users: UserRecord[] }> {

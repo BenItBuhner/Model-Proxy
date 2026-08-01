@@ -29,6 +29,7 @@ type ResolvedTheme = Exclude<ThemePreference, "system">;
 
 const NAV: NavItem[] = [
   { label: "Overview", href: "/", audience: "all" },
+  { label: "Usage", href: "/usage", audience: "all" },
   { label: "Models", href: "/models", audience: "admin" },
   { label: "Providers", href: "/providers", audience: "admin" },
   { label: "Config", href: "/config", audience: "admin" },

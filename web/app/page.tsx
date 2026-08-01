@@ -116,7 +116,13 @@ function DashboardBody(): React.ReactElement {
           <MetricCard label="Status" value={health?.status ?? "..."} tone="phosphor" sublabel={health !== undefined ? `uptime ${formatUptime(health.uptime_seconds)}` : undefined} />
           <MetricCard label="Requests" value={logStats !== undefined ? formatCount(logStats.total) : "..."} sublabel={logStats !== undefined ? `${logStats.active} running` : undefined} />
           <MetricCard label="Tokens" value={analytics !== undefined ? formatCount(analytics.totalTokens) : "..."} sublabel={analytics !== undefined ? `${formatCount(analytics.completionTokens)} output` : undefined} />
-          <MetricCard label="Saved cost" value={analytics !== undefined ? formatUsd(analytics.savedCostUsd) : "-"} sublabel="your account usage" />
+          <MetricCard label="Spend" value={analytics !== undefined ? formatUsd(analytics.userCostUsd) : "-"} sublabel={analytics !== undefined ? `${formatUsd(analytics.savedCostUsd)} saved` : "your account usage"} />
+        </div>
+
+        <div className="mb-6">
+          <Link href="/usage" className="font-mono text-[10px] uppercase tracking-[0.18em] text-phosphor-500 hover:text-phosphor-400">
+            open usage dashboard →
+          </Link>
         </div>
 
         <div className="grid gap-5 xl:grid-cols-3">
@@ -168,12 +174,12 @@ function DashboardBody(): React.ReactElement {
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4 mb-6">
         <MetricCard label="Status" value={health?.status ?? "…"} tone="phosphor" sublabel={health !== undefined ? `uptime ${formatUptime(health.uptime_seconds)}` : undefined} />
         <MetricCard label="Requests" value={logStats !== undefined ? formatCount(logStats.total) : "…"} sublabel={logStats !== undefined ? `${logStats.active} running · ${formatCount(logStats.completed)} completed` : undefined} />
-        <MetricCard label="Saved cost" value={analytics !== undefined ? formatUsd(analytics.savedCostUsd) : "–"} sublabel={analytics !== undefined ? `${formatCount(analytics.totalTokens)} tokens` : "persistent analytics"} />
+        <MetricCard label="Saved cost" value={analytics !== undefined ? formatUsd(analytics.savedCostUsd) : "–"} sublabel={analytics !== undefined ? `${formatCount(analytics.totalTokens)} tokens · ${formatUsd(analytics.userCostUsd)} spend` : "persistent analytics"} />
         <MetricCard label="Avg speed" value={analytics?.avgTokensPerSecond !== undefined ? `${analytics.avgTokensPerSecond.toFixed(1)} tok/s` : "–"} sublabel={analytics?.p95LatencyMs !== undefined ? `p95 ${formatDurationMs(analytics.p95LatencyMs)}` : "completed only"} />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-3">
-        <Panel title="recent activity" className="xl:col-span-2" accent toolbar={<Link href="/observability" className="font-mono text-[10px] uppercase tracking-[0.18em] text-bone-500 hover:text-phosphor-500">observability →</Link>}>
+        <Panel title="recent activity" className="xl:col-span-2" accent toolbar={<div className="flex items-center gap-3"><Link href="/usage" className="font-mono text-[10px] uppercase tracking-[0.18em] text-bone-500 hover:text-phosphor-500">usage →</Link><Link href="/observability" className="font-mono text-[10px] uppercase tracking-[0.18em] text-bone-500 hover:text-phosphor-500">observability →</Link></div>}>
           <Table>
             <Thead>
               <Tr>

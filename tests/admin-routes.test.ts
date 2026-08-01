@@ -215,6 +215,19 @@ describe("admin routes", () => {
     const logs = (await json(logsRes)) as { total_completed: number; records: Array<{ requestId: string }> };
     expect(logs.total_completed).toBe(1);
     expect(logs.records[0]?.requestId).toBe("analytics-route-1");
+
+    const timeseriesRes = await app.request("/v1/admin/analytics/timeseries?bucket=day", { headers: auth() });
+    expect(timeseriesRes.status).toBe(200);
+    const timeseries = (await json(timeseriesRes)) as {
+      bucket: string;
+      points: Array<{ requests: number; totalTokens: number; promptTokens?: number }>;
+    };
+    expect(timeseries.bucket).toBe("day");
+    expect(timeseries.points.length).toBeGreaterThanOrEqual(1);
+    expect(timeseries.points[0]?.requests).toBe(1);
+    expect(timeseries.points[0]?.totalTokens).toBe(10);
+    expect(timeseries.points[0]?.promptTokens).toBe(7);
+
     resetRequestLogForTests();
     rmSync(join(tmpRoot, ".storage"), { recursive: true, force: true });
   });

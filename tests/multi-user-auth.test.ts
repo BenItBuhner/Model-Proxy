@@ -208,6 +208,18 @@ describe("multi-user auth", () => {
     const analyticsBody = await analytics.json() as { summary: { totalRequests: number } };
     expect(analyticsBody.summary.totalRequests).toBe(0);
 
+    const timeseries = await app.request("/v1/user/analytics/timeseries?bucket=day", {
+      headers: { cookie: userCookie },
+    });
+    expect(timeseries.status).toBe(200);
+    const timeseriesBody = await timeseries.json() as {
+      bucket: string;
+      points: Array<{ totalTokens: number }>;
+    };
+    expect(timeseriesBody.bucket).toBe("day");
+    expect(Array.isArray(timeseriesBody.points)).toBe(true);
+    expect(timeseriesBody.points).toHaveLength(0);
+
     const adminUsers = await app.request("/v1/admin/users", { headers: { cookie: userCookie } });
     expect(adminUsers.status).toBe(403);
   });
