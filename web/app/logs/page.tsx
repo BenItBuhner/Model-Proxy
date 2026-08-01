@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { AnalyticsDashboard } from "@/components/observability/analytics-dashboard";
 import { AnalyticsFilters } from "@/components/observability/analytics-filters";
 import { CostSettingsPanel } from "@/components/observability/cost-settings-panel";
 import { formatCount } from "@/components/observability/metric-widget";
 import { RequestDetailPanel, type RequestTrace } from "@/components/observability/request-detail-panel";
 import { RequestLogTable } from "@/components/observability/request-log-table";
+import { UsageDashboard } from "@/components/observability/usage-dashboard";
 import {
   OBSERVABILITY_PAGE_SIZE,
   useObservabilityData,
@@ -21,6 +21,7 @@ import { apiFetch } from "@/lib/api";
 import type { ObservabilityFilters } from "@/lib/endpoints";
 import { openEventStream, type EventStreamHandle } from "@/lib/test-dispatch";
 import type { RequestEvent } from "@/lib/test-events";
+import Link from "next/link";
 
 export default function LogsPage(): React.ReactElement {
   return (
@@ -38,7 +39,7 @@ function ObservabilityBody(): React.ReactElement {
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
   const [trace, setTrace] = useState<RequestTrace | undefined>(undefined);
   const [loadingTrace, setLoadingTrace] = useState(false);
-  const { records, summary, total, completed, active, hasMore, error, reload } =
+  const { records, total, completed, active, hasMore, error, reload } =
     useObservabilityData(filters, offset);
 
   useEffect(() => {
@@ -113,11 +114,19 @@ function ObservabilityBody(): React.ReactElement {
       <PageHeader
         eyebrow="observability"
         title="Observability"
-        description="Persistent request analytics, theoretical costs, savings, cache matches, and verbose routing traces."
+        description="Interactive usage trends, persistent request analytics, savings, cache matches, and verbose routing traces."
         actions={
-          <Button variant="outline" onClick={() => void reload()}>
-            refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/usage"
+              className="font-mono text-[10px] uppercase tracking-[0.18em] text-bone-500 hover:text-phosphor-500"
+            >
+              usage →
+            </Link>
+            <Button variant="outline" onClick={() => void reload()}>
+              refresh
+            </Button>
+          </div>
         }
       />
 
@@ -129,9 +138,13 @@ function ObservabilityBody(): React.ReactElement {
       ) : null}
 
       <div className="space-y-5">
+        <UsageDashboard
+          audience="admin"
+          scope="admin"
+          showCostSettingsSlot={<CostSettingsPanel />}
+        />
+
         <AnalyticsFilters filters={filters} onChange={updateFilters} />
-        <CostSettingsPanel />
-        <AnalyticsDashboard summary={summary} />
 
         <div className="grid gap-5 xl:grid-cols-[minmax(0,5fr)_minmax(420px,4fr)]">
           <Panel

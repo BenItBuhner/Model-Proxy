@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { AuthGuard } from "@/components/auth-guard";
 import { PageHeader } from "@/components/page-header";
@@ -65,7 +66,11 @@ function AccountBody(): React.ReactElement {
 
   return (
     <div className="space-y-6">
-      <PageHeader eyebrow="client" title="Account Console" description="Your API keys, allowed models, limits, and usage." />
+      <PageHeader
+        eyebrow="client"
+        title="Account Console"
+        description="Your API keys, allowed models, limits, and a shortcut into usage trends."
+      />
       {error !== undefined ? <div className="text-alert-500">{error}</div> : null}
 
       <div className="grid gap-5 lg:grid-cols-3">
@@ -76,8 +81,22 @@ function AccountBody(): React.ReactElement {
             <KV label="Completion logging" value={principal?.completionLoggingEnabled ? "enabled" : "disabled"} />
           </PanelBody>
         </Panel>
-        <MetricCard label="Requests" value={analytics !== undefined ? formatCount(analytics.totalRequests) : "..."} sublabel={`${analytics?.activeRequests ?? 0} running`} />
-        <MetricCard label="Tokens" value={analytics !== undefined ? formatCount(analytics.totalTokens) : "..."} sublabel={`${formatCount(analytics?.completionTokens ?? 0)} output`} />
+        <MetricCard
+          label="Spend"
+          value={analytics !== undefined ? formatUsd(analytics.userCostUsd) : "..."}
+          sublabel={`${analytics !== undefined ? formatUsd(analytics.savedCostUsd) : "-"} saved`}
+        />
+        <MetricCard
+          label="Tokens"
+          value={analytics !== undefined ? formatCount(analytics.totalTokens) : "..."}
+          sublabel={`${formatCount(analytics?.completionTokens ?? 0)} output · ${formatCount(analytics?.totalRequests ?? 0)} requests`}
+        />
+      </div>
+
+      <div className="font-mono text-[10px] uppercase tracking-[0.18em]">
+        <Link href="/usage" className="text-phosphor-500 hover:text-phosphor-400">
+          open interactive usage dashboard →
+        </Link>
       </div>
 
       <div className="grid gap-5 xl:grid-cols-3">
@@ -152,4 +171,8 @@ function formatUsdLimit(value: number | undefined): string {
 
 function formatCount(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
+}
+
+function formatUsd(value: number): string {
+  return `$${value.toFixed(6)}`;
 }

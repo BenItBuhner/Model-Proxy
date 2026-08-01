@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { getAnalyticsSummary } from "../src/storage/analytics-store.ts";
+import { getAnalyticsSummary, getAnalyticsTimeseries } from "../src/storage/analytics-store.ts";
 import { listRequestIndexRows, readCompletionEnvelope } from "../src/storage/completion-store.ts";
 import { listRequestMetricRows } from "../src/storage/metrics-store.ts";
 import { writeAnalyticsPricingSettings } from "../src/storage/pricing-store.ts";
@@ -260,5 +260,72 @@ describe("persistent completion storage and analytics", () => {
     expect(hit?.cacheReadTokens).toBe(100);
     expect(hit?.typicalCostUsd).toBe(0.0001);
     expect(miss?.isCacheHit).toBe(false);
+  });
+
+  test("timeseries aggregates tokens and dollar costs by hour and day", () => {
+    recordRequestStart({
+      requestId: "ts-1",
+      endpoint: "/v1/chat/completions",
+      method: "POST",
+      requestedModel: "demo",
+      resolvedModel: "demo",
+      wireProtocol: "openai",
+      isStreaming: false,
+      enforceMode: false,
+      requestBody: { model: "demo", messages: [{ role: "user", content: "one" }] },
+    });
+    recordRequestProgress({
+      requestId: "ts-1",
+      resolvedProvider: "openai",
+      resolvedModel: "gpt-demo",
+      apiKeyEnvVar: "OPENAI_API_KEY",
+    });
+    recordRequestFinish({
+      requestId: "ts-1",
+      responseStatus: 200,
+      responseTimeMs: 40,
+      responseBody: {
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      },
+    });
+
+    recordRequestStart({
+      requestId: "ts-2",
+      endpoint: "/v1/chat/completions",
+      method: "POST",
+      requestedModel: "demo",
+      resolvedModel: "demo",
+      wireProtocol: "openai",
+      isStreaming: false,
+      enforceMode: false,
+      requestBody: { model: "demo", messages: [{ role: "user", content: "two" }] },
+    });
+    recordRequestProgress({
+      requestId: "ts-2",
+      resolvedProvider: "openai",
+      resolvedModel: "gpt-demo",
+      apiKeyEnvVar: "OPENAI_API_KEY",
+    });
+    recordRequestFinish({
+      requestId: "ts-2",
+      responseStatus: 200,
+      responseTimeMs: 55,
+      responseBody: {
+        usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 },
+      },
+    });
+
+    const hourly = getAnalyticsTimeseries({}, "hour");
+    expect(hourly.length).toBeGreaterThanOrEqual(1);
+    const hourTotal = hourly.reduce((sum, point) => sum + point.totalTokens, 0);
+    expect(hourTotal).toBe(45);
+    expect(hourly[0]?.promptTokens).toBeGreaterThan(0);
+    expect(hourly[0]?.completionTokens).toBeGreaterThan(0);
+    expect(hourly[0]?.userCostUsd).toBeGreaterThanOrEqual(0);
+
+    const daily = getAnalyticsTimeseries({}, "day");
+    expect(daily).toHaveLength(1);
+    expect(daily[0]?.requests).toBe(2);
+    expect(daily[0]?.totalTokens).toBe(45);
   });
 });
