@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  anthropicStreamChunkToResponsesEvents,
   chatResponseToResponses,
   chatStreamChunkToResponsesEvents,
   createResponsesStreamState,
@@ -108,6 +109,85 @@ describe("responsesRequestToChat", () => {
         },
       },
     ]);
+  });
+
+  test("flattens namespace functions reversibly and preserves built-in tools", () => {
+    const tools = [
+      {
+        type: "namespace",
+        name: "clock",
+        description: "Time tools.",
+        tools: [
+          {
+            type: "function",
+            name: "curr_time",
+            description: "Return UTC time.",
+            parameters: { type: "object", properties: {} },
+            strict: false,
+          },
+        ],
+      },
+      { type: "web_search_preview", search_context_size: "low" },
+    ];
+    const chat = responsesRequestToChat({ model: "m", input: "hi", tools });
+    expect(chat["tools"]).toEqual([
+      {
+        type: "function",
+        function: {
+          name: "clock__curr_time",
+          description: "Time tools.\n\nReturn UTC time.",
+          parameters: { type: "object", properties: {} },
+          strict: false,
+        },
+      },
+      { type: "web_search_preview", search_context_size: "low" },
+    ]);
+
+    const response = chatResponseToResponses({
+      model: "m",
+      choices: [{
+        finish_reason: "tool_calls",
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: "call_clock",
+            type: "function",
+            function: { name: "clock__curr_time", arguments: "{}" },
+          }],
+        },
+      }],
+    }, { requestTools: tools });
+    expect(response["output"]).toContainEqual(expect.objectContaining({
+      type: "function_call",
+      call_id: "call_clock",
+      namespace: "clock",
+      name: "curr_time",
+      arguments: "{}",
+    }));
+  });
+
+  test("round-trips namespaced function-call history through Chat", () => {
+    const request = {
+      model: "m",
+      tools: [{
+        type: "namespace",
+        name: "clock",
+        tools: [{ type: "function", name: "sleep", parameters: { type: "object" } }],
+      }],
+      input: [
+        { type: "function_call", call_id: "call_1", namespace: "clock", name: "sleep", arguments: '{"duration_ms":10}' },
+        { type: "function_call_output", call_id: "call_1", output: "done" },
+      ],
+    };
+    const chat = responsesRequestToChat(request);
+    const messages = chat["messages"] as Array<Record<string, unknown>>;
+    expect(messages[0]?.["tool_calls"]).toEqual([{
+      id: "call_1",
+      type: "function",
+      function: { name: "clock__sleep", arguments: '{"duration_ms":10}' },
+    }]);
+    expect(messages[1]).toEqual({ role: "tool", tool_call_id: "call_1", content: "done" });
   });
 });
 
@@ -241,5 +321,74 @@ describe("responses streaming adapter", () => {
     expect(first).toEqual([]);
     expect(second.join("")).toContain('"delta":"split"');
     expect(state.text).toBe("split");
+  });
+
+  test("keeps streamed reasoning separate from assistant output text", () => {
+    const state = createResponsesStreamState("m", "resp_reasoning");
+    const events = [
+      ...chatStreamChunkToResponsesEvents(
+        'data: {"choices":[{"delta":{"reasoning_content":"private thought"}}]}\n\n', state,
+      ),
+      ...chatStreamChunkToResponsesEvents(
+        'data: {"choices":[{"delta":{"content":"verbatim answer"},"finish_reason":"stop"}]}\n\n', state,
+      ),
+      ...finalizeResponsesStream(state),
+    ].join("");
+    expect(events).toContain("event: response.reasoning_text.delta");
+    expect(events).toContain('"type":"reasoning"');
+    expect(events).toContain('"output_text":"verbatim answer"');
+    expect(state.text).toBe("verbatim answer");
+    expect(state.reasoningText).toBe("private thought");
+  });
+
+  test("restores namespace on streamed Chat tool calls", () => {
+    const tools = [{
+      type: "namespace",
+      name: "clock",
+      tools: [{ type: "function", name: "sleep", parameters: { type: "object" } }],
+    }];
+    const state = createResponsesStreamState("m", "resp_tool", tools);
+    const events = [
+      ...chatStreamChunkToResponsesEvents(
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"clock__sleep","arguments":"{\\"duration_ms\\":"}}]}}]}\n\n',
+        state,
+      ),
+      ...chatStreamChunkToResponsesEvents(
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"10}"}}]},"finish_reason":"tool_calls"}]}\n\n',
+        state,
+      ),
+      ...finalizeResponsesStream(state),
+    ].join("");
+    expect(events).toContain('"namespace":"clock"');
+    expect(events).toContain('"name":"sleep"');
+    expect(events).toContain('"arguments":"{\\"duration_ms\\":10}"');
+  });
+
+  test("streams Anthropic tool_use blocks as Responses function calls", () => {
+    const tools = [{
+      type: "namespace",
+      name: "clock",
+      tools: [{ type: "function", name: "sleep", parameters: { type: "object" } }],
+    }];
+    const state = createResponsesStreamState("m", "resp_anthropic_tool", tools);
+    const events = [
+      ...anthropicStreamChunkToResponsesEvents(
+        'data: {"type":"message_start","message":{"model":"m"}}\n\n', state,
+      ),
+      ...anthropicStreamChunkToResponsesEvents(
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_a","name":"clock__sleep","input":{}}}\n\n', state,
+      ),
+      ...anthropicStreamChunkToResponsesEvents(
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"duration_ms\\":10}"}}\n\n', state,
+      ),
+      ...anthropicStreamChunkToResponsesEvents(
+        'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}\n\n', state,
+      ),
+      ...finalizeResponsesStream(state),
+    ].join("");
+    expect(events).toContain('"namespace":"clock"');
+    expect(events).toContain('"name":"sleep"');
+    expect(events).toContain('"arguments":"{\\"duration_ms\\":10}"');
+    expect(events).toContain("event: response.completed");
   });
 });

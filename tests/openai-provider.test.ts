@@ -154,4 +154,18 @@ describe("OpenAIProvider buildPayload: chat_template_kwargs passthrough", () => 
     expect(payload["max_completion_tokens"]).toBe(1024);
     expect("max_tokens" in payload).toBe(false);
   });
+
+  test("forwards seed, parallel tool choice, and reasoning controls", () => {
+    const provider = makeProvider("openai");
+    const payload = provider["buildPayload"](baseArgs({
+      seed: 7,
+      prompt_cache_key: "cache-key",
+      parallel_tool_calls: false,
+      reasoning: { effort: "medium" },
+    }));
+    expect(payload["seed"]).toBe(7);
+    expect(payload["prompt_cache_key"]).toBe("cache-key");
+    expect(payload["parallel_tool_calls"]).toBe(false);
+    expect(payload["reasoning"]).toEqual({ effort: "medium" });
+  });
 });

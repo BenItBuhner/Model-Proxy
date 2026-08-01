@@ -94,6 +94,25 @@ describe("openaiToAnthropicRequest", () => {
       },
     ]);
   });
+
+  test("maps Chat tool-choice semantics to Anthropic", () => {
+    const base = {
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+      tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object" } } }],
+    };
+    expect(openaiToAnthropicRequest({ ...base, tool_choice: "auto" })["tool_choice"])
+      .toEqual({ type: "auto" });
+    expect(openaiToAnthropicRequest({ ...base, tool_choice: "required" })["tool_choice"])
+      .toEqual({ type: "any" });
+    const disabled = openaiToAnthropicRequest({ ...base, tool_choice: "none" });
+    expect(disabled["tool_choice"]).toBeUndefined();
+    expect(disabled["tools"]).toBeUndefined();
+    expect(openaiToAnthropicRequest({
+      ...base,
+      tool_choice: { type: "function", function: { name: "lookup" } },
+    })["tool_choice"]).toEqual({ type: "tool", name: "lookup" });
+  });
 });
 
 describe("anthropicToOpenaiRequest", () => {

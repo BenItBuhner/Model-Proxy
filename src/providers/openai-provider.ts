@@ -391,8 +391,15 @@ export class OpenAIProvider extends AbstractProvider {
       payload["logit_bias"] = args.logit_bias;
     }
     if (args.user !== undefined && !isGemini) payload["user"] = args.user;
+    if (args.seed !== undefined && !isGemini) payload["seed"] = args.seed;
+    if (args.prompt_cache_key !== undefined && !isGemini) {
+      payload["prompt_cache_key"] = args.prompt_cache_key;
+    }
     if (args.tools !== undefined) payload["tools"] = args.tools;
     if (args.tool_choice !== undefined) payload["tool_choice"] = args.tool_choice;
+    if (args.parallel_tool_calls !== undefined && !isGemini) {
+      payload["parallel_tool_calls"] = args.parallel_tool_calls;
+    }
     if (args.response_format !== undefined && !isGemini) {
       payload["response_format"] = args.response_format;
     }

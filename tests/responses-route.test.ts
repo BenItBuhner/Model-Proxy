@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../src/server/app.ts";
 import { providerRegistry } from "../src/providers/registry.ts";
-import type { BaseProvider, ProviderCallContext, ResponsesCallArgs } from "../src/providers/base.ts";
+import type { BaseProvider, OpenAICallArgs, ProviderCallContext, ResponsesCallArgs } from "../src/providers/base.ts";
 import type { ProviderConfig } from "../shared/schemas/provider.ts";
 import { modelConfigLoader } from "../src/config/model-loader.ts";
 import { providerConfigLoader } from "../src/config/provider-loader.ts";
@@ -18,9 +18,47 @@ const originalClientKey = process.env.CLIENT_API_KEY;
 const root = mkdtempSync(join(tmpdir(), "mp-responses-route-"));
 
 class RouteResponsesFake implements BaseProvider {
+  static lastOpenAIArgs: OpenAICallArgs | undefined;
   readonly providerName = "route-responses-fake";
   readonly config = providerConfig;
   readonly wireProtocol = "responses" as const;
+
+  async callOpenAI(args: OpenAICallArgs, _ctx: ProviderCallContext) {
+    RouteResponsesFake.lastOpenAIArgs = args;
+    const tools = Array.isArray(args.tools) ? args.tools : [];
+    const first = typeof tools[0] === "object" && tools[0] !== null
+      ? tools[0] as Record<string, unknown>
+      : {};
+    const fn = typeof first["function"] === "object" && first["function"] !== null
+      ? first["function"] as Record<string, unknown>
+      : {};
+    if (typeof fn["name"] === "string") {
+      return {
+        id: "chatcmpl_route_tool",
+        object: "chat.completion",
+        model: args.model,
+        choices: [{
+          index: 0,
+          finish_reason: "tool_calls",
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: "call_route_namespace",
+              type: "function",
+              function: { name: fn["name"], arguments: "{}" },
+            }],
+          },
+        }],
+      };
+    }
+    return {
+      id: "chatcmpl_route_text",
+      object: "chat.completion",
+      model: args.model,
+      choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "chat route" } }],
+    };
+  }
 
   async callResponses(args: ResponsesCallArgs, _ctx: ProviderCallContext) {
     const input = args.input;
@@ -147,6 +185,7 @@ describe("Responses HTTP route", () => {
 
   beforeEach(() => {
     resetGlobalResponseStoreForTests().clear();
+    RouteResponsesFake.lastOpenAIArgs = undefined;
   });
 
   afterAll(() => {
@@ -256,18 +295,39 @@ describe("Responses HTTP route", () => {
     expect((await response.json() as Record<string, unknown>).output_text).toBe("route answer");
   });
 
-  test("rejects native-only features instead of silently dropping them", async () => {
+  test("adapts namespace tools on Chat routes without silently dropping other declarations", async () => {
     const response = await app.request("http://localhost/v1/responses", {
       method: "POST",
       headers: headers(),
       body: JSON.stringify({
         model: "route-responses-chat",
-        input: "search",
-        tools: [{ type: "web_search_preview" }],
+        input: "use the clock",
+        tools: [
+          {
+            type: "namespace",
+            name: "clock",
+            description: "Time tools.",
+            tools: [{ type: "function", name: "curr_time", parameters: { type: "object", properties: {} } }],
+          },
+          { type: "web_search_preview" },
+        ],
       }),
     });
-    expect(response.status).toBe(400);
-    expect((await response.json() as Record<string, unknown>).error).toMatchObject({ type: "invalid_request_error" });
+    expect(response.status).toBe(200);
+    const body = await response.json() as Record<string, unknown>;
+    expect(body["output"]).toContainEqual(expect.objectContaining({
+      type: "function_call",
+      namespace: "clock",
+      name: "curr_time",
+      arguments: "{}",
+    }));
+    expect(RouteResponsesFake.lastOpenAIArgs?.tools).toEqual([
+      expect.objectContaining({
+        type: "function",
+        function: expect.objectContaining({ name: "clock__curr_time" }),
+      }),
+      { type: "web_search_preview" },
+    ]);
   });
 
   test("honors store=false and reports missing previous responses", async () => {

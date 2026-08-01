@@ -43,9 +43,13 @@ export interface OpenAICallArgs {
   frequency_penalty?: number | undefined;
   logit_bias?: Record<string, number> | undefined;
   user?: string | undefined;
+  seed?: number | undefined;
+  prompt_cache_key?: string | undefined;
   tools?: unknown[] | undefined;
   tool_choice?: unknown;
+  parallel_tool_calls?: boolean | undefined;
   response_format?: unknown;
+  reasoning?: unknown;
   [key: string]: unknown;
 }
 

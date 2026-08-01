@@ -111,35 +111,129 @@ function normalizeRole(role: unknown): "system" | "user" | "assistant" | "tool" 
   return "user";
 }
 
-function toolDefinitionFromResponses(tool: unknown): Record<string, unknown> | undefined {
-  if (!isObject(tool)) return undefined;
-  const type = asString(tool["type"] || "function");
+interface ResponsesToolIdentity {
+  name: string;
+  namespace?: string;
+}
 
-  if (type === "function") {
-    // Chat-style already: { type, function: { name, ... } }
-    if (isObject(tool["function"])) {
-      return {
-        type: "function",
-        function: tool["function"],
-      };
-    }
-    // Responses-style: { type: "function", name, description, parameters }
-    const name = asString(tool["name"]);
-    if (!name) return undefined;
-    const fn: Record<string, unknown> = { name };
-    if (tool["description"] !== undefined) fn["description"] = tool["description"];
-    if (tool["parameters"] !== undefined) fn["parameters"] = tool["parameters"];
-    if (tool["strict"] !== undefined) fn["strict"] = tool["strict"];
-    return { type: "function", function: fn };
+interface ConvertedResponsesTools {
+  tools: Record<string, unknown>[];
+  identities: Map<string, ResponsesToolIdentity>;
+}
+
+const CHAT_TOOL_NAME_MAX_LENGTH = 64;
+
+function toolNameHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
   }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
 
-  // Pass through other tool types unchanged when possible.
-  return tool;
+function namespacedChatToolName(namespace: string, name: string): string {
+  const natural = namespace.endsWith("_") || name.startsWith("_")
+    ? `${namespace}${name}`
+    : `${namespace}__${name}`;
+  if (natural.length <= CHAT_TOOL_NAME_MAX_LENGTH) return natural;
+  const suffix = `_${toolNameHash(`${namespace}\0${name}`)}`;
+  return `${natural.slice(0, CHAT_TOOL_NAME_MAX_LENGTH - suffix.length)}${suffix}`;
+}
+
+function responseFunctionToChat(
+  tool: Record<string, unknown>,
+  name: string,
+  namespaceDescription?: unknown,
+): Record<string, unknown> {
+  const fn: Record<string, unknown> = { name };
+  const childDescription = tool["description"];
+  if (typeof namespaceDescription === "string" && namespaceDescription.length > 0) {
+    fn["description"] = typeof childDescription === "string" && childDescription.length > 0
+      ? `${namespaceDescription}\n\n${childDescription}`
+      : namespaceDescription;
+  } else if (childDescription !== undefined) {
+    fn["description"] = childDescription;
+  }
+  if (tool["parameters"] !== undefined) fn["parameters"] = tool["parameters"];
+  if (tool["strict"] !== undefined) fn["strict"] = tool["strict"];
+  return { type: "function", function: fn };
+}
+
+/** Convert Responses tools without silently dropping declarations. */
+function convertResponsesTools(tools: unknown): ConvertedResponsesTools {
+  const converted: Record<string, unknown>[] = [];
+  const identities = new Map<string, ResponsesToolIdentity>();
+  if (!Array.isArray(tools)) return { tools: converted, identities };
+
+  for (const rawTool of tools) {
+    if (!isObject(rawTool)) continue;
+    const type = asString(rawTool["type"] || "function");
+    if (type === "function") {
+      if (isObject(rawTool["function"])) {
+        const fn = rawTool["function"];
+        const name = asString(fn["name"]);
+        if (name.length > 0) identities.set(name, { name });
+        converted.push({ type: "function", function: fn });
+      } else {
+        const name = asString(rawTool["name"]);
+        if (name.length === 0) continue;
+        identities.set(name, { name });
+        converted.push(responseFunctionToChat(rawTool, name));
+      }
+      continue;
+    }
+
+    if (type === "namespace") {
+      const namespace = asString(rawTool["name"]);
+      const children = Array.isArray(rawTool["tools"]) ? rawTool["tools"] : [];
+      for (const rawChild of children) {
+        if (!isObject(rawChild) || asString(rawChild["type"] || "function") !== "function") continue;
+        const childName = asString(rawChild["name"]);
+        if (namespace.length === 0 || childName.length === 0) continue;
+        const chatName = namespacedChatToolName(namespace, childName);
+        const existing = identities.get(chatName);
+        if (existing !== undefined &&
+          (existing.name !== childName || existing.namespace !== namespace)) {
+          throw new Error(`Responses tools cannot be represented without a name collision: ${chatName}`);
+        }
+        identities.set(chatName, { namespace, name: childName });
+        converted.push(responseFunctionToChat(rawChild, chatName, rawTool["description"]));
+      }
+      continue;
+    }
+
+    // There is no generic Chat representation for provider-hosted built-ins.
+    // Keep them intact and let the configured upstream accept or reject them.
+    converted.push(rawTool);
+  }
+  return { tools: converted, identities };
+}
+
+function toolIdentityForChatName(
+  name: string,
+  identities: Map<string, ResponsesToolIdentity>,
+): ResponsesToolIdentity {
+  return identities.get(name) ?? { name };
+}
+
+function responseCallNameToChat(
+  item: Record<string, unknown>,
+  identities: Map<string, ResponsesToolIdentity>,
+): string {
+  const namespace = asString(item["namespace"]);
+  const name = asString(item["name"]);
+  if (namespace.length === 0) return name;
+  for (const [chatName, identity] of identities) {
+    if (identity.namespace === namespace && identity.name === name) return chatName;
+  }
+  return namespacedChatToolName(namespace, name);
 }
 
 function appendInputItem(
   messages: Array<Record<string, unknown>>,
   item: unknown,
+  toolIdentities: Map<string, ResponsesToolIdentity>,
 ): void {
   if (typeof item === "string") {
     const text = item.trim().length > 0 ? item : item;
@@ -172,7 +266,7 @@ function appendInputItem(
 
   if (type === "function_call" || type === "custom_tool_call") {
     const callId = asString(item["call_id"] ?? item["id"] ?? newId("call"));
-    const name = asString(item["name"]);
+    const name = responseCallNameToChat(item, toolIdentities);
     const args =
       typeof item["arguments"] === "string"
         ? item["arguments"]
@@ -224,6 +318,7 @@ export function responsesRequestToChat(
   request: Record<string, unknown>,
 ): Record<string, unknown> {
   const messages: Array<Record<string, unknown>> = [];
+  const convertedTools = convertResponsesTools(request["tools"]);
 
   const instructions = request["instructions"];
   if (typeof instructions === "string" && instructions.length > 0) {
@@ -234,9 +329,9 @@ export function responsesRequestToChat(
   if (typeof input === "string") {
     messages.push({ role: "user", content: input });
   } else if (Array.isArray(input)) {
-    for (const item of input) appendInputItem(messages, item);
+    for (const item of input) appendInputItem(messages, item, convertedTools.identities);
   } else if (isObject(input)) {
-    appendInputItem(messages, input);
+    appendInputItem(messages, input, convertedTools.identities);
   } else if (input !== undefined && input !== null) {
     messages.push({ role: "user", content: asString(input) });
   }
@@ -259,6 +354,7 @@ export function responsesRequestToChat(
     "frequency_penalty",
     "user",
     "seed",
+    "prompt_cache_key",
     "tool_choice",
     "parallel_tool_calls",
     "response_format",
@@ -283,27 +379,15 @@ export function responsesRequestToChat(
     chat["max_completion_tokens"] = maxOut;
   }
 
-  if (Array.isArray(request["tools"])) {
-    const tools = request["tools"]
-      .map((tool) => toolDefinitionFromResponses(tool))
-      .filter((tool): tool is Record<string, unknown> =>
-        tool !== undefined && asString(tool["type"]) === "function"
-      );
-    if (tools.length > 0) chat["tools"] = tools;
+  if (convertedTools.tools.length > 0) chat["tools"] = convertedTools.tools;
+
+  const toolChoice = request["tool_choice"];
+  if (isObject(toolChoice) && toolChoice["type"] === "function") {
+    const chatName = responseCallNameToChat(toolChoice, convertedTools.identities);
+    chat["tool_choice"] = { type: "function", function: { name: chatName } };
   }
 
   return chat;
-}
-
-/** Tool types that cannot be represented by the Chat Completions contract. */
-export function unsupportedResponsesToolTypes(request: Record<string, unknown>): string[] {
-  if (!Array.isArray(request["tools"])) return [];
-  return [...new Set(
-    request["tools"]
-      .filter(isObject)
-      .map((tool) => asString(tool["type"] || "function"))
-      .filter((type) => type !== "function"),
-  )];
 }
 
 /** Canonical item history for durable previous_response_id chaining. */
@@ -336,6 +420,7 @@ export function chatResponseToResponses(
     responseId?: string;
     metadata?: Record<string, unknown>;
     parallelToolCalls?: boolean;
+    requestTools?: unknown[];
   } = {},
 ): Record<string, unknown> {
   const responseId =
@@ -370,7 +455,8 @@ export function chatResponseToResponses(
       type: "reasoning",
       id: newId("rsn"),
       status: status === "incomplete" ? "incomplete" : "completed",
-      summary: [{ type: "summary_text", text: reasoning }],
+      summary: [],
+      content: [{ type: "reasoning_text", text: reasoning }],
     });
   }
 
@@ -397,18 +483,22 @@ export function chatResponseToResponses(
   }
 
   if (Array.isArray(message["tool_calls"])) {
+    const toolIdentities = convertResponsesTools(options.requestTools).identities;
     for (const raw of message["tool_calls"]) {
       if (!isObject(raw)) continue;
       const fn = isObject(raw["function"]) ? raw["function"] : {};
       const callId = asString(raw["id"] || newId("call"));
-      output.push({
+      const identity = toolIdentityForChatName(asString(fn["name"]), toolIdentities);
+      const call: Record<string, unknown> = {
         type: "function_call",
         id: newId("fc"),
         call_id: callId,
-        name: asString(fn["name"]),
+        name: identity.name,
         arguments: asString(fn["arguments"] ?? ""),
         status: "completed",
-      });
+      };
+      if (identity.namespace !== undefined) call["namespace"] = identity.namespace;
+      output.push(call);
     }
   }
 
@@ -478,15 +568,26 @@ export interface ResponsesStreamState {
   model: string;
   createdAt: number;
   textItemId: string;
+  reasoningItemId: string;
   textContentIndex: number;
   outputIndex: number;
   started: boolean;
   textStarted: boolean;
+  reasoningStarted: boolean;
   text: string;
+  reasoningText: string;
   toolCalls: Map<
     number,
-    { itemId: string; callId: string; name: string; arguments: string; started: boolean }
+    {
+      itemId: string;
+      callId: string;
+      name: string;
+      namespace?: string;
+      arguments: string;
+      started: boolean;
+    }
   >;
+  toolIdentities: Map<string, ResponsesToolIdentity>;
   usage: Record<string, unknown> | undefined;
   finishReason: string | null;
   sequence: number;
@@ -497,18 +598,23 @@ export interface ResponsesStreamState {
 export function createResponsesStreamState(
   model: string,
   responseId?: string,
+  requestTools?: unknown[],
 ): ResponsesStreamState {
   return {
     responseId: responseId ?? newId("resp"),
     model,
     createdAt: Math.floor(Date.now() / 1000),
     textItemId: newId("msg"),
+    reasoningItemId: newId("rsn"),
     textContentIndex: 0,
     outputIndex: 0,
     started: false,
     textStarted: false,
+    reasoningStarted: false,
     text: "",
+    reasoningText: "",
     toolCalls: new Map(),
+    toolIdentities: convertResponsesTools(requestTools).identities,
     usage: undefined,
     finishReason: null,
     sequence: 0,
@@ -522,15 +628,27 @@ export function responsesStreamStateToChatResponse(
 ): Record<string, unknown> {
   const toolCalls = [...state.toolCalls.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([, entry]) => ({
-      id: entry.callId,
-      type: "function",
-      function: { name: entry.name, arguments: entry.arguments },
-    }));
+    .map(([, entry]) => {
+      let chatName = entry.name;
+      if (entry.namespace !== undefined) {
+        for (const [candidate, identity] of state.toolIdentities) {
+          if (identity.namespace === entry.namespace && identity.name === entry.name) {
+            chatName = candidate;
+            break;
+          }
+        }
+      }
+      return {
+        id: entry.callId,
+        type: "function",
+        function: { name: chatName, arguments: entry.arguments },
+      };
+    });
   const message: Record<string, unknown> = {
     role: "assistant",
     content: state.text || null,
   };
+  if (state.reasoningText.length > 0) message["reasoning_content"] = state.reasoningText;
   if (toolCalls.length > 0) message["tool_calls"] = toolCalls;
   return {
     id: `chatcmpl-${state.responseId}`,
@@ -600,14 +718,43 @@ function ensureTextItem(state: ResponsesStreamState, out: ResponsesEvent[]): voi
     content: [],
   };
   pushEvent(state, "response.output_item.added", {
-    output_index: state.outputIndex,
+    output_index: state.outputIndex + (state.reasoningStarted ? 1 : 0),
     item,
   }, out);
   pushEvent(state, "response.content_part.added", {
     item_id: state.textItemId,
-    output_index: state.outputIndex,
+    output_index: state.outputIndex + (state.reasoningStarted ? 1 : 0),
     content_index: state.textContentIndex,
     part: { type: "output_text", text: "", annotations: [] },
+  }, out);
+}
+
+function emitReasoningDelta(
+  state: ResponsesStreamState,
+  delta: string,
+  out: ResponsesEvent[],
+): void {
+  if (delta.length === 0) return;
+  ensureStarted(state, out);
+  if (!state.reasoningStarted) {
+    state.reasoningStarted = true;
+    pushEvent(state, "response.output_item.added", {
+      output_index: state.outputIndex,
+      item: {
+        type: "reasoning",
+        id: state.reasoningItemId,
+        status: "in_progress",
+        summary: [],
+        content: [],
+      },
+    }, out);
+  }
+  state.reasoningText += delta;
+  pushEvent(state, "response.reasoning_text.delta", {
+    item_id: state.reasoningItemId,
+    output_index: state.outputIndex,
+    content_index: 0,
+    delta,
   }, out);
 }
 
@@ -622,7 +769,7 @@ function emitTextDelta(
   state.text += delta;
   pushEvent(state, "response.output_text.delta", {
     item_id: state.textItemId,
-    output_index: state.outputIndex,
+    output_index: state.outputIndex + (state.reasoningStarted ? 1 : 0),
     content_index: state.textContentIndex,
     delta,
   }, out);
@@ -639,10 +786,12 @@ function emitToolCallDelta(
   if (entry === undefined) {
     const callId = asString(piece["id"] || newId("call"));
     const fn = isObject(piece["function"]) ? piece["function"] : {};
+    const identity = toolIdentityForChatName(asString(fn["name"]), state.toolIdentities);
     entry = {
       itemId: newId("fc"),
       callId,
-      name: asString(fn["name"]),
+      name: identity.name,
+      ...(identity.namespace !== undefined ? { namespace: identity.namespace } : {}),
       arguments: asString(fn["arguments"] ?? ""),
       started: false,
     };
@@ -653,7 +802,9 @@ function emitToolCallDelta(
     }
     const fn = isObject(piece["function"]) ? piece["function"] : {};
     if (typeof fn["name"] === "string" && fn["name"].length > 0) {
-      entry.name = fn["name"];
+      const identity = toolIdentityForChatName(fn["name"], state.toolIdentities);
+      entry.name = identity.name;
+      if (identity.namespace !== undefined) entry.namespace = identity.namespace;
     }
     if (typeof fn["arguments"] === "string") {
       entry.arguments += fn["arguments"];
@@ -662,15 +813,16 @@ function emitToolCallDelta(
 
   if (!entry.started) {
     entry.started = true;
-    const outputIndex = state.textStarted
-      ? state.outputIndex + 1 + index
-      : state.outputIndex + index;
+    const outputIndex = state.outputIndex +
+      (state.reasoningStarted ? 1 : 0) +
+      (state.textStarted ? 1 : 0) + index;
     pushEvent(state, "response.output_item.added", {
       output_index: outputIndex,
       item: {
         type: "function_call",
         id: entry.itemId,
         call_id: entry.callId,
+        ...(entry.namespace !== undefined ? { namespace: entry.namespace } : {}),
         name: entry.name,
         arguments: "",
         status: "in_progress",
@@ -681,9 +833,9 @@ function emitToolCallDelta(
   const fn = isObject(piece["function"]) ? piece["function"] : {};
   const argsDelta = typeof fn["arguments"] === "string" ? fn["arguments"] : "";
   if (argsDelta.length > 0) {
-    const outputIndex = state.textStarted
-      ? state.outputIndex + 1 + index
-      : state.outputIndex + index;
+    const outputIndex = state.outputIndex +
+      (state.reasoningStarted ? 1 : 0) +
+      (state.textStarted ? 1 : 0) + index;
     pushEvent(state, "response.function_call_arguments.delta", {
       item_id: entry.itemId,
       output_index: outputIndex,
@@ -754,8 +906,7 @@ export function chatStreamChunkToResponsesEvents(
       emitTextDelta(state, delta["content"], out);
     }
     if (typeof delta["reasoning_content"] === "string") {
-      // Surface reasoning as plain text delta when present (best-effort).
-      emitTextDelta(state, delta["reasoning_content"], out);
+      emitReasoningDelta(state, delta["reasoning_content"], out);
     }
     if (Array.isArray(delta["tool_calls"])) {
       for (const tc of delta["tool_calls"]) {
@@ -796,9 +947,27 @@ export function anthropicStreamChunkToResponsesEvents(
       ensureStarted(state, out);
       continue;
     }
+    if (type === "content_block_start") {
+      const block = isObject(parsed["content_block"]) ? parsed["content_block"] : {};
+      if (block["type"] === "tool_use") {
+        const index = typeof parsed["index"] === "number" ? parsed["index"] : 0;
+        emitToolCallDelta(state, index, {
+          id: block["id"],
+          function: { name: block["name"], arguments: "" },
+        }, out);
+      }
+      continue;
+    }
     if (type === "content_block_delta") {
       const delta = isObject(parsed["delta"]) ? parsed["delta"] : {};
       if (typeof delta["text"] === "string") emitTextDelta(state, delta["text"], out);
+      if (typeof delta["thinking"] === "string") emitReasoningDelta(state, delta["thinking"], out);
+      if (typeof delta["partial_json"] === "string") {
+        const index = typeof parsed["index"] === "number" ? parsed["index"] : 0;
+        emitToolCallDelta(state, index, {
+          function: { arguments: delta["partial_json"] },
+        }, out);
+      }
       continue;
     }
     if (type === "message_delta") {
@@ -833,21 +1002,35 @@ export function finalizeResponsesStream(state: ResponsesStreamState): string[] {
   const out: ResponsesEvent[] = [];
   ensureStarted(state, out);
 
+  if (state.reasoningStarted) {
+    pushEvent(state, "response.output_item.done", {
+      output_index: state.outputIndex,
+      item: {
+        type: "reasoning",
+        id: state.reasoningItemId,
+        status: "completed",
+        summary: [],
+        content: [{ type: "reasoning_text", text: state.reasoningText }],
+      },
+    }, out);
+  }
+
   if (state.textStarted) {
+    const textOutputIndex = state.outputIndex + (state.reasoningStarted ? 1 : 0);
     pushEvent(state, "response.output_text.done", {
       item_id: state.textItemId,
-      output_index: state.outputIndex,
+      output_index: textOutputIndex,
       content_index: state.textContentIndex,
       text: state.text,
     }, out);
     pushEvent(state, "response.content_part.done", {
       item_id: state.textItemId,
-      output_index: state.outputIndex,
+      output_index: textOutputIndex,
       content_index: state.textContentIndex,
       part: { type: "output_text", text: state.text, annotations: [] },
     }, out);
     pushEvent(state, "response.output_item.done", {
-      output_index: state.outputIndex,
+      output_index: textOutputIndex,
       item: {
         type: "message",
         id: state.textItemId,
@@ -862,9 +1045,9 @@ export function finalizeResponsesStream(state: ResponsesStreamState): string[] {
 
   const toolEntries = [...state.toolCalls.entries()].sort((a, b) => a[0] - b[0]);
   for (const [index, entry] of toolEntries) {
-    const outputIndex = state.textStarted
-      ? state.outputIndex + 1 + index
-      : state.outputIndex + index;
+    const outputIndex = state.outputIndex +
+      (state.reasoningStarted ? 1 : 0) +
+      (state.textStarted ? 1 : 0) + index;
     pushEvent(state, "response.function_call_arguments.done", {
       item_id: entry.itemId,
       output_index: outputIndex,
@@ -876,6 +1059,7 @@ export function finalizeResponsesStream(state: ResponsesStreamState): string[] {
         type: "function_call",
         id: entry.itemId,
         call_id: entry.callId,
+        ...(entry.namespace !== undefined ? { namespace: entry.namespace } : {}),
         name: entry.name,
         arguments: entry.arguments,
         status: "completed",
@@ -898,6 +1082,15 @@ export function finalizeResponsesStream(state: ResponsesStreamState): string[] {
       : inputTokens + outputTokens;
 
   const output: Array<Record<string, unknown>> = [];
+  if (state.reasoningStarted) {
+    output.push({
+      type: "reasoning",
+      id: state.reasoningItemId,
+      status: status === "incomplete" ? "incomplete" : "completed",
+      summary: [],
+      content: [{ type: "reasoning_text", text: state.reasoningText }],
+    });
+  }
   if (state.textStarted || toolEntries.length === 0) {
     output.push({
       type: "message",
@@ -912,6 +1105,7 @@ export function finalizeResponsesStream(state: ResponsesStreamState): string[] {
       type: "function_call",
       id: entry.itemId,
       call_id: entry.callId,
+      ...(entry.namespace !== undefined ? { namespace: entry.namespace } : {}),
       name: entry.name,
       arguments: entry.arguments,
       status: "completed",

@@ -104,6 +104,23 @@ class AnthropicFake implements BaseProvider {
 
   async callAnthropic(args: AnthropicCallArgs, _ctx: ProviderCallContext) {
     AnthropicFake.calls.push(args);
+    if (Array.isArray(args.tools) && args.tools.length > 0) {
+      const first = args.tools[0] as Record<string, unknown>;
+      return {
+        id: "msg_fake_tool",
+        type: "message",
+        role: "assistant",
+        model: args.model,
+        content: [{
+          type: "tool_use",
+          id: "call_anthropic_tool",
+          name: first["name"],
+          input: { duration_ms: 10 },
+        }],
+        stop_reason: "tool_use",
+        usage: { input_tokens: 4, output_tokens: 2 },
+      };
+    }
     return {
       id: "msg_fake",
       type: "message",
@@ -172,6 +189,10 @@ describe("native Responses protocol routing", () => {
           { type: "function_call_output", call_id: "call_1", output: "done" },
         ],
         max_output_tokens: 42,
+        seed: 7,
+        prompt_cache_key: "cache-key",
+        parallel_tool_calls: false,
+        reasoning: { effort: "medium" },
       },
       targetProtocol: "responses",
     });
@@ -187,6 +208,10 @@ describe("native Responses protocol routing", () => {
       { role: "tool", tool_call_id: "call_1", content: "done" },
     ]);
     expect(OpenAIFake.calls[0]?.max_tokens).toBe(42);
+    expect(OpenAIFake.calls[0]?.seed).toBe(7);
+    expect(OpenAIFake.calls[0]?.prompt_cache_key).toBe("cache-key");
+    expect(OpenAIFake.calls[0]?.parallel_tool_calls).toBe(false);
+    expect(OpenAIFake.calls[0]?.reasoning).toEqual({ effort: "medium" });
   });
 
   test("converts Responses requests and responses for Anthropic providers", async () => {
@@ -199,6 +224,41 @@ describe("native Responses protocol routing", () => {
     expect(response.output_text).toBe("anthropic answer");
     expect(AnthropicFake.calls[0]?.messages).toEqual([{ role: "user", content: "hello" }]);
     expect(AnthropicFake.calls[0]?.max_tokens).toBe(50);
+  });
+
+  test("round-trips namespace tools through an Anthropic provider", async () => {
+    const response = await execute({
+      route: route("anthropic-fake", "anthropic"),
+      requestData: {
+        model: "logical-model",
+        input: "sleep",
+        tool_choice: "auto",
+        tools: [{
+          type: "namespace",
+          name: "clock",
+          description: "Time tools.",
+          tools: [{
+            type: "function",
+            name: "sleep",
+            description: "Pause.",
+            parameters: { type: "object", properties: { duration_ms: { type: "number" } } },
+          }],
+        }],
+      },
+      targetProtocol: "responses",
+    });
+    expect(AnthropicFake.calls[0]?.tools).toEqual([expect.objectContaining({
+      name: "clock__sleep",
+      description: "Time tools.\n\nPause.",
+    })]);
+    expect(AnthropicFake.calls[0]?.tool_choice).toEqual({ type: "auto" });
+    expect(response["output"]).toContainEqual(expect.objectContaining({
+      type: "function_call",
+      call_id: "call_anthropic_tool",
+      namespace: "clock",
+      name: "sleep",
+      arguments: '{"duration_ms":10}',
+    }));
   });
 
   test("converts OpenAI streaming into Responses events", async () => {

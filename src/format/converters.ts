@@ -379,7 +379,15 @@ export function openaiToAnthropicRequest(
   if (isObject(toolChoice) && toolChoice["type"] === "function") {
     const fn = (toolChoice["function"] as Record<string, unknown>) ?? {};
     out["tool_choice"] = { type: "tool", name: fn["name"] };
-  } else if (toolChoice !== undefined && toolChoice !== null && toolChoice !== "") {
+  } else if (toolChoice === "auto") {
+    out["tool_choice"] = { type: "auto" };
+  } else if (toolChoice === "required") {
+    out["tool_choice"] = { type: "any" };
+  } else if (toolChoice === "none") {
+    // Anthropic has no `none` tool-choice variant. Omitting the declarations
+    // is the equivalent way to make tools unavailable for this turn.
+    delete out["tools"];
+  } else if (isObject(toolChoice)) {
     out["tool_choice"] = toolChoice;
   }
 

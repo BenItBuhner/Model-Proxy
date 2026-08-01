@@ -74,9 +74,13 @@ function openaiArgsFromRequest(
     frequency_penalty: request["frequency_penalty"] as number | undefined,
     logit_bias: request["logit_bias"] as Record<string, number> | undefined,
     user: request["user"] as string | undefined,
+    seed: request["seed"] as number | undefined,
+    prompt_cache_key: request["prompt_cache_key"] as string | undefined,
     tools: request["tools"] as unknown[] | undefined,
     tool_choice: request["tool_choice"],
+    parallel_tool_calls: request["parallel_tool_calls"] as boolean | undefined,
     response_format: request["response_format"],
+    reasoning: request["reasoning"],
     chat_template_kwargs: request["chat_template_kwargs"] as
       | Record<string, unknown>
       | undefined,
@@ -218,6 +222,7 @@ function convertResponse(
       model: modelName,
       metadata: responseMetadata(requestData),
       parallelToolCalls: responseParallelToolCalls(requestData),
+      requestTools: Array.isArray(requestData?.["tools"]) ? requestData["tools"] : undefined,
     });
   }
   if (from === "anthropic" && to === "responses") {
@@ -227,6 +232,7 @@ function convertResponse(
         model: modelName,
         metadata: responseMetadata(requestData),
         parallelToolCalls: responseParallelToolCalls(requestData),
+        requestTools: Array.isArray(requestData?.["tools"]) ? requestData["tools"] : undefined,
       },
     );
   }
@@ -628,6 +634,8 @@ export async function* executeStream({
 
     const state = createResponsesStreamState(
       typeof requestData["model"] === "string" ? requestData["model"] : route.model,
+      undefined,
+      Array.isArray(requestData["tools"]) ? requestData["tools"] : undefined,
     );
     for await (const chunk of sourceStream) {
       const events = sourceProtocol === "anthropic"

@@ -21,7 +21,6 @@ import {
   responsesStreamStateToChatResponse,
   responsesRequestToChat,
   responsesInputItemsForStorage,
-  unsupportedResponsesToolTypes,
 } from "../../format/responses.ts";
 import {
   getGlobalResponseStore,
@@ -370,17 +369,6 @@ async function handleResponsesNative(c: Context, endpointPath: string): Promise<
       return false;
     }
   });
-  const unsupportedTools = unsupportedResponsesToolTypes(requestDict);
-  if (unsupportedTools.length > 0 && !hasNativeResponsesRoute) {
-    return c.json(
-      formatOpenAIError(
-        400,
-        `Responses tool types are not supported by this model route: ${unsupportedTools.join(", ")}`,
-        "invalid_request_error",
-      ),
-      400,
-    );
-  }
   if (requestDict["background"] === true && !hasNativeResponsesRoute) {
     return c.json(
       formatOpenAIError(400, "background Responses are only supported by native Responses routes", "invalid_request_error"),
@@ -567,6 +555,7 @@ async function handleResponsesFusion(
       parallelToolCalls: typeof requestData["parallel_tool_calls"] === "boolean"
         ? requestData["parallel_tool_calls"]
         : undefined,
+      requestTools: Array.isArray(requestData["tools"]) ? requestData["tools"] : undefined,
     });
     if (requestData["store"] !== false && typeof response["id"] === "string") {
       const chatRequest = responsesRequestToChat(requestData);
@@ -585,7 +574,11 @@ async function handleResponsesFusion(
     return c.json(response, fusionResponse.status as ContentfulStatusCode);
   }
 
-  const state = createResponsesStreamState(model);
+  const state = createResponsesStreamState(
+    model,
+    undefined,
+    Array.isArray(requestData["tools"]) ? requestData["tools"] : undefined,
+  );
   const reader = fusionResponse.body.getReader();
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
@@ -614,7 +607,10 @@ async function handleResponsesFusion(
         for (const event of finalizeResponsesStream(state)) {
           controller.enqueue(encoder.encode(event));
         }
-        const response = chatResponseToResponses(responsesStreamStateToChatResponse(state), { model });
+        const response = chatResponseToResponses(responsesStreamStateToChatResponse(state), {
+          model,
+          requestTools: Array.isArray(requestData["tools"]) ? requestData["tools"] : undefined,
+        });
         if (requestData["store"] !== false && typeof response["id"] === "string") {
           const chatRequest = responsesRequestToChat(requestData);
           getGlobalResponseStore().set({
