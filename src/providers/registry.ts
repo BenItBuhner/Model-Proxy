@@ -1,8 +1,10 @@
 import type { BaseProvider } from "./base.ts";
 import { AnthropicProvider } from "./anthropic-provider.ts";
+import { CodexProvider } from "./codex-provider.ts";
 import { GeminiOpenAIProvider } from "./gemini-provider.ts";
 import { OpenAIProvider } from "./openai-provider.ts";
 import { OpenCodeProvider } from "./opencode-provider.ts";
+import { SuperGrokProvider } from "./supergrok-provider.ts";
 
 type ProviderFactory = () => BaseProvider;
 
@@ -24,6 +26,8 @@ const defaultFactories: Record<string, ProviderFactory> = {
   github: () => new OpenAIProvider("github"),
   opencode: () => new OpenCodeProvider(),
   tokenrouter: () => new OpenAIProvider("tokenrouter"),
+  codex: () => new CodexProvider(),
+  supergrok: () => new SuperGrokProvider(),
 
   gemini: () => new GeminiOpenAIProvider(),
   anthropic: () => new AnthropicProvider(),

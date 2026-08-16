@@ -141,6 +141,13 @@ export function getHealth(signal?: AbortSignal): Promise<HealthDetailed> {
 }
 
 // -------- Auth --------
+export function authConfig(): Promise<{
+  clerk_configured: boolean;
+  clerk_publishable_key?: string;
+}> {
+  return apiFetch("/v1/auth/config");
+}
+
 export async function login(apiKey: string): Promise<void> {
   await apiFetch("/v1/admin/auth/login", {
     method: "POST",
@@ -157,12 +164,18 @@ export async function authStatus(): Promise<{
   reason?: string;
   header_authenticated?: boolean;
   session_authenticated?: boolean;
+  clerk_authenticated?: boolean;
+  clerk_configured?: boolean;
+  clerk_publishable_key?: string;
 }> {
   return apiFetch<{
     authenticated: boolean;
     reason?: string;
     header_authenticated?: boolean;
     session_authenticated?: boolean;
+    clerk_authenticated?: boolean;
+    clerk_configured?: boolean;
+    clerk_publishable_key?: string;
   }>("/v1/admin/auth/status");
 }
 
@@ -439,6 +452,127 @@ export function saveSignupSettingsAdmin(input: Record<string, unknown>): Promise
 
 export function createUserApiKey(label: string): Promise<{ api_key: { id: string; key: string; keyPrefix: string; keyLastFour: string } }> {
   return apiFetch("/v1/user/api-keys", { method: "POST", body: { label } });
+}
+
+// -------- Provider subscription accounts --------
+export interface ProviderAccountRecord {
+  id: string;
+  provider: string;
+  kind: "oauth" | "token";
+  label: string;
+  email?: string;
+  account_id?: string;
+  plan?: string;
+  owner_user_id?: string;
+  shared: boolean;
+  status: "active" | "error" | "disabled";
+  last_error?: string;
+  last_used_at?: string;
+  last_refreshed_at?: string;
+  expires_at?: string;
+  created_at: string;
+  can_manage: boolean;
+  can_use: boolean;
+}
+
+export interface DeviceFlowRecord {
+  id: string;
+  user_code: string;
+  verification_url: string;
+  interval_ms: number;
+  expires_at: string;
+}
+
+export function listProviderAccounts(): Promise<{ accounts: ProviderAccountRecord[] }> {
+  return apiFetch("/v1/accounts");
+}
+
+export function getProviderAccountsStatus(): Promise<{
+  convex: {
+    configured: boolean;
+    syncing: boolean;
+    lastSyncedAt?: string;
+    lastError?: string;
+    accountCount: number;
+  };
+  credential_encryption: string;
+}> {
+  return apiFetch("/v1/accounts/status");
+}
+
+export function startCodexOAuth(shared: boolean): Promise<{
+  flow: { id: string; authorize_url: string; expires_at: string; callback_uri: string };
+}> {
+  return apiFetch("/v1/accounts/codex/oauth/start", {
+    method: "POST",
+    body: { shared },
+  });
+}
+
+export function completeCodexOAuth(callbackUrl: string): Promise<{
+  account: ProviderAccountRecord;
+}> {
+  return apiFetch("/v1/accounts/codex/oauth/complete", {
+    method: "POST",
+    body: { callback_url: callbackUrl },
+  });
+}
+
+export function startAccountDeviceFlow(
+  provider: "codex" | "supergrok",
+  shared: boolean,
+): Promise<{ flow: DeviceFlowRecord }> {
+  return apiFetch(`/v1/accounts/${provider}/device/start`, {
+    method: "POST",
+    body: { shared },
+  });
+}
+
+export function pollAccountDeviceFlow(
+  provider: "codex" | "supergrok",
+  flowId: string,
+): Promise<{ account: ProviderAccountRecord }> {
+  return apiFetch(`/v1/accounts/${provider}/device/${encodeURIComponent(flowId)}/poll`, {
+    method: "POST",
+  });
+}
+
+export function importLocalCodexAccount(): Promise<{ account: ProviderAccountRecord }> {
+  return apiFetch("/v1/accounts/codex/import-local", { method: "POST" });
+}
+
+export function attachProviderToken(input: {
+  provider: string;
+  label?: string;
+  email?: string;
+  access_token: string;
+  shared: boolean;
+}): Promise<{ account: ProviderAccountRecord }> {
+  return apiFetch("/v1/accounts/token", { method: "POST", body: input });
+}
+
+export function updateProviderAccount(
+  accountId: string,
+  patch: { label?: string; shared?: boolean; status?: string },
+): Promise<{ account: ProviderAccountRecord }> {
+  return apiFetch(`/v1/accounts/${encodeURIComponent(accountId)}`, {
+    method: "PATCH",
+    body: patch,
+  });
+}
+
+export function refreshProviderAccount(
+  accountId: string,
+): Promise<{ account: ProviderAccountRecord }> {
+  return apiFetch(`/v1/accounts/${encodeURIComponent(accountId)}/refresh`, {
+    method: "POST",
+  });
+}
+
+export async function removeProviderAccount(accountId: string): Promise<void> {
+  await apiFetch(`/v1/accounts/${encodeURIComponent(accountId)}`, {
+    method: "DELETE",
+  });
 }
 
 

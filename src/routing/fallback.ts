@@ -682,6 +682,7 @@ export class FallbackRouter {
     routeConfig: RouteConfig,
     modelConfig: ModelRoutingConfig,
     maxKeyCycles: number | undefined,
+    principal: Principal | undefined,
   ): KeyCycleTracker {
     let providerCooldown: number | undefined;
     try {
@@ -697,6 +698,7 @@ export class FallbackRouter {
     const options: ConstructorParameters<typeof KeyCycleTracker>[0] = {
       provider: routeConfig.provider,
       model: routeConfig.model,
+      principal,
     };
     if (maxKeyCycles !== undefined) options.maxCycles = maxKeyCycles;
     if (providerCooldown !== undefined) options.providerCooldownSeconds = providerCooldown;
@@ -884,7 +886,12 @@ export class FallbackRouter {
 
     for (const { routeConfig, isFallback, sourceModel, routeIndex } of routeTuples) {
       const modelConfig = this.getModelConfig(sourceModel);
-      const tracker = this.createTrackerForRoute(routeConfig, modelConfig, maxKeyCycles);
+      const tracker = this.createTrackerForRoute(
+        routeConfig,
+        modelConfig,
+        maxKeyCycles,
+        principal,
+      );
       const proxyProbe = this.createProxyTrackerForRoute(routeConfig, 1);
       if (this.shouldSkipRoute(routeConfig, tracker, proxyProbe)) continue;
 
@@ -1842,6 +1849,7 @@ export class FallbackRouter {
         routeConfig,
         modelConfig,
         maxKeyCycles,
+        principal ?? this.principal,
       );
       const proxyTracker = this.createProxyTrackerForRoute(routeConfig, undefined);
 
@@ -2076,6 +2084,7 @@ export class FallbackRouter {
         routeConfig,
         modelConfig,
         maxKeyCycles,
+        principal ?? this.principal,
       );
       const proxyTracker = this.createProxyTrackerForRoute(routeConfig, undefined);
 

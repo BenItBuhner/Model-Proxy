@@ -15,6 +15,8 @@ const log = createLogger("provider.base");
 export interface ProviderCallContext {
   /** Provider-specific API key injected per request by the router. */
   apiKey: string;
+  /** Opaque account reference when apiKey was resolved from the account store. */
+  accountRef?: string;
   /** Optional base URL override from the route config. */
   baseUrlOverride: string | undefined;
   /** Timeout in seconds for the upstream request. */

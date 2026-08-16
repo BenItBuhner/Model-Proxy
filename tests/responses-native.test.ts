@@ -175,7 +175,10 @@ describe("native Responses protocol routing", () => {
     });
     expect(response.object).toBe("response");
     expect(response.output_text).toBe("native answer");
-    expect(NativeResponsesFake.calls[0]).toMatchObject(request);
+    expect(NativeResponsesFake.calls[0]).toMatchObject({
+      ...request,
+      model: "upstream-model",
+    });
   });
 
   test("converts Responses requests for OpenAI providers", async () => {

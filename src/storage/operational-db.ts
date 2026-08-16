@@ -275,4 +275,44 @@ function runMigrations(database: Database): void {
       INSERT INTO schema_migrations (version, applied_at) VALUES (6, datetime('now'));
     `);
   }
+  if (version < 7) {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS provider_accounts (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('oauth', 'token')),
+        label TEXT NOT NULL DEFAULT '',
+        email TEXT,
+        account_id TEXT,
+        plan TEXT,
+        access_token TEXT NOT NULL,
+        refresh_token TEXT,
+        id_token TEXT,
+        expires_at TEXT,
+        owner_user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+        shared INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'error', 'disabled')),
+        last_error TEXT,
+        last_used_at TEXT,
+        last_refreshed_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        metadata_json TEXT NOT NULL DEFAULT '{}'
+      );
+      CREATE INDEX IF NOT EXISTS idx_provider_accounts_provider
+        ON provider_accounts(provider, status);
+      CREATE INDEX IF NOT EXISTS idx_provider_accounts_owner
+        ON provider_accounts(owner_user_id);
+
+      CREATE TABLE IF NOT EXISTS external_identities (
+        provider TEXT NOT NULL,
+        external_id TEXT NOT NULL,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (provider, external_id)
+      );
+
+      INSERT INTO schema_migrations (version, applied_at) VALUES (7, datetime('now'));
+    `);
+  }
 }

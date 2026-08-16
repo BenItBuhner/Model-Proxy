@@ -8,6 +8,8 @@ import {
   onWsDrain,
   onWsMessage,
   onWsOpen,
+  responsesWsAuth,
+  type WsData,
 } from "../server/routes/responses-ws.ts";
 
 const log = createLogger("cli");
@@ -101,13 +103,17 @@ function main(): void {
 
   const app = createApp();
 
-  const server = Bun.serve<{ request: Request }>({
-    fetch(req, server) {
+  const server = Bun.serve<WsData>({
+    async fetch(req, server) {
       const url = new URL(req.url);
       const upgradeHeader = req.headers.get("upgrade")?.toLowerCase();
       if (isResponsesWsPath(url.pathname) && upgradeHeader === "websocket") {
+        const principal = await responsesWsAuth(req);
+        if (principal === undefined) {
+          return new Response("Unauthorized", { status: 401 });
+        }
         const upgraded = server.upgrade(req, {
-          data: { request: req },
+          data: { request: req, principal },
         });
         if (!upgraded) {
           return new Response("WebSocket upgrade failed", { status: 426 });

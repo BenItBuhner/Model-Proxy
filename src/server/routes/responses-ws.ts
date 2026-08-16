@@ -38,8 +38,9 @@ import {
   nowIso,
   runWithRequestContext,
 } from "../../observability/request-context.ts";
+import { authenticateClerkToken } from "../clerk-auth.ts";
 
-export type WsData = { request: Request };
+export type WsData = { request: Request; principal?: Principal };
 
 const log = createLogger("routes.responses-ws");
 const WS_TIMEOUT_MS = 60 * 60 * 1000;
@@ -92,7 +93,7 @@ export function isResponsesWsPath(path: string): boolean {
   return path === "/v1/responses";
 }
 
-export function responsesWsAuth(req: Request): Principal | undefined {
+export async function responsesWsAuth(req: Request): Promise<Principal | undefined> {
   const authHeader = req.headers.get("authorization") ?? req.headers.get("Authorization");
   let presented: string | undefined;
   if (authHeader !== null) {
@@ -118,6 +119,13 @@ export function responsesWsAuth(req: Request): Principal | undefined {
   if (presented !== undefined && verifyApiKeyString(presented)) {
     return legacyOwnerPrincipal();
   }
+  if (presented !== undefined && presented.split(".").length === 3) {
+    try {
+      return await authenticateClerkToken(presented);
+    } catch {
+      return undefined;
+    }
+  }
 
   return undefined;
 }
@@ -126,7 +134,7 @@ export function onWsOpen(ws: ServerWebSocket<WsData>): void {
   const state = getState(ws);
   const data = ws.data;
   const req = data.request;
-  state.principal = responsesWsAuth(req);
+  state.principal = data.principal;
   resetTimeout(ws);
   log.info("responses WS connected", {
     remoteAddress: req.headers.get("x-forwarded-for") ?? "unknown",

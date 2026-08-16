@@ -1,5 +1,11 @@
 import { createLogger } from "../observability/logger.ts";
 import { providerConfigLoader } from "../config/provider-loader.ts";
+import {
+  accountRef,
+  listActiveAccounts,
+  principalCanUseAccount,
+} from "../storage/account-store.ts";
+import type { Principal } from "../storage/identity-store.ts";
 import { matchEnvKeys, providerNameToEnvToken } from "./env-matcher.ts";
 
 const log = createLogger("api-keys");
@@ -64,7 +70,7 @@ function getProviderEnvVarPatterns(provider: string): string[] {
   }
 }
 
-export function parseProviderKeys(provider: string): string[] {
+export function parseProviderKeys(provider: string, principal?: Principal): string[] {
   const patterns = getProviderEnvVarPatterns(provider);
   const matches = matchEnvKeys(patterns, provider, process.env);
   const seen = new Set<string>();
@@ -86,6 +92,10 @@ export function parseProviderKeys(provider: string): string[] {
     } catch {
       // no provider config
     }
+  }
+  for (const account of listActiveAccounts(provider)) {
+    if (!principalCanUseAccount(principal, account)) continue;
+    keys.push(accountRef(account.id));
   }
   return keys;
 }
@@ -112,6 +122,7 @@ export type ErrorAction =
 export interface KeyCycleTrackerOptions {
   provider: string;
   model: string | undefined;
+  principal?: Principal;
   maxCycles?: number;
   providerCooldownSeconds?: number;
   routeCooldownSeconds?: number;
@@ -149,7 +160,7 @@ export class KeyCycleTracker {
       options.model !== undefined
         ? `${options.provider}/${options.model}`
         : options.provider;
-    this.allKeys = parseProviderKeys(options.provider);
+    this.allKeys = parseProviderKeys(options.provider, options.principal);
     this.keyIndex = getState(options.provider).lastUsedIndex;
   }
 

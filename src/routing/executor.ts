@@ -12,6 +12,11 @@ import {
   finalizeResponsesStream,
   responsesRequestToChat,
 } from "../format/responses.ts";
+import {
+  forceRefreshAccountContext,
+  isAccountCredential,
+  resolveAccountContext,
+} from "../accounts/account-auth.ts";
 import { createLogger } from "../observability/logger.ts";
 import type {
   AnthropicCallArgs,
@@ -504,7 +509,32 @@ async function callProvider(
   route: ResolvedRoute,
   signal: AbortSignal | undefined,
 ): Promise<Record<string, unknown>> {
-  const ctx = buildContext(route, signal);
+  const baseContext = buildContext(route, signal);
+  const ctx = await resolveAccountContext(baseContext);
+  try {
+    return await callProviderWithContext(provider, protocol, request, route, ctx);
+  } catch (error) {
+    if (
+      error instanceof ProviderAPIError &&
+      error.status === 401 &&
+      isAccountCredential(ctx.accountRef ?? "")
+    ) {
+      const refreshed = await forceRefreshAccountContext(ctx);
+      if (refreshed !== undefined) {
+        return callProviderWithContext(provider, protocol, request, route, refreshed);
+      }
+    }
+    throw error;
+  }
+}
+
+async function callProviderWithContext(
+  provider: BaseProvider,
+  protocol: "openai" | "anthropic" | "responses",
+  request: Record<string, unknown>,
+  route: ResolvedRoute,
+  ctx: ProviderCallContext,
+): Promise<Record<string, unknown>> {
   if (protocol === "anthropic") {
     if (provider.callAnthropic === undefined) {
       throw new Error(
@@ -519,7 +549,10 @@ async function callProvider(
         `Provider '${provider.providerName}' does not support Responses protocol`,
       );
     }
-    return await provider.callResponses(request as ResponsesCallArgs, ctx);
+    return await provider.callResponses(
+      { ...request, model: route.model } as ResponsesCallArgs,
+      ctx,
+    );
   }
   if (provider.callOpenAI === undefined) {
     throw new Error(
@@ -536,7 +569,38 @@ async function* streamProvider(
   route: ResolvedRoute,
   signal: AbortSignal | undefined,
 ): AsyncGenerator<string, void, unknown> {
-  const ctx = buildContext(route, signal);
+  const baseContext = buildContext(route, signal);
+  const ctx = await resolveAccountContext(baseContext);
+  let emitted = false;
+  try {
+    for await (const chunk of streamProviderWithContext(provider, protocol, request, route, ctx)) {
+      emitted = true;
+      yield chunk;
+    }
+  } catch (error) {
+    if (
+      !emitted &&
+      error instanceof ProviderAPIError &&
+      error.status === 401 &&
+      isAccountCredential(ctx.accountRef ?? "")
+    ) {
+      const refreshed = await forceRefreshAccountContext(ctx);
+      if (refreshed !== undefined) {
+        yield* streamProviderWithContext(provider, protocol, request, route, refreshed);
+        return;
+      }
+    }
+    throw error;
+  }
+}
+
+async function* streamProviderWithContext(
+  provider: BaseProvider,
+  protocol: "openai" | "anthropic" | "responses",
+  request: Record<string, unknown>,
+  route: ResolvedRoute,
+  ctx: ProviderCallContext,
+): AsyncGenerator<string, void, unknown> {
   if (protocol === "anthropic") {
     if (provider.streamAnthropic === undefined) {
       throw new Error(
@@ -552,7 +616,10 @@ async function* streamProvider(
         `Provider '${provider.providerName}' does not support Responses streaming`,
       );
     }
-    yield* provider.streamResponses(request as ResponsesCallArgs, ctx);
+    yield* provider.streamResponses(
+      { ...request, model: route.model } as ResponsesCallArgs,
+      ctx,
+    );
     return;
   }
   if (provider.streamOpenAI === undefined) {

@@ -416,7 +416,7 @@ export class OpenAIProvider extends AbstractProvider {
     return payload;
   }
 
-  private buildResponsesPayload(args: ResponsesCallArgs): Record<string, unknown> {
+  protected buildResponsesPayload(args: ResponsesCallArgs): Record<string, unknown> {
     // Responses has a deliberately extensible request shape. Forward the
     // complete validated request so newer official fields (background,
     // conversation, prompt-cache options, tool-specific options, etc.) are
