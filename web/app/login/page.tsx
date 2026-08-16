@@ -10,7 +10,8 @@ import {
   setStoredApiKey,
   clearStoredApiKey,
 } from "@/lib/api";
-import { authStatus, login } from "@/lib/endpoints";
+import { authConfig, authStatus, login } from "@/lib/endpoints";
+import { configureClerk, mountClerkSignIn } from "@/lib/clerk";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { StatusDot } from "@/components/ui/badge";
@@ -18,11 +19,13 @@ import { StatusDot } from "@/components/ui/badge";
 export default function LoginPage(): React.ReactElement {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
+  const clerkRef = useRef<HTMLDivElement>(null);
   const [key, setKey] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [clerkEnabled, setClerkEnabled] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,6 +56,21 @@ export default function LoginPage(): React.ReactElement {
       cancelled = true;
     };
   }, [router]);
+
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    void authConfig()
+      .then(async (config) => {
+        if (!config.clerk_configured || config.clerk_publishable_key === undefined) return;
+        configureClerk(config.clerk_publishable_key);
+        setClerkEnabled(true);
+        if (clerkRef.current !== null) {
+          cleanup = await mountClerkSignIn(clerkRef.current);
+        }
+      })
+      .catch(() => {});
+    return () => cleanup?.();
+  }, []);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -182,6 +200,14 @@ export default function LoginPage(): React.ReactElement {
               sign in with account
             </Button>
           </form>
+          <div
+            className={clerkEnabled ? "border-t border-ink-500 p-6" : "hidden"}
+          >
+            <div className="mb-4 font-mono text-[10px] uppercase tracking-[0.18em] text-bone-300">
+              organization sign-in
+            </div>
+            <div ref={clerkRef} />
+          </div>
         </div>
       </div>
     </main>

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { clearStoredApiKey } from "@/lib/api";
+import { signOutClerk } from "@/lib/clerk";
 import {
   authStatus,
   getMe,
@@ -30,6 +31,7 @@ type ResolvedTheme = Exclude<ThemePreference, "system">;
 const NAV: NavItem[] = [
   { label: "Overview", href: "/", audience: "all" },
   { label: "Usage", href: "/usage", audience: "all" },
+  { label: "Accounts", href: "/accounts", audience: "all" },
   { label: "Models", href: "/models", audience: "admin" },
   { label: "Providers", href: "/providers", audience: "admin" },
   { label: "Config", href: "/config", audience: "admin" },
@@ -167,6 +169,7 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
     } catch {
       // ignore
     }
+    await signOutClerk().catch(() => {});
     clearStoredApiKey();
     router.replace("/login");
   };

@@ -11,6 +11,7 @@ import {
   noAuthPrincipal,
   type Principal,
 } from "../storage/identity-store.ts";
+import { authenticateClerkRequest } from "./clerk-auth.ts";
 
 const log = createLogger("auth");
 export const SESSION_COOKIE = "mp_session";
@@ -86,6 +87,20 @@ export function authenticateRequest(c: Context, options: { allowSession?: boolea
   return undefined;
 }
 
+export async function authenticateRequestAsync(
+  c: Context,
+  options: { allowSession?: boolean } = {},
+): Promise<Principal | undefined> {
+  const local = authenticateRequest(c, options);
+  if (local !== undefined) return local;
+  try {
+    return await authenticateClerkRequest(c);
+  } catch (error) {
+    log.warn("Clerk authentication failed", { error: String(error) });
+    return undefined;
+  }
+}
+
 function authenticateSession(c: Context): Principal | undefined {
   const cookie = getCookie(c, SESSION_COOKIE);
   if (cookie === undefined) return undefined;
@@ -110,7 +125,7 @@ export function requireAuth(
   options: { allowSession?: boolean } = {},
 ): MiddlewareHandler {
   return async (c, next) => {
-    const authenticated = authenticateRequest(c, options);
+    const authenticated = await authenticateRequestAsync(c, options);
     if (authenticated === undefined) {
       return c.json(
         {

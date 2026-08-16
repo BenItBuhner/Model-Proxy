@@ -1,0 +1,49 @@
+{
+  "name": "codex",
+  "display_name": "ChatGPT / Codex Subscription",
+  "enabled": true,
+  "api_keys": {
+    "env_var_patterns": [],
+    "description": "Managed OAuth accounts attached from the Accounts page."
+  },
+  "endpoints": {
+    "base_url": "https://chatgpt.com/backend-api/codex",
+    "completions": "/responses",
+    "streaming": "/responses",
+    "responses": "/responses",
+    "responses_streaming": "/responses",
+    "compatible_format": "responses"
+  },
+  "authentication": {
+    "type": "bearer",
+    "header_name": "Authorization",
+    "header_format": "Bearer {api_key}"
+  },
+  "request_config": {
+    "timeout_seconds": 120,
+    "max_retries": 0,
+    "retry_on_status": [429, 500, 502, 503, 504],
+    "default_parameters": {},
+    "required_parameters": []
+  },
+  "rate_limiting": {
+    "enabled": false,
+    "cooldown_seconds": 180
+  },
+  "models": {
+    "gpt-5.5": { "context_length": 400000 },
+    "gpt-5.4": { "context_length": 400000 },
+    "gpt-5.4-mini": { "context_length": 400000 },
+    "gpt-5.3-codex-spark": { "context_length": 400000 }
+  },
+  "error_handling": {
+    "401": { "action": "global_key_failure" },
+    "403": { "action": "global_key_failure" },
+    "429": { "action": "model_key_failure" },
+    "500": { "action": "model_key_failure" },
+    "502": { "action": "model_key_failure" },
+    "503": { "action": "model_key_failure" },
+    "504": { "action": "model_key_failure" }
+  },
+  "model_mapping": {}
+}
