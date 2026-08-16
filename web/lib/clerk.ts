@@ -1,22 +1,25 @@
 "use client";
 
-import { Clerk } from "@clerk/clerk-js";
+import type { Clerk as ClerkInstance } from "@clerk/clerk-js";
 
 const KEY_STORAGE = "mp_clerk_publishable_key";
-let clerkPromise: Promise<Clerk> | undefined;
+let clerkPromise: Promise<ClerkInstance> | undefined;
 
 export function configureClerk(publishableKey: string): void {
   if (typeof window === "undefined" || publishableKey.trim().length === 0) return;
   window.localStorage.setItem(KEY_STORAGE, publishableKey.trim());
 }
 
-export async function getClerk(): Promise<Clerk | undefined> {
+export async function getClerk(): Promise<ClerkInstance | undefined> {
   if (typeof window === "undefined") return undefined;
   const key = window.localStorage.getItem(KEY_STORAGE);
   if (key === null || key.length === 0) return undefined;
   if (clerkPromise === undefined) {
-    const clerk = new Clerk(key);
-    clerkPromise = clerk.load().then(() => clerk);
+    clerkPromise = import("@clerk/clerk-js").then(async ({ Clerk }) => {
+      const clerk = new Clerk(key);
+      await clerk.load();
+      return clerk;
+    });
   }
   return clerkPromise;
 }

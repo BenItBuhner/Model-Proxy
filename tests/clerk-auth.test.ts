@@ -65,6 +65,7 @@ describe("Clerk authentication", () => {
     const issuer = `http://127.0.0.1:${server.port}`;
     process.env.CLERK_ISSUER_URL = issuer;
     process.env.CLERK_AUTHORIZED_PARTIES = "https://proxy.example.com";
+    delete process.env.CLIENT_API_KEY;
     const token = await signJwt(pair.privateKey, {
       sub: "user_clerk_123",
       iss: issuer,
@@ -74,6 +75,10 @@ describe("Clerk authentication", () => {
     });
 
     const app = createApp();
+    const forgedLegacySession = await app.request("/v1/auth/me", {
+      headers: { cookie: "mp_session=no-auth" },
+    });
+    expect(forgedLegacySession.status).toBe(401);
     const response = await app.request("/v1/auth/me", {
       headers: { authorization: `Bearer ${token}` },
     });

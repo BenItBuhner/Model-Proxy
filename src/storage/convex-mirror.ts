@@ -28,11 +28,12 @@ let rerun = false;
 let lastSyncedAt: string | undefined;
 let lastError: string | undefined;
 let accountCount = 0;
+let unsubscribe: (() => void) | undefined;
 
 export function startConvexMirror(): void {
   if (started || !isConfigured()) return;
   started = true;
-  onAccountsChanged(schedule);
+  unsubscribe = onAccountsChanged(schedule);
   schedule();
 }
 
@@ -118,6 +119,8 @@ function removeUndefined(
 export function resetConvexMirrorForTests(): void {
   if (timer !== undefined) clearTimeout(timer);
   timer = undefined;
+  unsubscribe?.();
+  unsubscribe = undefined;
   started = false;
   syncing = false;
   rerun = false;

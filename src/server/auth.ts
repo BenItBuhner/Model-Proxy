@@ -11,7 +11,7 @@ import {
   noAuthPrincipal,
   type Principal,
 } from "../storage/identity-store.ts";
-import { authenticateClerkRequest } from "./clerk-auth.ts";
+import { authenticateClerkRequest, isClerkConfigured } from "./clerk-auth.ts";
 
 const log = createLogger("auth");
 export const SESSION_COOKIE = "mp_session";
@@ -23,7 +23,7 @@ function clientApiKey(): string | undefined {
 }
 
 export function isAuthConfigured(): boolean {
-  return clientApiKey() !== undefined;
+  return clientApiKey() !== undefined || isClerkConfigured();
 }
 
 function constantTimeEquals(a: string, b: string): boolean {
@@ -36,7 +36,7 @@ function constantTimeEquals(a: string, b: string): boolean {
 /** Timing-safe comparison for an attacker-supplied key against the configured one. */
 export function verifyApiKeyString(presented: string): boolean {
   const expected = clientApiKey();
-  if (expected === undefined) return true;
+  if (expected === undefined) return !isClerkConfigured();
   if (presented.length === 0) return false;
   return constantTimeEquals(presented, expected);
 }
@@ -57,6 +57,7 @@ function extractPresented(c: Context): string | undefined {
 export function verifyClientApiKey(c: Context): boolean {
   const expected = clientApiKey();
   if (expected === undefined) {
+    if (isClerkConfigured()) return false;
     // Auth disabled entirely - only for local dev.
     log.warn("CLIENT_API_KEY is unset; auth is DISABLED");
     return true;
@@ -77,11 +78,15 @@ export function authenticateRequest(c: Context, options: { allowSession?: boolea
   const userPrincipal = authenticateApiKey(presented);
   if (userPrincipal !== undefined) return userPrincipal;
 
-  if (expected === undefined) {
+  if (expected === undefined && !isClerkConfigured()) {
     log.warn("CLIENT_API_KEY is unset; auth is DISABLED");
     return noAuthPrincipal();
   }
-  if (presented !== undefined && constantTimeEquals(presented, expected)) {
+  if (
+    expected !== undefined &&
+    presented !== undefined &&
+    constantTimeEquals(presented, expected)
+  ) {
     return legacyOwnerPrincipal();
   }
   return undefined;
@@ -104,7 +109,8 @@ export async function authenticateRequestAsync(
 function authenticateSession(c: Context): Principal | undefined {
   const cookie = getCookie(c, SESSION_COOKIE);
   if (cookie === undefined) return undefined;
-  if (cookie === currentSessionToken()) return legacyOwnerPrincipal();
+  const legacyToken = clientApiKeyFingerprint();
+  if (legacyToken !== undefined && cookie === legacyToken) return legacyOwnerPrincipal();
   return authenticateSessionToken(cookie);
 }
 

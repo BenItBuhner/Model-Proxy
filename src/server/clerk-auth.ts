@@ -37,10 +37,14 @@ export function isClerkConfigured(): boolean {
 }
 
 export async function authenticateClerkRequest(c: Context): Promise<Principal | undefined> {
-  const issuer = clerkIssuer();
-  if (issuer === undefined) return undefined;
   const token = extractClerkToken(c);
-  if (token === undefined || token.split(".").length !== 3) return undefined;
+  if (token === undefined) return undefined;
+  return authenticateClerkToken(token);
+}
+
+export async function authenticateClerkToken(token: string): Promise<Principal | undefined> {
+  const issuer = clerkIssuer();
+  if (issuer === undefined || token.split(".").length !== 3) return undefined;
   const claims = await verifyClerkToken(token, issuer);
   if (claims === undefined || claims.sub === undefined) return undefined;
   const email = await clerkUserEmail(claims);

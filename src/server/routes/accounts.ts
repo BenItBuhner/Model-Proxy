@@ -66,8 +66,11 @@ export function createAccountRoutes(): Hono {
     const actor = principal(c);
     if (actor === undefined) return c.json({ error: "Unauthorized" }, 401);
     const body = await readObject(c);
-    const provider = stringField(body, "provider");
-    const accessToken = stringField(body, "access_token");
+    const provider = optionalString(body["provider"]);
+    const accessToken = optionalString(body["access_token"]);
+    if (provider === undefined || accessToken === undefined) {
+      return c.json({ error: "provider and access_token are required" }, 400);
+    }
     const shared = body["shared"] === true;
     if (shared && !isAdmin(actor)) return c.json({ error: "Only admins can share accounts" }, 403);
     if (!providerRegistry.isValidProvider(provider)) {
@@ -312,14 +315,6 @@ async function readObject(c: Context): Promise<Record<string, unknown>> {
   } catch {
     return {};
   }
-}
-
-function stringField(body: Record<string, unknown>, key: string): string {
-  const value = body[key];
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`${key} is required`);
-  }
-  return value.trim();
 }
 
 function optionalString(value: unknown): string | undefined {
