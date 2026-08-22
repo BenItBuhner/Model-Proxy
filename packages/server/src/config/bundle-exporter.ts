@@ -1,6 +1,6 @@
 import type { ConfigBundle } from "@model-proxy/contracts/schemas/config-bundle.ts";
 import { matchEnvKeys } from "../providers/env-matcher.ts";
-import { readEnvFile } from "./env-writer.ts";
+import { readConfigValues } from "./config-store.ts";
 import {
   getRawProviderConfig,
   listProviderConfigs,
@@ -36,12 +36,8 @@ export function exportBundle(): ConfigBundle {
     }
   }
 
-  // .env contents (unmasked) — includes API keys + meta vars.
-  const parsedEnv = readEnvFile({ includeValues: true });
-  const environment: Record<string, string> = {};
-  for (const entry of parsedEnv.entries) {
-    environment[entry.key] = entry.value;
-  }
+  // Stored settings + secrets (unmasked) — includes API keys + meta vars.
+  const environment: Record<string, string> = readConfigValues();
 
   // Per-provider api_keys grouping, derived from the flat env dict.
   const apiKeys: Record<string, Array<{ env_var: string; value: string }>> = {};

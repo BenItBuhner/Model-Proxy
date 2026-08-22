@@ -28,7 +28,7 @@ import {
   listModelConfigs,
   writeModelConfig,
 } from "./model-writer.ts";
-import { readEnvFile, resolveEnvPath, writeEnvFile } from "./env-writer.ts";
+import { readConfigValues, upsertConfigValues } from "./config-store.ts";
 import { getWritableConfigDir } from "./paths.ts";
 import { normalizeModel, normalizeProvider } from "./bundle-normalizer.ts";
 
@@ -278,9 +278,7 @@ function computeEnvDiff(
     return diff;
   }
 
-  const existing = readEnvFile({ includeValues: true });
-  const existingMap = new Map<string, string>();
-  for (const entry of existing.entries) existingMap.set(entry.key, entry.value);
+  const existingMap = new Map<string, string>(Object.entries(readConfigValues()));
 
   for (const [key, value] of Object.entries(env)) {
     if (!existingMap.has(key)) diff.add.push(key);
@@ -328,7 +326,7 @@ export function applyBundle(
   const paths = {
     providers_dir: join(getWritableConfigDir(), "providers"),
     models_dir: join(getWritableConfigDir(), "models"),
-    env: resolveEnvPath(),
+    env: getWritableConfigDir(),
   };
 
   if (staged.abortedDueToStrict) {
@@ -381,20 +379,19 @@ export function applyBundle(
   // Env — merge: existing keys preserved, bundle values overwrite on key collisions.
   let envDiff: BundleDiff["env"];
   if (sections.env) {
-    const existing = readEnvFile({ includeValues: true });
-    const merged = new Map<string, string>();
-    for (const entry of existing.entries) merged.set(entry.key, entry.value);
+    const existingEntries = Object.entries(readConfigValues()).map(([key, value]) => ({
+      key,
+      value,
+    }));
+    const updates: Record<string, string> = {};
     for (const [key, value] of Object.entries(bundle.setup.environment ?? {})) {
-      merged.set(key, value);
+      updates[key] = value;
     }
-    const mergedEntries = Array.from(merged, ([key, value]) => ({ key, value }));
-    const result = writeEnvFile({ entries: mergedEntries });
-    appliedEnv = Object.keys(bundle.setup.environment ?? {}).length;
-    envDiff = computeEnvDiffFromExisting(bundle, existing.entries);
-    log.info("env merged from bundle", {
-      path: result.path,
-      applied: appliedEnv,
-      skipped: result.skipped.length,
+    const result = upsertConfigValues(updates);
+    appliedEnv = Object.keys(updates).length;
+    envDiff = computeEnvDiffFromExisting(bundle, existingEntries);
+    log.info("config store merged from bundle", {
+      applied: result.applied,
     });
   } else {
     envDiff = computeEnvDiff(bundle, false);

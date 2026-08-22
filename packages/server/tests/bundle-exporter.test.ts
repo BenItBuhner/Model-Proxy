@@ -9,6 +9,7 @@ import { exportBundle } from "../src/config/bundle-exporter.ts";
 import { modelConfigLoader } from "../src/config/model-loader.ts";
 import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
+import { setStorageRootForTests } from "../src/storage/storage-paths.ts";
 
 const fixturePath = join(import.meta.dir, "fixtures", "bundle-sample.json");
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as Record<string, unknown>;
@@ -24,11 +25,11 @@ setPrimaryConfigDirForTests(tmpRoot);
 (providerConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
 
 beforeAll(() => {
-  process.env.MODEL_PROXY_ENV_FILE = join(tmpRoot, ".env");
+  setStorageRootForTests(join(tmpRoot, ".storage"));
 });
 
 afterAll(() => {
-  delete process.env.MODEL_PROXY_ENV_FILE;
+  setStorageRootForTests(undefined);
   setPrimaryConfigDirForTests(undefined);
   try {
     rmSync(tmpRoot, { recursive: true, force: true });

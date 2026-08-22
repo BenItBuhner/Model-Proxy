@@ -16,7 +16,8 @@ import {
   patchProviderConfig,
   writeProviderConfig,
 } from "../../config/provider-writer.ts";
-import { readEnvFile, writeEnvFile } from "../../config/env-writer.ts";
+import { listConfigEntries, replaceConfigValues } from "../../config/config-store.ts";
+import { getWritableConfigDir } from "../../config/paths.ts";
 import {
   currentProxyStatus,
   discoverProxies,
@@ -177,6 +178,18 @@ function logUsage(row: ReturnType<typeof recentRequestLogs>[number]): UsageSnaps
 
 export function createAdminRoutes(): Hono {
   const app = new Hono();
+
+  // -- First-run setup status (public; drives the onboarding flow) -----------
+
+  app.get("/v1/admin/setup/status", (c) => {
+    const models = listModelConfigs().length;
+    const providers = listProviderConfigs().length;
+    return c.json({
+      needs_setup: models === 0,
+      models_count: models,
+      providers_count: providers,
+    });
+  });
 
   // -- Auth routes (public — they ESTABLISH the session) ---------------------
 
@@ -877,16 +890,16 @@ export function createAdminRoutes(): Hono {
     return c.json({ deleted: true, name });
   });
 
-  // -- Env file ---------------------------------------------------------------
+  // -- Runtime settings + secrets (UI-managed config store) -------------------
 
   protectedApp.get("/v1/admin/config/env", (c) => {
     const revealParam = c.req.query("reveal");
     const reveal = revealParam === "true" || revealParam === "1";
-    const parsed = readEnvFile({ includeValues: reveal });
+    const entries = listConfigEntries({ includeValues: reveal });
     return c.json({
-      path: parsed.path,
+      path: getWritableConfigDir(),
       reveal,
-      entries: parsed.entries,
+      entries,
     });
   });
 
@@ -897,9 +910,9 @@ export function createAdminRoutes(): Hono {
     if (!Array.isArray(body.entries)) {
       return c.json({ error: "Request body must contain an 'entries' array" }, 400);
     }
-    const result = writeEnvFile({ entries: body.entries });
+    const result = replaceConfigValues(body.entries);
     return c.json({
-      path: result.path,
+      path: getWritableConfigDir(),
       applied: result.applied,
       skipped: result.skipped,
     });

@@ -12,6 +12,7 @@ import {
 import { modelConfigLoader } from "../src/config/model-loader.ts";
 import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
+import { setStorageRootForTests } from "../src/storage/storage-paths.ts";
 
 const fixturePath = join(import.meta.dir, "fixtures", "bundle-sample.json");
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as Record<string, unknown>;
@@ -27,11 +28,11 @@ setPrimaryConfigDirForTests(tmpRoot);
 (providerConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
 
 beforeAll(() => {
-  process.env.MODEL_PROXY_ENV_FILE = join(tmpRoot, ".env");
+  setStorageRootForTests(join(tmpRoot, ".storage"));
 });
 
 afterAll(() => {
-  delete process.env.MODEL_PROXY_ENV_FILE;
+  setStorageRootForTests(undefined);
   setPrimaryConfigDirForTests(undefined);
   try {
     rmSync(tmpRoot, { recursive: true, force: true });
@@ -99,11 +100,13 @@ describe("bundle-importer (real python-era fixture)", () => {
     expect(existsSync(join(tmpRoot, "providers", "gemini.json"))).toBe(true);
     expect(existsSync(join(tmpRoot, "providers", "nahcrof.json"))).toBe(true);
     expect(existsSync(join(tmpRoot, "models", "turbo.json"))).toBe(true);
-    expect(existsSync(join(tmpRoot, ".env"))).toBe(true);
+    expect(existsSync(join(tmpRoot, "secrets.json"))).toBe(true);
 
-    const envText = readFileSync(join(tmpRoot, ".env"), "utf8");
-    expect(envText).toContain("CLIENT_API_KEY");
-    expect(envText).toContain("GEMINI_API_KEY_1");
+    // Key NAMES land in the sealed secrets store; the values never in plaintext.
+    const secretsText = readFileSync(join(tmpRoot, "secrets.json"), "utf8");
+    expect(secretsText).toContain("CLIENT_API_KEY");
+    expect(secretsText).toContain("GEMINI_API_KEY_1");
+    expect(secretsText).toContain("enc:v1:");
 
     // Local-llama on disk should have the normalized "pass_through" action.
     const localLlama = JSON.parse(
@@ -141,18 +144,18 @@ describe("bundle-importer (real python-era fixture)", () => {
     expect(onDisk.display_name).toBe("Gemini");
   });
 
-  test("sections.env=false does not touch the env file", () => {
-    const envSnapshot = readFileSync(join(tmpRoot, ".env"), "utf8");
+  test("sections.env=false does not touch the config store", () => {
+    const settingsSnapshot = readFileSync(join(tmpRoot, "settings.json"), "utf8");
+    const secretsSnapshot = readFileSync(join(tmpRoot, "secrets.json"), "utf8");
     const bundle = parseBundle(cloneFixture());
     // Inject a fresh env key that would *otherwise* land on disk.
-    bundle.setup.environment["NEW_SENTINEL_KEY"] = "should-not-appear";
+    bundle.setup.environment["NEW_SENTINEL_VAR"] = "should-not-appear";
     const report = applyBundle(bundle, {
       sections: { providers: false, models: false, env: false },
     });
     expect(report.applied.env).toBe(0);
-    const after = readFileSync(join(tmpRoot, ".env"), "utf8");
-    expect(after).toBe(envSnapshot);
-    expect(after.includes("NEW_SENTINEL_KEY")).toBe(false);
+    expect(readFileSync(join(tmpRoot, "settings.json"), "utf8")).toBe(settingsSnapshot);
+    expect(readFileSync(join(tmpRoot, "secrets.json"), "utf8")).toBe(secretsSnapshot);
   });
 
   test("strict mode aborts the whole apply when a provider fails validation", () => {

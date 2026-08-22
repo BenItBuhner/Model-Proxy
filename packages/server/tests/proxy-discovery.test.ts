@@ -4,11 +4,12 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
-import { upsertEnvValuesPreservingRaw } from "../src/config/env-writer.ts";
+import { readConfigValues, upsertConfigValues } from "../src/config/config-store.ts";
 import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { discoverProxies } from "../src/providers/proxy-discovery.ts";
 import type { UpstreamFetcher } from "../src/providers/upstream-fetch.ts";
+import { setStorageRootForTests } from "../src/storage/storage-paths.ts";
 
 const tmpRoot = join(tmpdir(), `mp-v2-proxy-discovery-${process.pid}-${Date.now()}`);
 
@@ -43,17 +44,19 @@ beforeAll(() => {
   mkdirSync(join(tmpRoot, "providers"), { recursive: true });
   mkdirSync(join(tmpRoot, "models"), { recursive: true });
   setPrimaryConfigDirForTests(tmpRoot);
+  setStorageRootForTests(join(tmpRoot, "storage"));
   (providerConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
   writeFileSync(join(tmpRoot, "providers", "opencode.json"), JSON.stringify(provider("opencode", "public")));
   writeFileSync(join(tmpRoot, "providers", "nvidia.json"), JSON.stringify(provider("nvidia")));
-  process.env.MODEL_PROXY_ENV_FILE = join(tmpRoot, ".env");
   process.env.NVIDIA_API_KEY = "nv-test";
 });
 
 afterAll(() => {
-  delete process.env.MODEL_PROXY_ENV_FILE;
   delete process.env.NVIDIA_API_KEY;
+  delete process.env.MODEL_PROXY_EGRESS_PROXY_1;
+  delete process.env.MODEL_PROXY_EGRESS_PROXY_2;
   setPrimaryConfigDirForTests(undefined);
+  setStorageRootForTests(undefined);
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 
@@ -98,20 +101,28 @@ describe("discoverProxies", () => {
   });
 });
 
-describe("upsertEnvValuesPreservingRaw", () => {
-  test("updates shared proxy entries without removing unrelated env lines", () => {
-    writeFileSync(join(tmpRoot, ".env"), "# keep me\nCLIENT_API_KEY=abc\nMODEL_PROXY_EGRESS_PROXY_9=http://old:8080\n");
-    const result = upsertEnvValuesPreservingRaw(
+describe("upsertConfigValues", () => {
+  test("updates shared proxy entries without removing unrelated stored values", () => {
+    upsertConfigValues({
+      CLIENT_API_KEY: "abc",
+      MODEL_PROXY_EGRESS_PROXY_9: "http://old:8080",
+    });
+    upsertConfigValues(
       {
         MODEL_PROXY_EGRESS_PROXY_1: "http://new-a:8080",
         MODEL_PROXY_EGRESS_PROXY_2: "http://new-b:8080",
       },
       { removePrefixes: ["MODEL_PROXY_EGRESS_PROXY_"] },
     );
-    const text = readFileSync(result.path, "utf8");
-    expect(text).toContain("# keep me");
-    expect(text).toContain("CLIENT_API_KEY=abc");
-    expect(text).toContain("MODEL_PROXY_EGRESS_PROXY_1=http://new-a:8080");
-    expect(text).not.toContain("MODEL_PROXY_EGRESS_PROXY_9=http://old:8080");
+    const values = readConfigValues();
+    expect(values["CLIENT_API_KEY"]).toBe("abc");
+    expect(values["MODEL_PROXY_EGRESS_PROXY_1"]).toBe("http://new-a:8080");
+    expect(values["MODEL_PROXY_EGRESS_PROXY_2"]).toBe("http://new-b:8080");
+    expect(values["MODEL_PROXY_EGRESS_PROXY_9"]).toBeUndefined();
+
+    // Secrets are sealed on disk — the raw file must not leak plaintext keys.
+    const sealedText = readFileSync(join(tmpRoot, "secrets.json"), "utf8");
+    expect(sealedText).not.toContain("http://new-a:8080");
+    expect(sealedText).toContain("enc:v1:");
   });
 });

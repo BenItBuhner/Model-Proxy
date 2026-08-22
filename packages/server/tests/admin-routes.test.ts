@@ -30,13 +30,11 @@ setPrimaryConfigDirForTests(tmpRoot);
 
 beforeAll(() => {
   process.env.CLIENT_API_KEY = "admin-test-key";
-  process.env.MODEL_PROXY_ENV_FILE = join(tmpRoot, ".env");
   setStorageRootForTests(join(tmpRoot, ".storage"));
 });
 
 afterAll(() => {
   delete process.env.CLIENT_API_KEY;
-  delete process.env.MODEL_PROXY_ENV_FILE;
   setPrimaryConfigDirForTests(undefined);
   setStorageRootForTests(undefined);
   try {
@@ -295,7 +293,10 @@ describe("admin routes", () => {
     const writeBody = (await json(writeRes)) as { applied: number; path: string };
     expect(writeBody.applied).toBe(2);
     expect(process.env.GROQ_API_KEY).toBe("sk-groq-abcd");
-    expect(readFileSync(writeBody.path, "utf8")).toContain("GROQ_API_KEY");
+    // Secret values are sealed on disk; only key names appear in plaintext.
+    const secretsText = readFileSync(join(writeBody.path, "secrets.json"), "utf8");
+    expect(secretsText).toContain("GROQ_API_KEY");
+    expect(secretsText).not.toContain("sk-groq-abcd");
 
     const readRes = await app.request("/v1/admin/config/env", { headers: auth() });
     const readBody = (await json(readRes)) as {

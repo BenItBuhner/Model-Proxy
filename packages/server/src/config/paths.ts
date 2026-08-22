@@ -1,29 +1,17 @@
-import { existsSync, mkdirSync, statSync, writeFileSync, unlinkSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { getDataDir } from "./data-dir.ts";
+
 /**
- * Resolves the set of directories that hold Model-Proxy JSON config
- * (`providers/*.json`, `models/*.json`, `templates/*.json`), plus the single
- * preferred directory for writes.
+ * Config lives in exactly one writable root: `<dataDir>/config` (see
+ * `data-dir.ts`). The read path adds a single read-only fallback — the config
+ * directory shipped with the package (sample providers + templates) — so a
+ * fresh install can scaffold new providers without copying files around.
  */
 
-let primaryConfigDir: string | undefined;
-/** When set, `getConfigSearchPaths()` returns only these roots (tests). */
-let testSearchPathsOnly: string[] | undefined;
-
-function uniquePaths(paths: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const p of paths) {
-    const key = resolve(p);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(key);
-  }
-  return out;
-}
+let testConfigDir: string | undefined;
 
 export function getPackageConfigDir(): string {
   // packages/server/src/config/paths.ts -> repo root is four up -> /config
@@ -31,87 +19,38 @@ export function getPackageConfigDir(): string {
   return resolve(here, "..", "..", "..", "..", "config");
 }
 
-export function getCwdConfigDir(): string {
-  return join(process.cwd(), "config");
-}
-
-export function getUserConfigDir(): string {
-  if (process.platform === "win32") {
-    const base = process.env.LOCALAPPDATA ?? process.env.APPDATA;
-    if (base) {
-      return join(base, "model-proxy", "config");
-    }
-  }
-  return join(homedir(), ".model-proxy", "config");
-}
-
-function isWritableDir(path: string, create: boolean): boolean {
-  try {
-    if (create) {
-      mkdirSync(path, { recursive: true });
-    }
-    if (!existsSync(path)) return false;
-    const stat = statSync(path);
-    if (!stat.isDirectory()) return false;
-    const probe = join(path, ".model_proxy_write_test");
-    writeFileSync(probe, "ok", { encoding: "utf8" });
-    unlinkSync(probe);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
+/** The single writable config root: `<dataDir>/config`. */
 export function getWritableConfigDir(): string {
-  if (primaryConfigDir !== undefined) return primaryConfigDir;
-
-  const cwd = getCwdConfigDir();
-  if (isWritableDir(cwd, false)) {
-    primaryConfigDir = cwd;
-    return cwd;
+  if (testConfigDir !== undefined) return testConfigDir;
+  const dir = join(getDataDir(), "config");
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch {
+    // Surface failures on first write instead.
   }
+  return dir;
+}
 
-  const userConfig = getUserConfigDir();
-  if (isWritableDir(userConfig, true)) {
-    primaryConfigDir = userConfig;
-    return userConfig;
-  }
+/** Reset overrides. Exposed for tests. */
+export function resetConfigPathCache(): void {
+  testConfigDir = undefined;
+}
 
-  // Last resort: whichever existed, even if read-only.
-  if (existsSync(cwd)) {
-    primaryConfigDir = cwd;
-    return cwd;
-  }
-
-  primaryConfigDir = userConfig;
-  return userConfig;
+/** Force the config root to a specific path. Tests only. */
+export function setPrimaryConfigDirForTests(path: string | undefined): void {
+  testConfigDir = path;
 }
 
 /**
- * Reset memoization. Exposed for tests.
+ * Read roots in priority order: the writable root, then the read-only
+ * package config (shipped samples + templates). When a test override is set,
+ * only the override is searched so tests stay hermetic.
  */
-export function resetConfigPathCache(): void {
-  primaryConfigDir = undefined;
-  testSearchPathsOnly = undefined;
-}
-
-/** Force the writable config dir to a specific path. Tests only. */
-export function setPrimaryConfigDirForTests(path: string | undefined): void {
-  primaryConfigDir = path;
-  testSearchPathsOnly = path !== undefined ? [path] : undefined;
-}
-
 export function getConfigSearchPaths(): string[] {
-  if (testSearchPathsOnly !== undefined) {
-    return uniquePaths(testSearchPathsOnly);
-  }
-  const primary = getWritableConfigDir();
-  return uniquePaths([
-    primary,
-    getCwdConfigDir(),
-    getUserConfigDir(),
-    getPackageConfigDir(),
-  ]);
+  if (testConfigDir !== undefined) return [resolve(testConfigDir)];
+  const primary = resolve(getWritableConfigDir());
+  const packaged = resolve(getPackageConfigDir());
+  return primary === packaged ? [primary] : [primary, packaged];
 }
 
 export function findConfigFile(relativePath: string): string | undefined {

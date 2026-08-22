@@ -1,7 +1,7 @@
 import { createLogger } from "../observability/logger.ts";
 import { providerConfigLoader } from "../config/provider-loader.ts";
 import { listProviderConfigs } from "../config/provider-writer.ts";
-import { upsertEnvValuesPreservingRaw } from "../config/env-writer.ts";
+import { upsertConfigValues } from "../config/config-store.ts";
 import { parseProviderKeys } from "./api-key-manager.ts";
 import { getAvailableEgressProxies } from "./egress-proxy-manager.ts";
 import { buildAuthHeaders } from "./provider-helpers.ts";
@@ -75,7 +75,7 @@ export interface ProxyDiscoveryReport {
   accepted: AcceptedProxy[];
   rejectedByProvider: Record<string, number>;
   skippedProviders: Record<string, string>;
-  persisted?: { path: string; applied: number; removed: string[] };
+  persisted?: { applied: number; removed: string[] };
 }
 
 export interface ProxyDiscoveryProgress {
@@ -360,12 +360,12 @@ function sharedProxyEntriesFromEnv(): string[] {
   return entries.map(([, value]) => value as string);
 }
 
-function persistSharedProxies(proxies: string[]): { path: string; applied: number; removed: string[] } {
+function persistSharedProxies(proxies: string[]): { applied: number; removed: string[] } {
   const updates: Record<string, string> = {};
   proxies.forEach((proxy, index) => {
     updates[`${SHARED_PROXY_PREFIX}${index + 1}`] = proxy;
   });
-  return upsertEnvValuesPreservingRaw(updates, { removePrefixes: [SHARED_PROXY_PREFIX] });
+  return upsertConfigValues(updates, { removePrefixes: [SHARED_PROXY_PREFIX] });
 }
 
 function clampPositive(value: number | undefined, fallback: number): number {

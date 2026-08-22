@@ -39,10 +39,10 @@ Admin UI: `http://127.0.0.1:9876/setup/`
 ## Quick start (local dev)
 
 ```bash
-cp .env.example .env
 bun install
 
-# Terminal 1 — API server (hot reload)
+# Terminal 1 — API server (hot reload). On first boot an admin
+# CLIENT_API_KEY is generated and printed to the console — no .env needed.
 bun run dev
 
 # Terminal 2 — admin UI (optional; or rely on Docker-built web-static)
@@ -72,22 +72,29 @@ Bun workspaces monorepo:
 
 ## Configuration
 
-### Environment (`.env`)
+### Data directory (config-first)
 
-| Variable | Description |
-|----------|-------------|
-| `CLIENT_API_KEY` | **Required.** Bearer token clients must send |
-| `HOST` / `PORT` | Bind address (default `127.0.0.1:9876`) |
-| `CORS_ORIGINS` | Comma-separated origins or `*` |
-| `LOG_LEVEL` | `debug` \| `info` \| `warn` \| `error` |
-| `DEFAULT_CONTEXT_WINDOW` | Fallback context size (tokens) when upstream/config omit it |
-| `UPSTREAM_MODELS_CACHE_TTL_SECONDS` | Cache TTL for provider `/v1/models` catalogs (default `3600`) |
-| `UPSTREAM_MODELS_FETCH_TIMEOUT_MS` | Max wait on first upstream catalog fetch (default `2000`) |
-| `KEY_COOLDOWN_SECONDS` | API key cooldown after failures |
-| `ENFORCE_TOOL_CALL_*` | Global tool-call enforcement defaults |
-| Provider keys | e.g. `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `ANTHROPIC_API_KEY` |
+All persistent configuration lives in one data directory — default
+`~/.model-proxy` (override with `--data-dir` or `MODEL_PROXY_DATA_DIR`):
 
-See [.env.example](.env.example) for the full list.
+| Path | Purpose |
+|------|---------|
+| `config/settings.json` | Plain runtime settings (managed from the admin UI) |
+| `config/secrets.json` | API keys and other secrets, sealed with AES-256-GCM |
+| `config/providers/` `config/models/` `config/audio-models/` | Routing JSON |
+| `storage/` | SQLite, completions archive, analytics |
+
+On first boot an admin `CLIENT_API_KEY` is generated, persisted to the
+secrets store, and printed once to the console. Legacy `.env` files and
+`config/` directories are migrated into the data dir automatically.
+
+### Environment overrides (optional)
+
+A `.env` file is never required. Any real environment variable (or `.env`
+entry) overrides the UI-managed config store — useful for locked-down
+deploys. Common overrides: `CLIENT_API_KEY`, `HOST`/`PORT`, `CORS_ORIGINS`,
+`LOG_LEVEL`, `KEY_COOLDOWN_SECONDS`, `ENFORCE_TOOL_CALL_*`, provider keys
+like `GROQ_API_KEY`. See [.env.example](.env.example) for the full list.
 
 ### Logical model example
 

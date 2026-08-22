@@ -102,9 +102,10 @@ export default function LoginPage(): React.ReactElement {
             Request session
           </h1>
           <p className="mx-auto max-w-[36ch] text-sm text-bone-500">
-            Authenticate with the <code className="text-phosphor-500">CLIENT_API_KEY</code> defined on your
-            proxy. The key is held locally in your browser and exchanged for an
-            http-only session cookie.
+            Authenticate with your proxy&apos;s admin API key. On a fresh
+            install the key is generated automatically and printed once in the
+            server console. It is held locally in your browser and exchanged
+            for an http-only session cookie.
           </p>
         </div>
         <div className="corners relative bg-ink-800 shadow-edge">
