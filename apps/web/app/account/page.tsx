@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
+import { formatCount, formatLimit, formatUsd, formatUsdLimit } from "@/lib/format";
 import { AuthGuard } from "@/components/auth-guard";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -161,18 +162,3 @@ function KV({ label, value }: { label: string; value: string }): React.ReactElem
   );
 }
 
-function formatLimit(value: number | undefined): string {
-  return value === undefined ? "unlimited" : formatCount(value);
-}
-
-function formatUsdLimit(value: number | undefined): string {
-  return value === undefined ? "unlimited" : `$${value.toFixed(2)}`;
-}
-
-function formatCount(value: number): string {
-  return new Intl.NumberFormat("en-US").format(value);
-}
-
-function formatUsd(value: number): string {
-  return `$${value.toFixed(6)}`;
-}

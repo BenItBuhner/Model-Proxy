@@ -3,6 +3,13 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import {
+  formatCount,
+  formatLimit,
+  formatUsd,
+  formatUsdLimit,
+  formatUptime,
+} from "@/lib/format";
 import { AuthGuard } from "@/components/auth-guard";
 import { PageHeader } from "@/components/page-header";
 import { Panel, PanelBody } from "@/components/ui/panel";
@@ -15,6 +22,7 @@ import {
   getHealth,
   getLogs,
   getMe,
+  getSetupStatus,
   listAvailableModels,
   type AnalyticsSummary,
   type HealthDetailed,
@@ -46,6 +54,9 @@ function DashboardBody(): React.ReactElement {
     completed: number;
   } | undefined>(undefined);
   const [analytics, setAnalytics] = useState<AnalyticsSummary | undefined>(undefined);
+  const [setup, setSetup] = useState<
+    { needs_setup: boolean; models_count: number; providers_count: number } | undefined
+  >(undefined);
   const [err, setErr] = useState<string | undefined>(undefined);
 
   useEffect(() => {
@@ -69,6 +80,13 @@ function DashboardBody(): React.ReactElement {
               listAvailableModels(),
               getCurrentUserLimits(),
             ]);
+        if (admin) {
+          getSetupStatus()
+            .then((status) => {
+              if (!cancelled) setSetup(status);
+            })
+            .catch(() => {});
+        }
         if (cancelled) return;
         setPrincipal(me.principal);
         setHealth(h);
@@ -169,6 +187,42 @@ function DashboardBody(): React.ReactElement {
           <StatusDot tone="danger" />
           <span className="text-alert-500">{err}</span>
         </div>
+      ) : null}
+
+      {setup?.needs_setup === true ? (
+        <Panel title="getting started" accent className="mb-6">
+          <PanelBody className="space-y-4">
+            <p className="max-w-[72ch] text-sm text-bone-500">
+              No models are routed yet. Three steps and the proxy is live —
+              everything is configured right here, no config files needed.
+            </p>
+            <ol className="space-y-2 font-mono text-[12px] text-bone-700">
+              <li className="flex items-center gap-3">
+                <span className="text-phosphor-500">01</span>
+                <Link href="/test-environment?tab=env" className="underline decoration-ink-300 underline-offset-4 hover:text-phosphor-500">
+                  Add a provider API key
+                </Link>
+                <span className="text-bone-300">
+                  ({setup.providers_count} providers ready out of the box)
+                </span>
+              </li>
+              <li className="flex items-center gap-3">
+                <span className="text-phosphor-500">02</span>
+                <Link href="/models" className="underline decoration-ink-300 underline-offset-4 hover:text-phosphor-500">
+                  Create a logical model
+                </Link>
+                <span className="text-bone-300">(pick provider + upstream model, add fallbacks)</span>
+              </li>
+              <li className="flex items-center gap-3">
+                <span className="text-phosphor-500">03</span>
+                <Link href="/test-environment?tab=test" className="underline decoration-ink-300 underline-offset-4 hover:text-phosphor-500">
+                  Send a test request
+                </Link>
+                <span className="text-bone-300">(then point any OpenAI/Anthropic client at this proxy)</span>
+              </li>
+            </ol>
+          </PanelBody>
+        </Panel>
       ) : null}
 
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4 mb-6">
@@ -349,22 +403,6 @@ function formatTokenCount(value: number | undefined, estimated: boolean | undefi
   return `${value}${estimated === true ? "~" : ""}`;
 }
 
-function formatCount(value: number): string {
-  return new Intl.NumberFormat("en-US").format(value);
-}
-
-function formatUsd(value: number): string {
-  return `$${value.toFixed(6)}`;
-}
-
-function formatLimit(value: number | undefined): string {
-  return value === undefined ? "unlimited" : formatCount(value);
-}
-
-function formatUsdLimit(value: number | undefined): string {
-  return value === undefined ? "unlimited" : `$${value.toFixed(2)}`;
-}
-
 function formatSpeed(record: RequestLogRecord): string {
   if (
     record.completionTokens !== undefined &&
@@ -377,17 +415,6 @@ function formatSpeed(record: RequestLogRecord): string {
     return `${(record.streamBytes / (record.elapsedMs / 1000) / 1024).toFixed(1)} KB/s`;
   }
   return "–";
-}
-
-function formatUptime(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  const m = Math.floor(seconds / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  const mm = m % 60;
-  if (h < 24) return `${h}h ${mm}m`;
-  const d = Math.floor(h / 24);
-  return `${d}d ${h % 24}h`;
 }
 
 function isAdminPrincipal(principal: PrincipalInfo): boolean {

@@ -105,6 +105,15 @@ export function getHealth(signal?: AbortSignal): Promise<HealthDetailed> {
   );
 }
 
+// -------- First-run setup --------
+export function getSetupStatus(): Promise<{
+  needs_setup: boolean;
+  models_count: number;
+  providers_count: number;
+}> {
+  return apiFetch("/v1/admin/setup/status");
+}
+
 // -------- Auth --------
 export async function login(apiKey: string): Promise<void> {
   await apiFetch("/v1/auth/login", {

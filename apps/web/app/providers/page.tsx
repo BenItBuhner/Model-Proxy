@@ -4,9 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { AuthGuard } from "@/components/auth-guard";
 import { PageHeader } from "@/components/page-header";
-import { Panel } from "@/components/ui/panel";
+import { Panel, PanelBody } from "@/components/ui/panel";
 import { Button } from "@/components/ui/button";
-import { Label, Textarea } from "@/components/ui/input";
+import { Input, Label, Textarea } from "@/components/ui/input";
 import { Badge, StatusDot } from "@/components/ui/badge";
 import { Table, Thead, Tr, Th, Td, EmptyRow } from "@/components/ui/table";
 import {
@@ -28,12 +28,52 @@ export default function ProvidersPage(): React.ReactElement {
   );
 }
 
+/**
+ * Scaffold for a brand-new OpenAI-compatible provider. Providers are pure
+ * data: no code changes needed, ever.
+ */
+function newProviderScaffold(name: string, baseUrl: string): Record<string, unknown> {
+  const token = name.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+  return {
+    name,
+    display_name: name,
+    enabled: true,
+    api_keys: {
+      env_var_patterns: [`${token}_API_KEY`, `${token}_API_KEY_{INDEX}`],
+    },
+    endpoints: {
+      base_url: baseUrl,
+      completions: "/chat/completions",
+      streaming: "/chat/completions",
+      compatible_format: "openai",
+    },
+    authentication: {
+      type: "bearer",
+      header_name: "Authorization",
+      header_format: "Bearer {api_key}",
+    },
+    error_handling: {
+      "401": { action: "global_key_failure" },
+      "403": { action: "global_key_failure" },
+      "429": { action: "provider_cooldown" },
+      "500": { action: "model_key_failure" },
+      "502": { action: "model_key_failure" },
+      "503": { action: "model_key_failure" },
+      "504": { action: "model_key_failure" },
+    },
+    model_mapping: {},
+  };
+}
+
 function ProvidersBody(): React.ReactElement {
   const [items, setItems] = useState<ProviderListItem[]>([]);
   const [active, setActive] = useState<string | undefined>(undefined);
   const [raw, setRaw] = useState<string>("");
   const [status, setStatus] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newBaseUrl, setNewBaseUrl] = useState("");
 
   const reload = useCallback(async () => {
     try {
@@ -82,13 +122,44 @@ function ProvidersBody(): React.ReactElement {
     await reload();
   }
 
+  async function create(): Promise<void> {
+    const name = newName.trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9_-]*$/.test(name)) {
+      setError("Provider name must be lowercase letters, digits, dashes, or underscores.");
+      return;
+    }
+    if (newBaseUrl.trim().length === 0) {
+      setError("Base URL is required (e.g. https://api.example.com/v1).");
+      return;
+    }
+    try {
+      const scaffold = newProviderScaffold(name, newBaseUrl.trim());
+      await saveProvider(name, scaffold);
+      setCreating(false);
+      setNewName("");
+      setNewBaseUrl("");
+      setError(undefined);
+      await reload();
+      await open(name);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
   return (
     <>
       <PageHeader
         eyebrow="providers"
         title="Upstream providers"
         description="Backend configurations for every provider the router can dispatch to. Edit endpoints, auth headers, error handling, and API key patterns."
-        actions={<Button variant="outline" onClick={reload}>refresh</Button>}
+        actions={
+          <div className="flex items-center gap-2">
+            <Button onClick={() => setCreating(!creating)}>
+              {creating ? "cancel" : "new provider"}
+            </Button>
+            <Button variant="outline" onClick={reload}>refresh</Button>
+          </div>
+        }
       />
 
       {error !== undefined ? (
@@ -96,6 +167,47 @@ function ProvidersBody(): React.ReactElement {
           <StatusDot tone="danger" />
           <span className="text-alert-500">{error}</span>
         </div>
+      ) : null}
+
+      {creating ? (
+        <Panel title="new provider" accent className="mb-6">
+          <PanelBody className="space-y-4">
+            <p className="max-w-[70ch] text-sm text-bone-500">
+              Any OpenAI-compatible upstream works with zero code — this
+              scaffolds the JSON, then fine-tune it in the editor. Add the
+              matching API key under Test environment → env.
+            </p>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <Label htmlFor="new-provider-name" hint="lowercase id, e.g. fireworks">
+                  Name
+                </Label>
+                <Input
+                  id="new-provider-name"
+                  monospace
+                  placeholder="fireworks"
+                  value={newName}
+                  onChange={(event) => setNewName(event.target.value)}
+                />
+              </div>
+              <div>
+                <Label htmlFor="new-provider-url" hint="OpenAI-compatible base URL">
+                  Base URL
+                </Label>
+                <Input
+                  id="new-provider-url"
+                  monospace
+                  placeholder="https://api.fireworks.ai/inference/v1"
+                  value={newBaseUrl}
+                  onChange={(event) => setNewBaseUrl(event.target.value)}
+                />
+              </div>
+            </div>
+            <Button onClick={create} disabled={newName.trim().length === 0 || newBaseUrl.trim().length === 0}>
+              create provider
+            </Button>
+          </PanelBody>
+        </Panel>
       ) : null}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
