@@ -27,8 +27,15 @@ import {
   EnforceValidationError,
 } from "../../routing/enforce/index.ts";
 import { FallbackRouter } from "../../routing/fallback.ts";
-import { FusionRouter } from "../../routing/fusion/fusion-router.ts";
+// Fusion is an optional module: only type imports are static; the runtime
+// implementation is loaded lazily when a fusion-enabled model is requested.
+import type { FusionRouter } from "../../routing/fusion/fusion-router.ts";
 import type { FusionRequestContext, FusionResult } from "../../routing/fusion/types.ts";
+import {
+  buildUpstreamExtraHeaders,
+  completionPersistenceForRequest,
+  shouldPersistCompletion,
+} from "./route-helpers.ts";
 import { principal, requireAuth } from "../auth.ts";
 import { formatAnthropicError } from "../error-formatters.ts";
 import {
@@ -55,34 +62,6 @@ function parsePositiveInt(value: string | undefined): number | undefined {
   if (value === undefined || value.trim() === "") return undefined;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-function shouldPersistCompletion(modelOverride: boolean | undefined): boolean {
-  if (modelOverride !== undefined) return modelOverride;
-  return /^(1|true|yes|on)$/i.test(process.env.PERSIST_COMPLETIONS?.trim() ?? "");
-}
-
-function completionPersistenceForRequest(
-  p: ReturnType<typeof principal>,
-  modelOverride: boolean | undefined,
-): boolean | undefined {
-  if (p === undefined || p.isOwner) return modelOverride;
-  return p.completionLoggingEnabled === true;
-}
-
-function buildUpstreamExtraHeaders(c: Context): Record<string, string> {
-  const headers: Record<string, string> = {};
-  const session = c.req.header("x-opencode-session") ?? c.req.header("x-session-affinity");
-  if (session !== undefined && session.length > 0) headers["x-opencode-session"] = session;
-  const opencodeRequest = c.req.header("x-opencode-request");
-  if (opencodeRequest !== undefined && opencodeRequest.length > 0) headers["x-opencode-request"] = opencodeRequest;
-  const opencodeClient = c.req.header("x-opencode-client");
-  if (opencodeClient !== undefined && opencodeClient.length > 0) headers["x-opencode-client"] = opencodeClient;
-  const project = c.req.header("x-opencode-project");
-  if (project !== undefined && project.length > 0) headers["x-opencode-project"] = project;
-  const userAgent = c.req.header("user-agent");
-  if (userAgent !== undefined && userAgent.length > 0) headers["User-Agent"] = userAgent;
-  return headers;
 }
 
 export function createAnthropicRoutes(): Hono {
@@ -491,6 +470,7 @@ async function handleAnthropicFusionRequest({
   if (!fusionConfig?.enabled) {
     return c.json(formatAnthropicError(400, "Fusion not enabled for this model"), 400);
   }
+  const { FusionRouter } = await import("../../routing/fusion/fusion-router.ts");
   const fusionRouter = new FusionRouter();
   const messages = (requestDict["messages"] as unknown[]) ?? [];
   const fusionCtx: FusionRequestContext = {

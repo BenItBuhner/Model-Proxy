@@ -15,4 +15,4 @@ Static checks / build:
 - Lint == typecheck: `bun run typecheck` at the root checks all three workspaces. The web `lint` script (`next lint`) is NOT configured in this repo — it drops into an interactive ESLint setup prompt and is not usable non-interactively; rely on `typecheck` instead.
 - Builds: `bun run build` (API bundle → `dist/server.js`) and `bun run build:web` (Next static export → `apps/web/out`).
 
-Tests: `bun run test` at the root runs the server suite (`packages/server/tests/`) then the web suite (`apps/web/tests/`). ~10 failures are pre-existing (absent `opencode`/`nvidia` provider JSONs and a usage-range case) — do not treat them as regressions from env changes.
+Tests: `bun run test` at the root runs the server suite (`packages/server/tests/`) then the web suite (`apps/web/tests/`). All tests pass; treat any failure as a regression.

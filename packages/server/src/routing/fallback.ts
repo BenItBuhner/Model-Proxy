@@ -19,18 +19,13 @@ import {
   getAvailableKeys,
   getKeyCooldownSeconds,
   getMaxKeyRetryCycles,
-  type ErrorAction,
 } from "../providers/api-key-manager.ts";
 import {
   ProxyCycleTracker,
   providerHasEgressProxies,
   resolveRetryAfterSeconds,
 } from "../providers/egress-proxy-manager.ts";
-import {
-  ProviderAPIError,
-  ProviderTimeoutError,
-  RouteExecutionError,
-} from "../providers/errors.ts";
+import { ProviderAPIError } from "../providers/errors.ts";
 import { getProviderWireProtocol } from "../providers/provider-helpers.ts";
 import { recordRequestProgress } from "../server/request-log.ts";
 import type { Principal } from "../storage/identity-store.ts";
@@ -44,6 +39,19 @@ import {
   fixMissingToolResponsesOpenAI,
   fixMissingToolResultsAnthropic,
 } from "./tool-response-fixer.ts";
+import {
+  extractStatusCode,
+  formatErrorForLog,
+  isAbortLikeError,
+  isFallbackWorthy,
+  resolveErrorAction,
+  shouldCooldownProxyForError,
+} from "./error-classification.ts";
+import {
+  isMeaningfulStreamChunk,
+  requireMeaningfulStream,
+  shouldIgnoreReasoningForStreamWinner,
+} from "./stream-inspection.ts";
 
 function keyHintOf(apiKey: string): string {
   if (usesPublicAuth(apiKey)) return "(public)";
@@ -82,9 +90,6 @@ void getKeyCooldownSeconds;
 void getMaxKeyRetryCycles;
 
 const log = createLogger("routing.fallback");
-
-const VERBOSE_HTTP_ERRORS =
-  (process.env.VERBOSE_HTTP_ERRORS ?? "false").toLowerCase() === "true";
 
 interface RouteTuple {
   routeConfig: RouteConfig;
@@ -161,19 +166,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isAbortLikeError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  if (error.name === "AbortError") return true;
-  if (
-    error instanceof RouteExecutionError &&
-    error.originalError !== undefined &&
-    isAbortLikeError(error.originalError)
-  ) {
-    return true;
-  }
-  return /operation was aborted|request was aborted|aborterror/i.test(error.message);
-}
-
 function emitHedgeCancelled(
   candidate: HedgedResolvedCandidate,
   reason: "winner_selected" | "client_abort" | "not_started",
@@ -223,161 +215,6 @@ class AsyncQueue<T> {
   }
 }
 
-function isMeaningfulStreamChunk(
-  chunk: string,
-  targetProtocol: "openai" | "anthropic" | "responses",
-  minContentChars: number,
-  options: { ignoreReasoning?: boolean } = {},
-): boolean {
-  for (const payload of parseSsePayloads(chunk)) {
-    if (payload === "[DONE]") continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(payload);
-    } catch {
-      continue;
-    }
-    if (typeof parsed !== "object" || parsed === null) continue;
-    const obj = parsed as Record<string, unknown>;
-    if (targetProtocol === "anthropic") {
-      if (obj["type"] === "content_block_start") return true;
-      const delta = obj["delta"];
-      if (typeof delta === "object" && delta !== null) {
-        const text = (delta as Record<string, unknown>)["text"];
-        if (typeof text === "string" && text.trim().length >= minContentChars) return true;
-      }
-      continue;
-    }
-    if (targetProtocol === "responses") {
-      const eventType = typeof obj["type"] === "string" ? obj["type"] : "";
-      if (
-        eventType === "response.created" ||
-        eventType === "response.in_progress" ||
-        eventType === "response.output_item.added" ||
-        eventType === "response.output_text.delta" ||
-        eventType === "response.function_call_arguments.delta" ||
-        eventType === "response.completed"
-      ) {
-        return true;
-      }
-      continue;
-    }
-    const choices = obj["choices"];
-    if (!Array.isArray(choices)) continue;
-    for (const choice of choices) {
-      if (typeof choice !== "object" || choice === null) continue;
-      const choiceObj = choice as Record<string, unknown>;
-      const delta = choiceObj["delta"];
-      if (typeof delta === "object" && delta !== null) {
-        const deltaObj = delta as Record<string, unknown>;
-        const fields = options.ignoreReasoning
-          ? ["content"]
-          : ["content", "reasoning", "reasoning_content"];
-        for (const field of fields) {
-          const value = deltaObj[field];
-          if (typeof value === "string" && value.trim().length >= minContentChars) {
-            return true;
-          }
-        }
-        if (Array.isArray(deltaObj["tool_calls"]) && deltaObj["tool_calls"].length > 0) {
-          return true;
-        }
-      }
-      const message = choiceObj["message"];
-      if (typeof message === "object" && message !== null) {
-        const messageObj = message as Record<string, unknown>;
-        const fields = options.ignoreReasoning
-          ? ["content"]
-          : ["content", "reasoning", "reasoning_content"];
-        for (const field of fields) {
-          const value = messageObj[field];
-          if (typeof value === "string" && value.trim().length >= minContentChars) {
-            return true;
-          }
-        }
-        if (Array.isArray(messageObj["tool_calls"]) && messageObj["tool_calls"].length > 0) {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
-}
-
-function parseSsePayloads(chunk: string): string[] {
-  const out: string[] = [];
-  for (const line of chunk.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("data:")) continue;
-    const payload = trimmed.slice(5).trim();
-    if (payload.length > 0) out.push(payload);
-  }
-  return out;
-}
-
-function shouldIgnoreReasoningForStreamWinner(requestData: Record<string, unknown>): boolean {
-  const requestTools = requestData["tools"];
-  return Array.isArray(requestTools) && requestTools.length > 0;
-}
-
-function isEmptyMeaningfulStreamError(err: unknown): boolean {
-  if (!(err instanceof ProviderAPIError)) return false;
-  const status = extractStatusCode(err);
-  if (status !== 502) return false;
-  return /stream ended before emitting meaningful content/i.test(err.message);
-}
-
-async function* requireMeaningfulStream(
-  stream: AsyncGenerator<string, void, unknown>,
-  route: ResolvedRoute,
-  requestData: Record<string, unknown>,
-  targetProtocol: "openai" | "anthropic" | "responses",
-  options: { allowEmptyPassthrough?: boolean } = {},
-): AsyncGenerator<string, void, unknown> {
-  const buffered: string[] = [];
-  let emittedMeaningfulChunk = false;
-  void requestData;
-
-  for await (const chunk of stream) {
-    if (emittedMeaningfulChunk) {
-      yield chunk;
-      continue;
-    }
-
-    buffered.push(chunk);
-    if (
-      isMeaningfulStreamChunk(chunk, targetProtocol, 1, {
-        ignoreReasoning: false,
-      })
-    ) {
-      emittedMeaningfulChunk = true;
-      for (const bufferedChunk of buffered) yield bufferedChunk;
-      buffered.length = 0;
-    }
-  }
-
-  if (!emittedMeaningfulChunk) {
-    if (options.allowEmptyPassthrough === true) {
-      for (const bufferedChunk of buffered) yield bufferedChunk;
-      if (
-        targetProtocol === "openai" &&
-        !buffered.some((chunk) => parseSsePayloads(chunk).includes("[DONE]"))
-      ) {
-        yield "data: [DONE]\n\n";
-      }
-      return;
-    }
-    throw new ProviderAPIError(
-      `${route.provider} stream ended before emitting meaningful content`,
-      502,
-      {
-        provider: route.provider,
-        body: buffered.join("").slice(0, 1000),
-      },
-    );
-  }
-}
-
 export interface CallWithFallbackArgs {
   logicalModel: string;
   requestData: Record<string, unknown>;
@@ -388,119 +225,6 @@ export interface CallWithFallbackArgs {
   validateResponse?: boolean;
   /** Extra headers forwarded to upstream providers (e.g. x-opencode-*). */
   extraHeaders?: Record<string, string>;
-}
-
-interface ErrorActionResult {
-  action: ErrorAction;
-  cooldownSeconds?: number;
-}
-
-function extractStatusCode(err: unknown): number | undefined {
-  if (err instanceof ProviderAPIError) return err.status;
-  if (err instanceof RouteExecutionError) return err.statusCode;
-  if (err instanceof Error) {
-    const maybeStatus = (err as unknown as { status?: unknown }).status;
-    if (typeof maybeStatus === "number") return maybeStatus;
-  }
-  return undefined;
-}
-
-function isFallbackWorthy(err: unknown): boolean {
-  const status = extractStatusCode(err);
-  if (status !== undefined) {
-    if (status >= 400 && status < 600) return true;
-  }
-  if (isAbortLikeError(err)) return true;
-  if (err instanceof Error) {
-    const msg = err.message.toLowerCase();
-    return /timeout|timed out|abort|aborted|connect|connection|network|unreachable|reset|failed to fetch|unexpected end|invalid json|json input|server error|internal server error|bad gateway|service unavailable|gateway timeout|too many requests|rate limit|temporarily|overloaded|capacity/.test(
-      msg,
-    );
-  }
-  return false;
-}
-
-function formatErrorForLog(
-  err: unknown,
-  provider: string,
-  model: string,
-  apiKey: string | undefined,
-): string {
-  const parts = [`provider=${provider}`, `model=${model}`];
-  const status = extractStatusCode(err);
-  if (status !== undefined) parts.push(`status=${status}`);
-  if (status === 401 && apiKey !== undefined) {
-    const hint = apiKey.length >= 4 ? `...${apiKey.slice(-4)}` : "***";
-    parts.push(`key=${hint}`);
-  }
-  const base = parts.join(", ");
-  if (VERBOSE_HTTP_ERRORS) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return `${base}, error=${msg}`;
-  }
-  return base;
-}
-
-function resolveErrorAction(
-  providerName: string,
-  err: unknown,
-): ErrorActionResult {
-  const status = extractStatusCode(err);
-  if (isProviderTimeout(err)) return { action: "fallback_no_cooldown" };
-  if (isAbortLikeError(err)) return { action: "fallback_no_cooldown" };
-  if (isEmptyMeaningfulStreamError(err)) return { action: "fallback_no_cooldown" };
-  if (status === undefined) return { action: "model_key_failure" };
-
-  if (status === 429 && err instanceof ProviderAPIError) {
-    const retryAfter = resolveRetryAfterSeconds(err, providerName);
-    const body = err.body?.toLowerCase() ?? "";
-    if (
-      body.includes("freeusagelimiterror") ||
-      body.includes("ratelimiterror") ||
-      body.includes("free-models-per-day") ||
-      body.includes("rate limit exceeded")
-    ) {
-      const out: ErrorActionResult = { action: "provider_cooldown" };
-      if (retryAfter !== undefined) out.cooldownSeconds = retryAfter;
-      return out;
-    }
-  }
-
-  try {
-    const cfg = providerConfigLoader.loadProvider(providerName);
-    const handling = cfg.error_handling ?? {};
-    const entry = handling[String(status)];
-    if (entry !== undefined) {
-      const action = entry.action as ErrorAction;
-      const cooldown = (entry as { cooldown_seconds?: unknown }).cooldown_seconds;
-      const out: ErrorActionResult = { action };
-      if (typeof cooldown === "number") out.cooldownSeconds = cooldown;
-      return out;
-    }
-  } catch {
-    // fall through to defaults
-  }
-
-  if (status === 401 || status === 403) return { action: "global_key_failure" };
-  return { action: "model_key_failure" };
-}
-
-function isProviderTimeout(err: unknown): boolean {
-  return (
-    err instanceof ProviderTimeoutError ||
-    (err instanceof RouteExecutionError &&
-      err.originalError instanceof ProviderTimeoutError)
-  );
-}
-
-function shouldCooldownProxyForError(err: unknown): boolean {
-  if (isProviderTimeout(err)) return true;
-  const status = extractStatusCode(err);
-  if (status !== undefined) return status === 502 || status === 503 || status === 504;
-  if (err instanceof Error) {
-    return /timeout|timed out|connect|connection|network|unreachable|reset|failed to fetch|unexpected end|invalid json|json input|gateway timeout/i.test(err.message);
-  }
-  return false;
 }
 
 export class FallbackRouter {
