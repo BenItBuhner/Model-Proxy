@@ -1,4 +1,5 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,7 +20,6 @@ import { resetKeyState } from "../src/providers/api-key-manager.ts";
 import { resetProxyState } from "../src/providers/egress-proxy-manager.ts";
 import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { FallbackRouter } from "../src/routing/fallback.ts";
-import { modelConfigLoader } from "../src/config/model-loader.ts";
 import type { Principal } from "../src/storage/identity-store.ts";
 
 const tmpRoot = join(tmpdir(), `mp-v2-routing-${process.pid}-${Date.now()}`);
@@ -45,9 +45,7 @@ function makeRouter(
 
 // Replace the singleton loader's config dir at module-scope by a fresh loader
 // pointing at our sandbox (via monkey-patched internals).
-(modelConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
-(modelConfigLoader as unknown as { pathsArePlainModelDirs: boolean }).pathsArePlainModelDirs = false;
-(providerConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
+setPrimaryConfigDirForTests(tmpRoot);
 
 interface DelayedFakeResponse {
   delayMs: number;
@@ -545,6 +543,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  setPrimaryConfigDirForTests(undefined);
   providerRegistry.unregisterProvider("fake");
   providerRegistry.unregisterProvider("fake-proxy");
   resetKeyState("fake");

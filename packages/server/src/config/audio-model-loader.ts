@@ -17,14 +17,21 @@ interface CacheEntry {
 }
 
 export class AudioModelConfigLoader {
-  private readonly searchPaths: string[];
+  private readonly configDirOverride: string | undefined;
   private readonly cache = new Map<string, CacheEntry>();
 
   constructor(options: { configDir?: string } = {}) {
-    this.searchPaths =
-      options.configDir !== undefined
-        ? [options.configDir]
-        : getConfigSearchPaths();
+    this.configDirOverride = options.configDir;
+  }
+
+  /**
+   * Resolved on every access (not snapshotted at construction) so test
+   * overrides and data-dir changes apply to the shared singleton immediately.
+   */
+  private get searchPaths(): string[] {
+    return this.configDirOverride !== undefined
+      ? [this.configDirOverride]
+      : getConfigSearchPaths();
   }
 
   private findConfigPath(logicalModel: string): string | undefined {

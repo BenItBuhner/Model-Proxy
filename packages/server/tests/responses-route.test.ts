@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,8 +7,6 @@ import { createApp } from "../src/server/app.ts";
 import { providerRegistry } from "../src/providers/registry.ts";
 import type { BaseProvider, OpenAICallArgs, ProviderCallContext, ResponsesCallArgs } from "../src/providers/base.ts";
 import type { ProviderConfig } from "@model-proxy/contracts/schemas/provider.ts";
-import { modelConfigLoader } from "../src/config/model-loader.ts";
-import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { setStorageRootForTests } from "../src/storage/storage-paths.ts";
 import { closeOperationalDbForTests } from "../src/storage/operational-db.ts";
 import { resetGlobalResponseStoreForTests } from "../src/format/response-store.ts";
@@ -177,8 +176,7 @@ describe("Responses HTTP route", () => {
       logical_name: "route-responses-chat",
       model_routings: [{ provider: "route-responses-fake", model: "glm-5.2", wire_protocol: "openai", auth_mode: "public" }],
     }));
-    (modelConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [root];
-    (providerConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [root];
+    setPrimaryConfigDirForTests(root);
     providerRegistry.registerProvider("route-responses-fake", () => new RouteResponsesFake());
     providerRegistry.registerProvider("failing-responses-fake", () => new FailingResponsesFake());
   });
@@ -189,6 +187,7 @@ describe("Responses HTTP route", () => {
   });
 
   afterAll(() => {
+    setPrimaryConfigDirForTests(undefined);
     providerRegistry.unregisterProvider("route-responses-fake");
     providerRegistry.unregisterProvider("failing-responses-fake");
     closeOperationalDbForTests();

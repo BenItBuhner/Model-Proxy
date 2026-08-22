@@ -1,3 +1,6 @@
+import type { ProviderType } from "@model-proxy/contracts/schemas/provider.ts";
+
+import { providerConfigLoader } from "../config/provider-loader.ts";
 import type { BaseProvider } from "./base.ts";
 import { AnthropicProvider } from "./anthropic-provider.ts";
 import { CodexProvider } from "./codex-provider.ts";
@@ -8,61 +11,64 @@ import { SuperGrokProvider } from "./supergrok-provider.ts";
 
 type ProviderFactory = () => BaseProvider;
 
-const defaultFactories: Record<string, ProviderFactory> = {
-  openai: () => new OpenAIProvider("openai"),
-  openrouter: () => new OpenAIProvider("openrouter"),
-  nahcrof: () => new OpenAIProvider("nahcrof"),
-  "nahcrof-alt": () => new OpenAIProvider("nahcrof-alt"),
-  groq: () => new OpenAIProvider("groq"),
-  cerebras: () => new OpenAIProvider("cerebras"),
-  llama: () => new OpenAIProvider("llama"),
-  mistral: () => new OpenAIProvider("mistral"),
-  cloudflare: () => new OpenAIProvider("cloudflare"),
-  chutes: () => new OpenAIProvider("chutes"),
-  longcat: () => new OpenAIProvider("longcat"),
-  zai: () => new OpenAIProvider("zai"),
-  nvidia: () => new OpenAIProvider("nvidia"),
-  "local-llama": () => new OpenAIProvider("local-llama"),
-  github: () => new OpenAIProvider("github"),
-  opencode: () => new OpenCodeProvider(),
-  tokenrouter: () => new OpenAIProvider("tokenrouter"),
-  codex: () => new CodexProvider(),
-  supergrok: () => new SuperGrokProvider(),
+/**
+ * Providers are fully data-driven: dropping a JSON file into
+ * `config/providers/` is all it takes. The optional `type` field in the JSON
+ * selects the runtime adapter; plain OpenAI-compatible upstreams (the vast
+ * majority) need no type at all.
+ */
+const typeFactories: Record<ProviderType, (name: string) => BaseProvider> = {
+  "openai-compat": (name) => new OpenAIProvider(name),
+  anthropic: (name) => new AnthropicProvider(name),
+  gemini: (name) => new GeminiOpenAIProvider(name),
+  opencode: (name) => new OpenCodeProvider(name),
+  codex: (name) => new CodexProvider(name),
+  supergrok: (name) => new SuperGrokProvider(name),
+};
 
-  gemini: () => new GeminiOpenAIProvider(),
-  anthropic: () => new AnthropicProvider(),
+/** Well-known names keep their specialty adapters when `type` is omitted. */
+const inferredTypeByName: Record<string, ProviderType> = {
+  anthropic: "anthropic",
+  gemini: "gemini",
+  opencode: "opencode",
+  codex: "codex",
+  supergrok: "supergrok",
 };
 
 const customFactories = new Map<string, ProviderFactory>();
 
-function resolveFactory(providerName: string): ProviderFactory | undefined {
-  return customFactories.get(providerName) ?? defaultFactories[providerName];
+function resolveProviderType(providerName: string): ProviderType {
+  const config = providerConfigLoader.loadProvider(providerName);
+  const declared = config.type;
+  if (declared !== undefined) return declared;
+  return inferredTypeByName[providerName] ?? "openai-compat";
 }
 
 export const providerRegistry = {
   getProvider(providerName: string): BaseProvider {
-    const factory = resolveFactory(providerName);
-    if (factory === undefined) {
-      const available = [
-        ...Object.keys(defaultFactories),
-        ...customFactories.keys(),
-      ].sort();
-      throw new Error(
-        `Unknown provider: '${providerName}'. Available: ${available.join(", ")}`,
-      );
-    }
-    return factory();
+    const custom = customFactories.get(providerName);
+    if (custom !== undefined) return custom();
+    const type = resolveProviderType(providerName);
+    return typeFactories[type](providerName);
   },
 
   isValidProvider(providerName: string): boolean {
-    return resolveFactory(providerName) !== undefined;
+    if (customFactories.has(providerName)) return true;
+    try {
+      providerConfigLoader.loadProvider(providerName);
+      return true;
+    } catch {
+      return false;
+    }
   },
 
   getAvailableProviders(): string[] {
-    return [
-      ...Object.keys(defaultFactories),
-      ...customFactories.keys(),
-    ].sort();
+    return Array.from(
+      new Set([
+        ...providerConfigLoader.getAvailableProviders(),
+        ...customFactories.keys(),
+      ]),
+    ).sort();
   },
 
   registerProvider(providerName: string, factory: ProviderFactory): void {

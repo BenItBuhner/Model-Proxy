@@ -9,8 +9,8 @@ const MODEL_PROXY_VERSION = "2.0.0";
  * attaches the x-opencode-* headers expected by opencode.ai/zen.
  */
 export class OpenCodeProvider extends OpenAIProvider {
-  constructor() {
-    super("opencode");
+  constructor(providerName = "opencode") {
+    super(providerName);
   }
 
   protected override authHeaders(ctx: ProviderCallContext): Record<string, string> {

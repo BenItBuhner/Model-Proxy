@@ -1,6 +1,7 @@
 {
   "name": "supergrok",
   "display_name": "SuperGrok / X Premium+ Subscription",
+  "type": "supergrok",
   "enabled": true,
   "api_keys": {
     "env_var_patterns": [],
@@ -22,7 +23,13 @@
   "request_config": {
     "timeout_seconds": 120,
     "max_retries": 0,
-    "retry_on_status": [429, 500, 502, 503, 504],
+    "retry_on_status": [
+      429,
+      500,
+      502,
+      503,
+      504
+    ],
     "default_parameters": {},
     "required_parameters": []
   },
@@ -31,17 +38,35 @@
     "cooldown_seconds": 180
   },
   "models": {
-    "grok-4.6": { "context_length": 200000 },
-    "grok-4.5": { "context_length": 200000 }
+    "grok-4.6": {
+      "context_length": 200000
+    },
+    "grok-4.5": {
+      "context_length": 200000
+    }
   },
   "error_handling": {
-    "401": { "action": "global_key_failure" },
-    "403": { "action": "global_key_failure" },
-    "429": { "action": "model_key_failure" },
-    "500": { "action": "model_key_failure" },
-    "502": { "action": "model_key_failure" },
-    "503": { "action": "model_key_failure" },
-    "504": { "action": "model_key_failure" }
+    "401": {
+      "action": "global_key_failure"
+    },
+    "403": {
+      "action": "global_key_failure"
+    },
+    "429": {
+      "action": "model_key_failure"
+    },
+    "500": {
+      "action": "model_key_failure"
+    },
+    "502": {
+      "action": "model_key_failure"
+    },
+    "503": {
+      "action": "model_key_failure"
+    },
+    "504": {
+      "action": "model_key_failure"
+    }
   },
   "model_mapping": {}
 }

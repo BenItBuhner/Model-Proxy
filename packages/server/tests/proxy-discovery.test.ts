@@ -6,7 +6,6 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
 import { readConfigValues, upsertConfigValues } from "../src/config/config-store.ts";
 import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
-import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { discoverProxies } from "../src/providers/proxy-discovery.ts";
 import type { UpstreamFetcher } from "../src/providers/upstream-fetch.ts";
 import { setStorageRootForTests } from "../src/storage/storage-paths.ts";
@@ -45,7 +44,7 @@ beforeAll(() => {
   mkdirSync(join(tmpRoot, "models"), { recursive: true });
   setPrimaryConfigDirForTests(tmpRoot);
   setStorageRootForTests(join(tmpRoot, "storage"));
-  (providerConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
+
   writeFileSync(join(tmpRoot, "providers", "opencode.json"), JSON.stringify(provider("opencode", "public")));
   writeFileSync(join(tmpRoot, "providers", "nvidia.json"), JSON.stringify(provider("nvidia")));
   process.env.NVIDIA_API_KEY = "nv-test";

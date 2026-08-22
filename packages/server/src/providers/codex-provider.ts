@@ -6,8 +6,8 @@ import { OpenAIProvider } from "./openai-provider.ts";
 
 /** ChatGPT subscription transport used by the official Codex CLI. */
 export class CodexProvider extends OpenAIProvider {
-  constructor() {
-    super("codex");
+  constructor(providerName = "codex") {
+    super(providerName);
   }
 
   protected override openAIRequestHeaders(

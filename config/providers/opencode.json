@@ -1,0 +1,48 @@
+{
+  "name": "opencode",
+  "display_name": "OpenCode Zen",
+  "type": "opencode",
+  "enabled": true,
+  "api_keys": {
+    "env_var_patterns": ["OPENCODE_API_KEY", "OPENCODE_API_KEY_{INDEX}"],
+    "default_value": "public",
+    "description": "OpenCode Zen gateway. Free-tier models authenticate with the literal key 'public'."
+  },
+  "endpoints": {
+    "base_url": "https://opencode.ai/zen/v1",
+    "completions": "/chat/completions",
+    "streaming": "/chat/completions",
+    "compatible_format": "openai"
+  },
+  "authentication": {
+    "type": "bearer",
+    "header_name": "Authorization",
+    "header_format": "Bearer {api_key}"
+  },
+  "request_config": {
+    "timeout_seconds": 120,
+    "max_retries": 0,
+    "retry_on_status": [429, 500, 502, 503, 504],
+    "default_parameters": {},
+    "required_parameters": []
+  },
+  "rate_limiting": {
+    "enabled": false,
+    "cooldown_seconds": 180
+  },
+  "egress_proxies": {
+    "enabled": true,
+    "env_var_patterns": ["OPENCODE_EGRESS_PROXY", "OPENCODE_EGRESS_PROXY_{INDEX}"]
+  },
+  "models": {},
+  "error_handling": {
+    "401": { "action": "global_key_failure" },
+    "403": { "action": "global_key_failure" },
+    "429": { "action": "provider_cooldown" },
+    "500": { "action": "model_key_failure" },
+    "502": { "action": "model_key_failure" },
+    "503": { "action": "model_key_failure" },
+    "504": { "action": "model_key_failure" }
+  },
+  "model_mapping": {}
+}

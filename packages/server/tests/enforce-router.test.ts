@@ -1,10 +1,10 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 
-import { modelConfigLoader } from "../src/config/model-loader.ts";
 import { providerRegistry } from "../src/providers/registry.ts";
 import { resetKeyState } from "../src/providers/api-key-manager.ts";
 import {
@@ -21,8 +21,7 @@ import type {
 
 const tmpRoot = join(tmpdir(), `mp-v2-enforce-${process.pid}-${Date.now()}`);
 
-(modelConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
-(modelConfigLoader as unknown as { pathsArePlainModelDirs: boolean }).pathsArePlainModelDirs = false;
+setPrimaryConfigDirForTests(tmpRoot);
 
 const FLAG = '{"tool_loop":"completed"}';
 
@@ -107,6 +106,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  setPrimaryConfigDirForTests(undefined);
   providerRegistry.unregisterProvider("fakex");
   resetKeyState("fakex");
   delete process.env.FAKEX_API_KEY;

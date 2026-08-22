@@ -1842,15 +1842,23 @@ export class FallbackRouter {
         maxKeyCycles,
         principal ?? this.principal,
       );
-      const proxyTracker = this.createProxyTrackerForRoute(routeConfig, undefined);
+      const routeProxyTracker = this.createProxyTrackerForRoute(routeConfig, undefined);
 
-      if (this.shouldSkipRoute(routeConfig, tracker, proxyTracker)) {
+      if (this.shouldSkipRoute(routeConfig, tracker, routeProxyTracker)) {
         continue;
       }
 
       while (!tracker.exhausted()) {
         const resolved = this.resolveApiKeyForRoute(routeConfig, tracker);
         if (resolved === undefined) break;
+
+        // Fresh tracker per key so every key retries the full proxy pool.
+        // Proxy cooldown state is shared globally, so proxies cooled down by
+        // a previous key stay skipped.
+        const proxyTracker =
+          routeProxyTracker !== undefined
+            ? this.createProxyTrackerForRoute(routeConfig, undefined)
+            : undefined;
 
         let directAttemptDone = false;
         proxyLoop: while (true) {
@@ -2077,15 +2085,23 @@ export class FallbackRouter {
         maxKeyCycles,
         principal ?? this.principal,
       );
-      const proxyTracker = this.createProxyTrackerForRoute(routeConfig, undefined);
+      const routeProxyTracker = this.createProxyTrackerForRoute(routeConfig, undefined);
 
-      if (this.shouldSkipRoute(routeConfig, tracker, proxyTracker)) {
+      if (this.shouldSkipRoute(routeConfig, tracker, routeProxyTracker)) {
         continue;
       }
 
       while (!tracker.exhausted()) {
         const resolved = this.resolveApiKeyForRoute(routeConfig, tracker);
         if (resolved === undefined) break;
+
+        // Fresh tracker per key so every key retries the full proxy pool.
+        // Proxy cooldown state is shared globally, so proxies cooled down by
+        // a previous key stay skipped.
+        const proxyTracker =
+          routeProxyTracker !== undefined
+            ? this.createProxyTrackerForRoute(routeConfig, undefined)
+            : undefined;
 
         let directAttemptDone = false;
         proxyLoop: while (true) {

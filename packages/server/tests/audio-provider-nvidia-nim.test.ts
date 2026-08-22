@@ -1,4 +1,5 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,7 +15,7 @@ const originalFetch = globalThis.fetch;
 
 beforeAll(() => {
   mkdirSync(join(tmpRoot, "providers"), { recursive: true });
-  (providerConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
+  setPrimaryConfigDirForTests(tmpRoot);
   writeFileSync(
     join(tmpRoot, "providers", "nim.json"),
     JSON.stringify({
@@ -40,6 +41,7 @@ afterEach(() => {
 
 afterAll(() => {
   globalThis.fetch = originalFetch;
+  setPrimaryConfigDirForTests(undefined);
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 

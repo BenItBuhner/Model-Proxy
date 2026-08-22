@@ -1,8 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import type { FusionRequestContext } from "../src/routing/fusion/types.ts";
 import type { FusionConfig } from "@model-proxy/contracts/schemas/fusion.ts";
-import { modelConfigLoader } from "../src/config/model-loader.ts";
-import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { resetKeyState } from "../src/providers/api-key-manager.ts";
 import { closeOperationalDbForTests, getOperationalDb } from "../src/storage/operational-db.ts";
 import * as fs from "node:fs";
@@ -153,8 +152,6 @@ async function collectStream(gen: AsyncGenerator<string, void, unknown>): Promis
 
 describe("Fusion complex scenarios", () => {
   let router: InstanceType<typeof FusionRouter>;
-  let savedModelSearchPaths: string[] | undefined;
-  let savedProviderSearchPaths: string[] | undefined;
 
   beforeAll(() => {
     fs.mkdirSync(path.join(tmpRoot, "models"), { recursive: true });
@@ -208,25 +205,11 @@ describe("Fusion complex scenarios", () => {
     router = new FusionRouter();
     process.env.FAKE_FUSION_API_KEY = "fake-key";
     resetKeyState("openai");
-    const modelLoader = modelConfigLoader as unknown as { searchPaths?: string[] };
-    const providerLoader = providerConfigLoader as unknown as { searchPaths?: string[] };
-    if (modelLoader.searchPaths !== undefined) {
-      savedModelSearchPaths = [...modelLoader.searchPaths];
-      modelLoader.searchPaths = [tmpRoot];
-    }
-    if (providerLoader.searchPaths !== undefined) {
-      savedProviderSearchPaths = [...providerLoader.searchPaths];
-      providerLoader.searchPaths = [tmpRoot];
-    }
+    setPrimaryConfigDirForTests(tmpRoot);
   });
 
   afterEach(() => {
-    const modelLoader = modelConfigLoader as unknown as { searchPaths?: string[] };
-    const providerLoader = providerConfigLoader as unknown as { searchPaths?: string[] };
-    if (savedModelSearchPaths !== undefined) modelLoader.searchPaths = savedModelSearchPaths;
-    if (savedProviderSearchPaths !== undefined) providerLoader.searchPaths = savedProviderSearchPaths;
-    savedModelSearchPaths = undefined;
-    savedProviderSearchPaths = undefined;
+    setPrimaryConfigDirForTests(undefined);
     globalThis.fetch = originalFetch;
   });
 

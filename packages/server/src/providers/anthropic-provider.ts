@@ -12,8 +12,8 @@ import { readSSELines } from "./openai-provider.ts";
 const log = createLogger("provider.anthropic");
 
 export class AnthropicProvider extends AbstractProvider {
-  constructor() {
-    super("anthropic");
+  constructor(providerName = "anthropic") {
+    super(providerName);
   }
 
   async callAnthropic(

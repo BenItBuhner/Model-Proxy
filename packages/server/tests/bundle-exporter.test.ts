@@ -6,8 +6,6 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
 import { applyBundle, parseBundle } from "../src/config/bundle-importer.ts";
 import { exportBundle } from "../src/config/bundle-exporter.ts";
-import { modelConfigLoader } from "../src/config/model-loader.ts";
-import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import { setStorageRootForTests } from "../src/storage/storage-paths.ts";
 
@@ -20,9 +18,8 @@ mkdirSync(join(tmpRoot, "providers"), { recursive: true });
 mkdirSync(join(tmpRoot, "models"), { recursive: true });
 
 setPrimaryConfigDirForTests(tmpRoot);
-(modelConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
-(modelConfigLoader as unknown as { pathsArePlainModelDirs: boolean }).pathsArePlainModelDirs = false;
-(providerConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
+
+
 
 beforeAll(() => {
   setStorageRootForTests(join(tmpRoot, ".storage"));

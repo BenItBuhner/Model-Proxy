@@ -4,8 +4,6 @@ import { join } from "node:path";
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 
-import { audioModelConfigLoader } from "../src/config/audio-model-loader.ts";
-import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import { resetKeyState } from "../src/providers/api-key-manager.ts";
 import { createApp } from "../src/server/app.ts";
@@ -21,8 +19,7 @@ beforeAll(() => {
   mkdirSync(join(tmpRoot, "audio-models"), { recursive: true });
   setPrimaryConfigDirForTests(tmpRoot);
   setStorageRootForTests(join(tmpRoot, ".storage"));
-  (providerConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
-  (audioModelConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
+
 
   writeProvider("fake-audio", "https://fake-audio.local/openai/v1", "bearer");
   writeProvider("fake-nim", "https://nim.local", "none");

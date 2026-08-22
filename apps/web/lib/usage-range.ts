@@ -81,14 +81,16 @@ export function mergeUsageFilters({
   customSince,
   customUntil,
   counterStart,
+  now = new Date(),
 }: {
   base?: ObservabilityFilters;
   preset: UsagePreset;
   customSince?: string;
   customUntil?: string;
   counterStart?: string;
+  now?: Date;
 }): ObservabilityFilters {
-  const presetBound = preset === "custom" ? customSince : presetSince(preset);
+  const presetBound = preset === "custom" ? customSince : presetSince(preset, now);
   const since = latestIso(presetBound, counterStart);
   const until = preset === "custom" ? customUntil : undefined;
   return {

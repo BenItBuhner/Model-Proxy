@@ -1,14 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { OpenAIProvider } from "../src/providers/openai-provider.ts";
-import { providerConfigLoader } from "../src/config/provider-loader.ts";
 
 const servers: Array<{ stop(): void }> = [];
 const roots: string[] = [];
 
 afterEach(() => {
+  setPrimaryConfigDirForTests(undefined);
   for (const server of servers.splice(0)) server.stop();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -55,7 +56,7 @@ describe("native Responses provider transport", () => {
       },
       authentication: { type: "none" },
     }));
-    (providerConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [root];
+    setPrimaryConfigDirForTests(root);
 
     const provider = new OpenAIProvider("transport-fake");
     const ctx = {

@@ -5,7 +5,7 @@ import { OpenAIProvider } from "./openai-provider.ts";
  * already handles the Gemini-specific payload quirks by provider name.
  */
 export class GeminiOpenAIProvider extends OpenAIProvider {
-  constructor() {
-    super("gemini");
+  constructor(providerName = "gemini") {
+    super(providerName);
   }
 }

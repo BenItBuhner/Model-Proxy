@@ -1,11 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect } from "bun:test";
+import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import { SubagentExecutor } from "../src/routing/fusion/subagent-executor.ts";
 import { searchConversationContext } from "../src/routing/fusion/context-search.ts";
 import type { FusionRequestContext, SubTask } from "../src/routing/fusion/types.ts";
 import type { FusionConfig } from "@model-proxy/contracts/schemas/fusion.ts";
 import type { SummarySegment } from "../src/routing/fusion/reasoning-summarizer.ts";
-import { modelConfigLoader } from "../src/config/model-loader.ts";
-import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { resetKeyState } from "../src/providers/api-key-manager.ts";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
@@ -80,8 +79,6 @@ const subTask: SubTask = {
 
 describe("SubagentExecutor reasoning-only subagents", () => {
   let executor: SubagentExecutor;
-  let savedModelSearchPaths: string[] | undefined;
-  let savedProviderSearchPaths: string[] | undefined;
 
   beforeAll(() => {
     fs.mkdirSync(path.join(tmpRoot, "models"), { recursive: true });
@@ -139,25 +136,11 @@ describe("SubagentExecutor reasoning-only subagents", () => {
     executor = new SubagentExecutor();
     process.env.FAKE_SUBAGENT_API_KEY = "fake-key";
     resetKeyState("openai");
-    const modelLoader = modelConfigLoader as unknown as { searchPaths?: string[] };
-    const providerLoader = providerConfigLoader as unknown as { searchPaths?: string[] };
-    if (modelLoader.searchPaths !== undefined) {
-      savedModelSearchPaths = [...modelLoader.searchPaths];
-      modelLoader.searchPaths = [tmpRoot];
-    }
-    if (providerLoader.searchPaths !== undefined) {
-      savedProviderSearchPaths = [...providerLoader.searchPaths];
-      providerLoader.searchPaths = [tmpRoot];
-    }
+    setPrimaryConfigDirForTests(tmpRoot);
   });
 
   afterEach(() => {
-    const modelLoader = modelConfigLoader as unknown as { searchPaths?: string[] };
-    const providerLoader = providerConfigLoader as unknown as { searchPaths?: string[] };
-    if (savedModelSearchPaths !== undefined) modelLoader.searchPaths = savedModelSearchPaths;
-    if (savedProviderSearchPaths !== undefined) providerLoader.searchPaths = savedProviderSearchPaths;
-    savedModelSearchPaths = undefined;
-    savedProviderSearchPaths = undefined;
+    setPrimaryConfigDirForTests(undefined);
     globalThis.fetch = originalFetch;
   });
 

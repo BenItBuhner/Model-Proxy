@@ -5,33 +5,18 @@ import {
   OpenAIProvider,
 } from "../src/providers/openai-provider.ts";
 import type { OpenAICallArgs } from "../src/providers/base.ts";
-import { providerConfigLoader } from "../src/config/provider-loader.ts";
-import { getConfigSearchPaths } from "../src/config/paths.ts";
 
 const ENV_KEY = "DISABLE_CHAT_TEMPLATE_KWARGS_PASSTHROUGH";
 let savedEnv: string | undefined;
-let savedSearchPaths: string[] | undefined;
 
 beforeEach(() => {
   savedEnv = process.env[ENV_KEY];
   delete process.env[ENV_KEY];
-  // Reset provider loader search paths so singleton pollution from other
-  // test files (e.g. admin-events) doesn't break instantiation here.
-  const loader = providerConfigLoader as unknown as { searchPaths?: string[] };
-  if (loader.searchPaths !== undefined) {
-    savedSearchPaths = [...loader.searchPaths];
-    loader.searchPaths = getConfigSearchPaths();
-  }
 });
 
 afterEach(() => {
   if (savedEnv === undefined) delete process.env[ENV_KEY];
   else process.env[ENV_KEY] = savedEnv;
-  if (savedSearchPaths !== undefined) {
-    const loader = providerConfigLoader as unknown as { searchPaths?: string[] };
-    loader.searchPaths = savedSearchPaths;
-    savedSearchPaths = undefined;
-  }
 });
 
 function makeProvider(name = "nvidia"): OpenAIProvider {

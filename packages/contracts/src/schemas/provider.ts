@@ -99,10 +99,29 @@ export const ErrorActionSchema = z
   })
   .passthrough();
 
+/**
+ * Runtime adapter used for a provider. `openai-compat` covers every plain
+ * OpenAI-compatible upstream; the rest select specialty adapters. When
+ * omitted, the type is inferred from well-known provider names and falls
+ * back to `openai-compat` — adding a new OpenAI-compatible provider is
+ * pure JSON, zero code.
+ */
+export const ProviderTypeSchema = z.enum([
+  "openai-compat",
+  "anthropic",
+  "gemini",
+  "opencode",
+  "codex",
+  "supergrok",
+]);
+
+export type ProviderType = z.infer<typeof ProviderTypeSchema>;
+
 export const ProviderConfigSchema = z
   .object({
     name: z.string().min(1),
     display_name: z.string().optional(),
+    type: ProviderTypeSchema.optional(),
     enabled: z.boolean().default(true),
     api_keys: ApiKeyPatternSchema,
     endpoints: EndpointsSchema,

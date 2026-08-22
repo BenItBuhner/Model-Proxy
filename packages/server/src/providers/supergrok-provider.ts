@@ -6,8 +6,8 @@ import { OpenAIProvider } from "./openai-provider.ts";
 
 /** xAI subscription transport used by Grok CLI / SuperGrok OAuth tokens. */
 export class SuperGrokProvider extends OpenAIProvider {
-  constructor() {
-    super("supergrok");
+  constructor(providerName = "supergrok") {
+    super(providerName);
   }
 
   protected override openAIRequestHeaders(

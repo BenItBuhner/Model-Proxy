@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
 import { AudioModelConfigLoader } from "../src/config/audio-model-loader.ts";
 import { modelConfigLoader } from "../src/config/model-loader.ts";
+import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 
 const tmpRoot = join(tmpdir(), `mp-v2-audio-config-${process.pid}-${Date.now()}`);
 
@@ -58,27 +59,12 @@ describe("AudioModelConfigLoader", () => {
     const loader = new AudioModelConfigLoader({ configDir: tmpRoot });
     expect(loader.getAvailableModels()).toEqual(["speech"]);
 
-    const originalSearchPaths = (modelConfigLoader as unknown as {
-      searchPaths: string[];
-    }).searchPaths;
-    const originalPlain = (modelConfigLoader as unknown as {
-      pathsArePlainModelDirs: boolean;
-    }).pathsArePlainModelDirs;
     try {
-      (modelConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [
-        tmpRoot,
-      ];
-      (modelConfigLoader as unknown as {
-        pathsArePlainModelDirs: boolean;
-      }).pathsArePlainModelDirs = false;
+      setPrimaryConfigDirForTests(tmpRoot);
       modelConfigLoader.clearCache();
       expect(modelConfigLoader.getAvailableModels()).toEqual(["chat-only"]);
     } finally {
-      (modelConfigLoader as unknown as { searchPaths: string[] }).searchPaths =
-        originalSearchPaths;
-      (modelConfigLoader as unknown as {
-        pathsArePlainModelDirs: boolean;
-      }).pathsArePlainModelDirs = originalPlain;
+      setPrimaryConfigDirForTests(undefined);
       modelConfigLoader.clearCache();
     }
   });

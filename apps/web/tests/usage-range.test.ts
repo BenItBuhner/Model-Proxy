@@ -20,6 +20,7 @@ describe("usage range helpers", () => {
     const filters = mergeUsageFilters({
       preset: "7d",
       counterStart: "2026-07-30T00:00:00.000Z",
+      now: new Date("2026-08-01T12:00:00.000Z"),
     });
     expect(filters.since).toBe("2026-07-30T00:00:00.000Z");
   });

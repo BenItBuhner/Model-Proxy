@@ -4,9 +4,7 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
-import { modelConfigLoader } from "../src/config/model-loader.ts";
 import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
-import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { createApp } from "../src/server/app.ts";
 import {
   recordRequestFinish,
@@ -24,9 +22,7 @@ mkdirSync(join(tmpRoot, "models"), { recursive: true });
 mkdirSync(join(tmpRoot, "providers"), { recursive: true });
 setPrimaryConfigDirForTests(tmpRoot);
 
-(modelConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
-(modelConfigLoader as unknown as { pathsArePlainModelDirs: boolean }).pathsArePlainModelDirs = false;
-(providerConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
+
 
 beforeAll(() => {
   process.env.CLIENT_API_KEY = "admin-test-key";

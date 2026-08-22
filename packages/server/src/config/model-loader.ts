@@ -17,18 +17,23 @@ interface CacheEntry {
 }
 
 export class ModelConfigLoader {
-  private readonly searchPaths: string[];
+  private readonly configDirOverride: string | undefined;
   private readonly pathsArePlainModelDirs: boolean;
   private readonly cache = new Map<string, CacheEntry>();
 
   constructor(options: { configDir?: string } = {}) {
-    if (options.configDir !== undefined) {
-      this.searchPaths = [options.configDir];
-      this.pathsArePlainModelDirs = true;
-    } else {
-      this.searchPaths = getConfigSearchPaths();
-      this.pathsArePlainModelDirs = false;
-    }
+    this.configDirOverride = options.configDir;
+    this.pathsArePlainModelDirs = options.configDir !== undefined;
+  }
+
+  /**
+   * Resolved on every access (not snapshotted at construction) so test
+   * overrides and data-dir changes apply to the shared singleton immediately.
+   */
+  private get searchPaths(): string[] {
+    return this.configDirOverride !== undefined
+      ? [this.configDirOverride]
+      : getConfigSearchPaths();
   }
 
   private findConfigPath(logicalModel: string): string | undefined {

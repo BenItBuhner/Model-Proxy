@@ -4,9 +4,7 @@ import { join } from "node:path";
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 
-import { modelConfigLoader } from "../src/config/model-loader.ts";
 import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
-import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { eventSink } from "../src/observability/event-sink.ts";
 import type {
   AnthropicCallArgs,
@@ -28,9 +26,7 @@ mkdirSync(join(tmpRoot, "models"), { recursive: true });
 mkdirSync(join(tmpRoot, "providers"), { recursive: true });
 setPrimaryConfigDirForTests(tmpRoot);
 
-(modelConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
-(modelConfigLoader as unknown as { pathsArePlainModelDirs: boolean }).pathsArePlainModelDirs = false;
-(providerConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [tmpRoot];
+
 
 class FakeProvider implements BaseProvider {
   readonly providerName = "fakee";

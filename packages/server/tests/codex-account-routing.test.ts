@@ -14,12 +14,6 @@ import { closeOperationalDbForTests } from "../src/storage/operational-db.ts";
 import { setStorageRootForTests } from "../src/storage/storage-paths.ts";
 
 const root = join(tmpdir(), `mp-codex-routing-${process.pid}-${Date.now()}`);
-const oldProviderPaths = [
-  ...(providerConfigLoader as unknown as { searchPaths: string[] }).searchPaths,
-];
-const oldModelPaths = [
-  ...(modelConfigLoader as unknown as { searchPaths: string[] }).searchPaths,
-];
 let upstream: ReturnType<typeof Bun.serve> | undefined;
 
 beforeEach(() => {
@@ -31,10 +25,6 @@ beforeEach(() => {
   closeOperationalDbForTests();
   resetKeyState();
   process.env.CLIENT_API_KEY = "routing-client-key";
-  (providerConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [root];
-  (modelConfigLoader as unknown as { searchPaths: string[] }).searchPaths = [root];
-  (modelConfigLoader as unknown as { pathsArePlainModelDirs: boolean }).pathsArePlainModelDirs =
-    false;
 });
 
 afterEach(() => {
@@ -45,8 +35,6 @@ afterEach(() => {
   closeOperationalDbForTests();
   setStorageRootForTests(undefined);
   setPrimaryConfigDirForTests(undefined);
-  (providerConfigLoader as unknown as { searchPaths: string[] }).searchPaths = oldProviderPaths;
-  (modelConfigLoader as unknown as { searchPaths: string[] }).searchPaths = oldModelPaths;
   rmSync(root, { recursive: true, force: true });
 });
 

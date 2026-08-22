@@ -1,4 +1,5 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,14 +9,11 @@ import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { OpenAIProvider } from "../src/providers/openai-provider.ts";
 
 const tmpRoot = join(tmpdir(), `mp-openai-stream-${process.pid}-${Date.now()}`);
-let savedSearchPaths: string[] | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
 
 beforeEach(() => {
   mkdirSync(join(tmpRoot, "providers"), { recursive: true });
-  const loader = providerConfigLoader as unknown as { searchPaths: string[] };
-  savedSearchPaths = [...loader.searchPaths];
-  loader.searchPaths = [tmpRoot];
+  setPrimaryConfigDirForTests(tmpRoot);
   providerConfigLoader.clearCache();
 });
 
@@ -23,11 +21,7 @@ afterEach(() => {
   server?.stop(true);
   server = undefined;
 
-  const loader = providerConfigLoader as unknown as { searchPaths: string[] };
-  if (savedSearchPaths !== undefined) {
-    loader.searchPaths = savedSearchPaths;
-    savedSearchPaths = undefined;
-  }
+  setPrimaryConfigDirForTests(undefined);
   providerConfigLoader.clearCache();
   rmSync(tmpRoot, { recursive: true, force: true });
 });
