@@ -46,28 +46,29 @@ bun install
 bun run dev
 
 # Terminal 2 — admin UI (optional; or rely on Docker-built web-static)
-cd web && bun install && bun run dev
+cd apps/web && bun run dev
 ```
 
 With only the API process, open `/setup/` after building the UI once:
 
 ```bash
-cd web && bun install && bun run build
-# Serves from web/out when MODEL_PROXY_WEB_ROOT is unset
+bun run build:web
+# Serves from apps/web/out when MODEL_PROXY_WEB_ROOT is unset
 ```
 
 ## Project layout
 
+Bun workspaces monorepo:
+
 | Path | Purpose |
 |------|---------|
-| `src/` | Hono server, routing, providers, CLI entry |
-| `shared/schemas/` | Zod schemas for config and wire formats |
-| `web/` | **Current** Next.js admin UI (exported to `web/out`, copied as `web-static` in Docker) |
+| `packages/server/` | Engine: Hono server, routing, providers, config, storage (+ `tests/`) |
+| `packages/contracts/` | Shared Zod schemas and API wire types (server + web) |
+| `apps/web/` | Next.js admin UI (exported to `apps/web/out`, copied as `web-static` in Docker) |
 | `config/providers/` | Provider endpoint + auth JSON (often gitignored locally; samples may ship in repo) |
 | `config/models/` | Per logical model routing JSON (gitignored locally) |
 | `config/templates/` | Templates for new provider/model files |
 | `config/audio-models/` | Audio transcription routing |
-| `tests/` | `bun test` integration tests |
 
 ## Configuration
 
@@ -160,7 +161,7 @@ The process entrypoint is Bun:
 ```bash
 bun run start
 # or
-bun run ./src/cli/main.ts --host 0.0.0.0 --port 9876 --log-level info
+bun run packages/server/src/cli/main.ts --host 0.0.0.0 --port 9876 --log-level info
 ```
 
 Docker CMD uses the same entrypoint. Supported flags: `--host`, `--port`, `--log-level`. The optional `start` positional argument is accepted for compatibility.
@@ -172,7 +173,7 @@ bun run dev          # API with --hot
 bun run start        # API production mode
 bun test             # test suite
 bun run typecheck    # tsc --noEmit
-bun run build:web    # build admin UI → web/out
+bun run build:web    # build admin UI → apps/web/out
 ```
 
 ## Docker
@@ -206,7 +207,7 @@ bun test
 bun run typecheck
 ```
 
-Tests live under `tests/`. Config loaders use a temp directory in tests; production config is read from `config/` search paths (cwd, `~/.model-proxy/config`, package `config/`).
+Tests live under `packages/server/tests/` (and `apps/web/tests/` for UI helpers). Config loaders use a temp directory in tests; production config is read from `config/` search paths (cwd, `~/.model-proxy/config`, package `config/`).
 
 ## License
 

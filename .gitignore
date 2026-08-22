@@ -17,7 +17,7 @@ dist/
 build/
 .next/
 out/
-web/out/
+apps/web/out/
 web-static/
 
 # TypeScript
