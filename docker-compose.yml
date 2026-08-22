@@ -9,18 +9,16 @@ services:
     ports:
       - "9876:9876"
     volumes:
-      # Config directory is persisted + editable from the admin UI.
+      # Single data volume: config store, provider/model JSON, sealed secrets.
+      - ./data:/app/data
+      # Legacy mounts (optional): read as fallbacks and migrated into ./data
+      # on first boot. Safe to delete once migrated.
       - ./config:/app/config
-      # .env is read-write so the UI's env editor persists to disk.
-      - ./.env:/app/.env
-      # Durable completion archive + analytics indexes.
       - ./.storage:/app/.storage
-    # Load ALL keys (provider creds, client key, log level, etc.) from the
-    # mounted .env into the container's process env. This ensures Bun sees
-    # them on boot without relying on its auto-dotenv behavior (which only
-    # fills in unset vars and will lose to any host-shell leakage).
+    # Optional: any variables set here override the UI-managed config store.
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       - NODE_ENV=production
     healthcheck:

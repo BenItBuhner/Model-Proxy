@@ -1,0 +1,41 @@
+{
+  "name": "nvidia",
+  "display_name": "NVIDIA NIM",
+  "enabled": true,
+  "api_keys": {
+    "env_var_patterns": ["NVIDIA_API_KEY", "NVIDIA_API_KEY_{INDEX}"]
+  },
+  "endpoints": {
+    "base_url": "https://integrate.api.nvidia.com/v1",
+    "completions": "/chat/completions",
+    "streaming": "/chat/completions",
+    "compatible_format": "openai"
+  },
+  "authentication": {
+    "type": "bearer",
+    "header_name": "Authorization",
+    "header_format": "Bearer {api_key}"
+  },
+  "request_config": {
+    "timeout_seconds": 120,
+    "max_retries": 0,
+    "retry_on_status": [429, 500, 502, 503, 504],
+    "default_parameters": {},
+    "required_parameters": []
+  },
+  "rate_limiting": {
+    "enabled": false,
+    "cooldown_seconds": 180
+  },
+  "models": {},
+  "error_handling": {
+    "401": { "action": "global_key_failure" },
+    "403": { "action": "global_key_failure" },
+    "429": { "action": "provider_cooldown" },
+    "500": { "action": "model_key_failure" },
+    "502": { "action": "model_key_failure" },
+    "503": { "action": "model_key_failure" },
+    "504": { "action": "model_key_failure" }
+  },
+  "model_mapping": {}
+}

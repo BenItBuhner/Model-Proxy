@@ -5,9 +5,9 @@ bun.lockb
 .env
 .env.*
 !.env.example
-web/.next
-web/node_modules
-web/out
-tests
+apps/web/.next
+apps/web/node_modules
+apps/web/out
+packages/server/tests
 *.log
 .DS_Store

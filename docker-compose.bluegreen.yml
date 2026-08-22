@@ -24,11 +24,14 @@ services:
     ports:
       - "127.0.0.1:9877:9876"
     volumes:
+      - ./data:/app/data
+      # Legacy mounts (optional): read as fallbacks, migrated on first boot.
       - ./config:/app/config
       - ./.env:/app/.env
       - ./.storage:/app/.storage
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       NODE_ENV: production
       MODEL_PROXY_INSTANCE_COLOR: blue
@@ -52,11 +55,14 @@ services:
     ports:
       - "127.0.0.1:9878:9876"
     volumes:
+      - ./data:/app/data
+      # Legacy mounts (optional): read as fallbacks, migrated on first boot.
       - ./config:/app/config
       - ./.env:/app/.env
       - ./.storage:/app/.storage
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       NODE_ENV: production
       MODEL_PROXY_INSTANCE_COLOR: green

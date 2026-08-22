@@ -8,13 +8,17 @@ services:
     restart: always
     ports:
       - "9876:9876"
+    # Optional: env vars override the UI-managed config store. A CLIENT_API_KEY
+    # is generated and printed on first boot when none is configured.
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
-      - CLIENT_API_KEY=${CLIENT_API_KEY:?Required - set in .env}
       - NODE_ENV=production
       - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
+      - model-proxy-data:/app/data
+      # Legacy volume (optional): read as fallback for older installs.
       - model-proxy-config:/app/config
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9876/health"]
@@ -29,4 +33,5 @@ services:
         max-file: "3"
 
 volumes:
+  model-proxy-data:
   model-proxy-config:

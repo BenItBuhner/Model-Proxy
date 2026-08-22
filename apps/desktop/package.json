@@ -1,0 +1,16 @@
+{
+  "name": "model-proxy-desktop",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Model-Proxy desktop app: the same engine and admin UI in an installable shell.",
+  "main": "src/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --config electron-builder.json",
+    "typecheck": "echo 'desktop shell is plain JS; nothing to typecheck'"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  }
+}

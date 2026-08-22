@@ -13,7 +13,7 @@ OpenAI- and Anthropic-compatible LLM proxy on **Bun** and **TypeScript**. Route 
 - **Streaming** — SSE for chat completions
 - **Context window metadata** — `GET /v1/models` exposes `context_window`, `context_length`, and `limit.context` for harness compaction
 - **Audio** — OpenAI-style `/v1/audio/transcriptions` with provider routing
-- **Admin UI** — Next.js static app at `/setup/` (models, providers, env, test bench, bundle import/export)
+- **Admin UI** — Next.js static app served at `/` (models, providers, keys, test bench, bundle import/export)
 
 ## Requirements
 
@@ -34,61 +34,67 @@ curl -s -H "Authorization: Bearer $CLIENT_API_KEY" http://127.0.0.1:9876/v1/mode
 ```
 
 Default listen address: `http://127.0.0.1:9876`  
-Admin UI: `http://127.0.0.1:9876/setup/`
+Admin UI: `http://127.0.0.1:9876/` (old `/setup/` links redirect)
 
 ## Quick start (local dev)
 
 ```bash
-cp .env.example .env
 bun install
 
-# Terminal 1 — API server (hot reload)
+# Terminal 1 — API server (hot reload). On first boot an admin
+# CLIENT_API_KEY is generated and printed to the console — no .env needed.
 bun run dev
 
 # Terminal 2 — admin UI (optional; or rely on Docker-built web-static)
-cd web && bun install && bun run dev
+cd apps/web && bun run dev
 ```
 
-With only the API process, open `/setup/` after building the UI once:
+With only the API process, open the admin UI after building it once:
 
 ```bash
-cd web && bun install && bun run build
-# Serves from web/out when MODEL_PROXY_WEB_ROOT is unset
+bun run build:web
+# Serves from apps/web/out when MODEL_PROXY_WEB_ROOT is unset
 ```
 
 ## Project layout
 
+Bun workspaces monorepo:
+
 | Path | Purpose |
 |------|---------|
-| `src/` | Hono server, routing, providers, CLI entry |
-| `shared/schemas/` | Zod schemas for config and wire formats |
-| `web/` | **Current** Next.js admin UI (exported to `web/out`, copied as `web-static` in Docker) |
+| `packages/server/` | Engine: Hono server, routing, providers, config, storage (+ `tests/`) |
+| `packages/contracts/` | Shared Zod schemas and API wire types (server + web) |
+| `apps/web/` | Next.js admin UI (exported to `apps/web/out`, copied as `web-static` in Docker) |
 | `config/providers/` | Provider endpoint + auth JSON (often gitignored locally; samples may ship in repo) |
 | `config/models/` | Per logical model routing JSON (gitignored locally) |
 | `config/templates/` | Templates for new provider/model files |
 | `config/audio-models/` | Audio transcription routing |
-| `tests/` | `bun test` integration tests |
-
-There is no Python application in this tree. The v1 FastAPI codebase was replaced by this v2 TypeScript implementation.
 
 ## Configuration
 
-### Environment (`.env`)
+### Data directory (config-first)
 
-| Variable | Description |
-|----------|-------------|
-| `CLIENT_API_KEY` | **Required.** Bearer token clients must send |
-| `HOST` / `PORT` | Bind address (default `127.0.0.1:9876`) |
-| `CORS_ORIGINS` | Comma-separated origins or `*` |
-| `LOG_LEVEL` | `debug` \| `info` \| `warn` \| `error` |
-| `DEFAULT_CONTEXT_WINDOW` | Fallback context size (tokens) when upstream/config omit it |
-| `UPSTREAM_MODELS_CACHE_TTL_SECONDS` | Cache TTL for provider `/v1/models` catalogs (default `3600`) |
-| `UPSTREAM_MODELS_FETCH_TIMEOUT_MS` | Max wait on first upstream catalog fetch (default `2000`) |
-| `KEY_COOLDOWN_SECONDS` | API key cooldown after failures |
-| `ENFORCE_TOOL_CALL_*` | Global tool-call enforcement defaults |
-| Provider keys | e.g. `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `ANTHROPIC_API_KEY` |
+All persistent configuration lives in one data directory — default
+`~/.model-proxy` (override with `--data-dir` or `MODEL_PROXY_DATA_DIR`):
 
-See [.env.example](.env.example) for the full list.
+| Path | Purpose |
+|------|---------|
+| `config/settings.json` | Plain runtime settings (managed from the admin UI) |
+| `config/secrets.json` | API keys and other secrets, sealed with AES-256-GCM |
+| `config/providers/` `config/models/` `config/audio-models/` | Routing JSON |
+| `storage/` | SQLite, completions archive, analytics |
+
+On first boot an admin `CLIENT_API_KEY` is generated, persisted to the
+secrets store, and printed once to the console. Legacy `.env` files and
+`config/` directories are migrated into the data dir automatically.
+
+### Environment overrides (optional)
+
+A `.env` file is never required. Any real environment variable (or `.env`
+entry) overrides the UI-managed config store — useful for locked-down
+deploys. Common overrides: `CLIENT_API_KEY`, `HOST`/`PORT`, `CORS_ORIGINS`,
+`LOG_LEVEL`, `KEY_COOLDOWN_SECONDS`, `ENFORCE_TOOL_CALL_*`, provider keys
+like `GROQ_API_KEY`. See [.env.example](.env.example) for the full list.
 
 ### Logical model example
 
@@ -125,7 +131,7 @@ Optional `context_window` on the model or on a route overrides discovery when up
 | DELETE | `/v1/responses/:responseId` | Bearer | Delete a stored response |
 | POST | `/v1/messages` | Bearer | Anthropic messages |
 | POST | `/v1/audio/transcriptions` | Bearer | Audio STT |
-| GET | `/setup/*` | Session or Bearer | Admin UI static assets |
+| GET | `/*` | Public assets; API calls need auth | Admin UI static assets (root) |
 | `/v1/admin/*` | Session or Bearer | Config CRUD, logs, bundle import |
 
 Chat responses keep the **logical** `model` id the client requested.
@@ -157,15 +163,40 @@ For each logical model (primary route `model_routings[0]`):
 
 ## CLI
 
-The process entrypoint is Bun, not a separate Python package:
+The launcher is deliberately bare-bones — start the server, open the UI,
+configure everything else in the browser:
 
 ```bash
-bun run start
-# or
-bun run ./src/cli/main.ts --host 0.0.0.0 --port 9876 --log-level info
+# Launcher (opens the admin UI in your browser)
+bun run apps/cli/src/main.ts            # or: bunx model-proxy (when published)
+
+# Single-file native binary (no Bun install needed on the target machine)
+bun run build:cli                        # -> dist/model-proxy
+./dist/model-proxy --port 9876 --data-dir ~/.model-proxy
 ```
 
-Docker CMD uses the same entrypoint. Supported flags: `--host`, `--port`, `--log-level`. The optional `start` positional argument is accepted for compatibility.
+Flags: `--host`, `--port`, `--data-dir`, `--no-open`, `--version`, `--help`.
+
+The raw server entrypoint (no browser handling; used by Docker) is
+`packages/server/src/cli/main.ts` with `--host`, `--port`, `--data-dir`,
+`--log-level`.
+
+## Desktop app (Electron)
+
+`apps/desktop` wraps the exact same engine and UI in an installable shell:
+the Electron main process spawns the compiled server binary as a sidecar on
+a free localhost port, stores all data under the OS app-data path, and
+auto-logs-in with a per-install admin key — no login screen, no terminal.
+
+```bash
+bun run build:cli && bun run build:web       # build the sidecar + UI once
+cd apps/desktop && bun install
+bun run start                                # launch the app
+bun run dist                                 # build installers (dmg/nsis/AppImage/deb)
+```
+
+The desktop app is intentionally NOT part of the Bun workspaces so normal
+installs never download Electron.
 
 ## Scripts
 
@@ -174,7 +205,7 @@ bun run dev          # API with --hot
 bun run start        # API production mode
 bun test             # test suite
 bun run typecheck    # tsc --noEmit
-bun run build:web    # build admin UI → web/out
+bun run build:web    # build admin UI → apps/web/out
 ```
 
 ## Docker
@@ -208,7 +239,7 @@ bun test
 bun run typecheck
 ```
 
-Tests live under `tests/`. Config loaders use a temp directory in tests; production config is read from `config/` search paths (cwd, `~/.model-proxy/config`, package `config/`).
+Tests live under `packages/server/tests/` (and `apps/web/tests/` for UI helpers). Config loaders use a temp directory in tests; production config is read from `config/` search paths (cwd, `~/.model-proxy/config`, package `config/`).
 
 ## License
 

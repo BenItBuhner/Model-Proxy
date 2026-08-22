@@ -1,6 +1,0 @@
-- generic [ref=e3]:
-  - banner [ref=e4]
-  - generic [ref=e7]:
-    - complementary [ref=e8]
-    - main [ref=e16]
-    - complementary [ref=e21]
