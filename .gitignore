@@ -18,6 +18,7 @@ build/
 .next/
 out/
 apps/web/out/
+apps/desktop/release/
 web-static/
 
 # TypeScript
