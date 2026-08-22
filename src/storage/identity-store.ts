@@ -13,7 +13,7 @@ export interface Principal {
   role: UserRole;
   isOwner: boolean;
   scopes: string[];
-  authMethod: "legacy-client-key" | "api-key" | "session" | "clerk" | "no-auth";
+  authMethod: "legacy-client-key" | "api-key" | "session" | "no-auth";
   ownerBypass: boolean;
   completionLoggingEnabled: boolean;
 }
@@ -199,73 +199,6 @@ export function verifyEmailPassword(email: string, password: string): StoredUser
     .query("UPDATE users SET last_login_at = $now, updated_at = $now WHERE id = $id")
     .run({ $now: now, $id: row.id });
   return userFromRow({ ...row, last_login_at: now, updated_at: now });
-}
-
-export function upsertExternalIdentity(input: {
-  provider: string;
-  externalId: string;
-  email: string;
-  role?: UserRole;
-}): Principal {
-  const db = getOperationalDb();
-  const linked = db
-    .query(
-      `SELECT users.id AS user_id, users.email, users.role, users.status,
-              users.completion_logging_enabled
-       FROM external_identities
-       JOIN users ON users.id = external_identities.user_id
-       WHERE external_identities.provider = $provider
-         AND external_identities.external_id = $external_id`,
-    )
-    .get({
-      $provider: input.provider,
-      $external_id: input.externalId,
-    }) as (SessionRow & { status: UserStatus }) | null;
-  if (linked !== null) {
-    if (linked.status !== "active") throw new Error("User account is disabled");
-    return principalFromUserRow(linked, { authMethod: "clerk" });
-  }
-
-  const email = normalizeEmail(input.email);
-  let user = db
-    .query("SELECT * FROM users WHERE email = $email")
-    .get({ $email: email }) as UserRow | null;
-  if (user === null) {
-    const created = createUser({
-      email,
-      password: randomSecret(48),
-      role: input.role ?? "user",
-      completionLoggingEnabled: false,
-    });
-    user = {
-      id: created.id,
-      email: created.email,
-      role: created.role,
-      status: created.status,
-      completion_logging_enabled: created.completionLoggingEnabled ? 1 : 0,
-      created_at: created.createdAt,
-      updated_at: created.updatedAt,
-      last_login_at: created.lastLoginAt ?? null,
-    };
-  }
-  db.query(
-    `INSERT INTO external_identities (provider, external_id, user_id, created_at)
-     VALUES ($provider, $external_id, $user_id, $created_at)`,
-  ).run({
-    $provider: input.provider,
-    $external_id: input.externalId,
-    $user_id: user.id,
-    $created_at: new Date().toISOString(),
-  });
-  return principalFromUserRow(
-    {
-      user_id: user.id,
-      email: user.email,
-      role: user.role,
-      completion_logging_enabled: user.completion_logging_enabled,
-    },
-    { authMethod: "clerk" },
-  );
 }
 
 export function createSession(userId: string): { sessionId: string; token: string; expiresAt: string } {
@@ -605,7 +538,7 @@ function principalFromUserRow(
     completion_logging_enabled: number;
   },
   options: {
-    authMethod: "api-key" | "session" | "clerk";
+    authMethod: "api-key" | "session";
     apiKeyId?: string;
     scopes?: string[];
   },

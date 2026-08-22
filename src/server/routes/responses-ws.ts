@@ -38,7 +38,6 @@ import {
   nowIso,
   runWithRequestContext,
 } from "../../observability/request-context.ts";
-import { authenticateClerkToken } from "../clerk-auth.ts";
 
 export type WsData = { request: Request; principal?: Principal };
 
@@ -118,13 +117,6 @@ export async function responsesWsAuth(req: Request): Promise<Principal | undefin
   if (userPrincipal !== undefined) return userPrincipal;
   if (presented !== undefined && verifyApiKeyString(presented)) {
     return legacyOwnerPrincipal();
-  }
-  if (presented !== undefined && presented.split(".").length === 3) {
-    try {
-      return await authenticateClerkToken(presented);
-    } catch {
-      return undefined;
-    }
   }
 
   return undefined;

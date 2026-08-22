@@ -33,7 +33,7 @@ describe("bundle-normalizer", () => {
     }
   });
 
-  test("preserves canonical values and enum-accepted aliases without rewriting", () => {
+  test("rewrites legacy auth types and compatible_format to canonical names", () => {
     const raw = {
       name: "gemini",
       authentication: { type: "api_key", header_name: "Authorization" },
@@ -45,13 +45,33 @@ describe("bundle-normalizer", () => {
       error_handling: { "401": { action: "global_key_failure" } },
     };
     const { normalized, changes } = normalizeProvider(raw);
-    expect(changes).toEqual([]);
+    expect(changes.map((c) => c.path).sort()).toEqual(
+      ["authentication.type", "endpoints.compatible_format"].sort(),
+    );
     expect((normalized as { authentication: { type: string } }).authentication.type).toBe(
-      "api_key",
+      "bearer",
     );
     expect(
       (normalized as { endpoints: { compatible_format: string } }).endpoints.compatible_format,
-    ).toBe("azure");
+    ).toBe("openai");
+  });
+
+  test("preserves canonical values without rewriting", () => {
+    const raw = {
+      name: "gemini",
+      authentication: { type: "bearer", header_name: "Authorization" },
+      endpoints: {
+        base_url: "https://example.com",
+        completions: "/v1/chat",
+        compatible_format: "openai",
+      },
+      error_handling: { "401": { action: "global_key_failure" } },
+    };
+    const { normalized, changes } = normalizeProvider(raw);
+    expect(changes).toEqual([]);
+    expect((normalized as { authentication: { type: string } }).authentication.type).toBe(
+      "bearer",
+    );
   });
 
   test("does not mutate the input object", () => {
@@ -64,7 +84,7 @@ describe("bundle-normalizer", () => {
     expect(JSON.stringify(raw)).toBe(snapshot);
   });
 
-  test("strips Python-only provider_notes diagnostic block", () => {
+  test("strips legacy provider_notes diagnostic block", () => {
     const raw = {
       name: "p",
       provider_notes: { description: "old junk" },

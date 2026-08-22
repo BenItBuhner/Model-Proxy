@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { clearStoredApiKey } from "@/lib/api";
-import { signOutClerk } from "@/lib/clerk";
 import {
   authStatus,
   getMe,
@@ -48,16 +47,6 @@ const NAV: NavItem[] = [
 function isNavActive(pathname: string, item: NavItem): boolean {
   if (item.href === "/") {
     return pathname === "/";
-  }
-  if (item.href === "/test-environment") {
-    return (
-      pathname === "/test-environment" ||
-      pathname.startsWith("/test-environment/") ||
-      pathname === "/env" ||
-      pathname.startsWith("/env/") ||
-      pathname === "/test" ||
-      pathname.startsWith("/test/")
-    );
   }
   return pathname === item.href || pathname.startsWith(`${item.href}/`);
 }
@@ -169,7 +158,6 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
     } catch {
       // ignore
     }
-    await signOutClerk().catch(() => {});
     clearStoredApiKey();
     router.replace("/login");
   };

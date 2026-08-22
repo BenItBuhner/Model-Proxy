@@ -11,7 +11,6 @@ import {
   noAuthPrincipal,
   type Principal,
 } from "../storage/identity-store.ts";
-import { authenticateClerkRequest, isClerkConfigured } from "./clerk-auth.ts";
 
 const log = createLogger("auth");
 export const SESSION_COOKIE = "mp_session";
@@ -23,7 +22,7 @@ function clientApiKey(): string | undefined {
 }
 
 export function isAuthConfigured(): boolean {
-  return clientApiKey() !== undefined || isClerkConfigured();
+  return clientApiKey() !== undefined;
 }
 
 function constantTimeEquals(a: string, b: string): boolean {
@@ -36,7 +35,7 @@ function constantTimeEquals(a: string, b: string): boolean {
 /** Timing-safe comparison for an attacker-supplied key against the configured one. */
 export function verifyApiKeyString(presented: string): boolean {
   const expected = clientApiKey();
-  if (expected === undefined) return !isClerkConfigured();
+  if (expected === undefined) return true;
   if (presented.length === 0) return false;
   return constantTimeEquals(presented, expected);
 }
@@ -57,7 +56,6 @@ function extractPresented(c: Context): string | undefined {
 export function verifyClientApiKey(c: Context): boolean {
   const expected = clientApiKey();
   if (expected === undefined) {
-    if (isClerkConfigured()) return false;
     // Auth disabled entirely - only for local dev.
     log.warn("CLIENT_API_KEY is unset; auth is DISABLED");
     return true;
@@ -78,7 +76,7 @@ export function authenticateRequest(c: Context, options: { allowSession?: boolea
   const userPrincipal = authenticateApiKey(presented);
   if (userPrincipal !== undefined) return userPrincipal;
 
-  if (expected === undefined && !isClerkConfigured()) {
+  if (expected === undefined) {
     log.warn("CLIENT_API_KEY is unset; auth is DISABLED");
     return noAuthPrincipal();
   }
@@ -96,14 +94,7 @@ export async function authenticateRequestAsync(
   c: Context,
   options: { allowSession?: boolean } = {},
 ): Promise<Principal | undefined> {
-  const local = authenticateRequest(c, options);
-  if (local !== undefined) return local;
-  try {
-    return await authenticateClerkRequest(c);
-  } catch (error) {
-    log.warn("Clerk authentication failed", { error: String(error) });
-    return undefined;
-  }
+  return authenticateRequest(c, options);
 }
 
 function authenticateSession(c: Context): Principal | undefined {

@@ -27,7 +27,6 @@ import {
   type ProviderAccount,
 } from "../../storage/account-store.ts";
 import { recordAuditEvent, type Principal } from "../../storage/identity-store.ts";
-import { getConvexMirrorStatus } from "../../storage/convex-mirror.ts";
 import { principal, requireAuth } from "../auth.ts";
 
 const codexDeviceFlows = new Map<string, CodexDeviceFlow>();
@@ -57,7 +56,6 @@ export function createAccountRoutes(): Hono {
 
   app.get("/v1/accounts/status", (c) => {
     return c.json({
-      convex: getConvexMirrorStatus(),
       credential_encryption: "aes-256-gcm",
     });
   });

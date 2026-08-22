@@ -1,9 +1,8 @@
 /**
  * OpenAI <-> Anthropic format converters.
  *
- * Direct port of `app/core/format_converters.py`. Every edge case (tool call
- * ordering, missing ids, raw argument strings, collapsed content arrays) is
- * preserved 1:1 so we can share the existing test vectors.
+ * Every edge case (tool call ordering, missing ids, raw argument strings,
+ * collapsed content arrays) is covered by dedicated test vectors.
  */
 
 const TEXT_BLOCK = "text" as const;

@@ -128,10 +128,7 @@ export interface KeyCycleTrackerOptions {
   routeCooldownSeconds?: number;
 }
 
-/**
- * Mirrors `app/core/api_key_manager.py::KeyCycleTracker`.
- * Provides round-robin key selection with scoped cooldowns and cycle limits.
- */
+/** Round-robin key selection with scoped cooldowns and cycle limits. */
 export class KeyCycleTracker {
   readonly provider: string;
   readonly model: string | undefined;

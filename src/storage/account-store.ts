@@ -147,7 +147,6 @@ export function createAccount(input: CreateAccountInput): ProviderAccount {
       $updated_at: row.updated_at,
       $metadata_json: row.metadata_json,
     });
-  notifyAccountsChanged();
   return accountFromRow(row);
 }
 
@@ -182,35 +181,6 @@ export function listActiveAccounts(provider: string): ProviderAccount[] {
     )
     .all({ $provider: provider }) as AccountRow[];
   return rows.map(accountFromRow);
-}
-
-/** Ciphertext-only rows for the optional Convex durability mirror. */
-export function listEncryptedAccountMirrorRows(): Array<Record<string, unknown>> {
-  const rows = getOperationalDb()
-    .query("SELECT * FROM provider_accounts ORDER BY created_at ASC")
-    .all() as AccountRow[];
-  return rows.map((row) => ({
-    accountId: row.id,
-    provider: row.provider,
-    kind: row.kind,
-    label: row.label,
-    email: row.email,
-    providerAccountId: row.account_id,
-    plan: row.plan,
-    accessTokenCiphertext: row.access_token,
-    refreshTokenCiphertext: row.refresh_token,
-    idTokenCiphertext: row.id_token,
-    expiresAt: row.expires_at,
-    ownerUserId: row.owner_user_id,
-    shared: row.shared === 1,
-    status: row.status,
-    lastError: row.last_error,
-    lastUsedAt: row.last_used_at,
-    lastRefreshedAt: row.last_refreshed_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    metadataJson: row.metadata_json,
-  }));
 }
 
 /**
@@ -271,7 +241,6 @@ export function updateAccountTokens(
       $now: now,
       $id: id,
     });
-  notifyAccountsChanged();
   return getAccount(id);
 }
 
@@ -295,7 +264,6 @@ export function patchAccount(
       $now: now,
       $id: id,
     });
-  notifyAccountsChanged();
   return getAccount(id);
 }
 
@@ -308,7 +276,6 @@ export function markAccountError(id: string, error: string): void {
        WHERE id = $id`,
     )
     .run({ $error: error.slice(0, 500), $now: now, $id: id });
-  notifyAccountsChanged();
 }
 
 export function touchAccountUsed(id: string): void {
@@ -322,7 +289,6 @@ export function deleteAccount(id: string): boolean {
   const changes = getOperationalDb()
     .query("DELETE FROM provider_accounts WHERE id = $id")
     .run({ $id: id });
-  notifyAccountsChanged();
   return changes.changes > 0;
 }
 
@@ -364,25 +330,5 @@ function parseMetadata(value: string): Record<string, unknown> {
       : {};
   } catch {
     return {};
-  }
-}
-
-// -- Change notification (used by the optional Convex mirror) ----------------
-
-type AccountsChangedListener = () => void;
-const accountsChangedListeners = new Set<AccountsChangedListener>();
-
-export function onAccountsChanged(listener: AccountsChangedListener): () => void {
-  accountsChangedListeners.add(listener);
-  return () => accountsChangedListeners.delete(listener);
-}
-
-function notifyAccountsChanged(): void {
-  for (const listener of accountsChangedListeners) {
-    try {
-      listener();
-    } catch {
-      // Listeners must never break account mutations.
-    }
   }
 }

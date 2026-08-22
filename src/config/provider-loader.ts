@@ -6,6 +6,7 @@ import {
   type ProviderConfig,
 } from "../../shared/schemas/provider.ts";
 import { createLogger } from "../observability/logger.ts";
+import { normalizeProvider } from "./bundle-normalizer.ts";
 import { getConfigSearchPaths } from "./paths.ts";
 
 const log = createLogger("config.provider");
@@ -66,7 +67,14 @@ export class ProviderConfigLoader {
       );
     }
 
-    const parsed = ProviderConfigSchema.safeParse(raw);
+    // Rewrite deprecated enum values so configs written by older versions
+    // keep loading after the schema tightened to canonical names only.
+    const normalized =
+      raw !== null && typeof raw === "object" && !Array.isArray(raw)
+        ? normalizeProvider(raw as Record<string, unknown>).normalized
+        : raw;
+
+    const parsed = ProviderConfigSchema.safeParse(normalized);
     if (!parsed.success) {
       throw new Error(
         `Invalid provider config in ${configPath}: ${parsed.error.message}`,

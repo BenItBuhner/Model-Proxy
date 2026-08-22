@@ -6,11 +6,7 @@ const EnvSubstitutedUrlSchema = z.string().min(1).refine(
   "Expected a valid URL or an environment-substituted URL like ${PROVIDER_BASE_URL}.",
 );
 
-/**
- * Schema for `config/providers/<name>.json` files. Mirrors the structure used
- * by the Python implementation (`app/core/provider_config.py` +
- * `app/providers/*`).
- */
+/** Schema for `config/providers/<name>.json` files. */
 
 export const ApiKeyPatternSchema = z
   .object({
@@ -54,27 +50,15 @@ export const EndpointsSchema = z
     audio_transcriptions: z.string().min(1).optional(),
     audio_translations: z.string().min(1).optional(),
     audio_streaming: z.string().min(1).optional(),
-    // "azure" is a Python-era alias; GitHub Models / Azure endpoints behave
-    // as OpenAI-compatible at the wire level in this runtime.
     compatible_format: z
-      .enum(["openai", "anthropic", "azure", "responses"])
+      .enum(["openai", "anthropic", "responses"])
       .default("openai"),
   })
   .passthrough();
 
 export const AuthenticationSchema = z
   .object({
-    // "api_key" / "azure_key" are Python-era aliases for bearer-style auth.
-    // They are kept in the enum to preserve bundle fidelity; the runtime
-    // providers treat them identically to "bearer".
-    type: z.enum([
-      "bearer",
-      "x-api-key",
-      "api-key-header",
-      "none",
-      "api_key",
-      "azure_key",
-    ]),
+    type: z.enum(["bearer", "x-api-key", "api-key-header", "none"]),
     header_name: z.string().min(1).optional(),
     header_format: z.string().optional(),
     additional_headers: z.record(z.string()).optional(),
@@ -102,9 +86,6 @@ export const RateLimitingSchema = z
 
 export const ErrorActionSchema = z
   .object({
-    // "ignore" and "cooldown" are Python-era values; the normalizer maps
-    // them to "pass_through" and "provider_cooldown" respectively, but the
-    // enum accepts them so raw bundles round-trip without loss.
     action: z.enum([
       "global_key_failure",
       "model_key_failure",
@@ -114,8 +95,6 @@ export const ErrorActionSchema = z
       "auto_fix_tool_responses",
       "retry",
       "pass_through",
-      "ignore",
-      "cooldown",
     ]),
   })
   .passthrough();

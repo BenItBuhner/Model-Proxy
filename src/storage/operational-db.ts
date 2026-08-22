@@ -315,4 +315,11 @@ function runMigrations(database: Database): void {
       INSERT INTO schema_migrations (version, applied_at) VALUES (7, datetime('now'));
     `);
   }
+  if (version < 8) {
+    // External SSO identities (Clerk) were removed; drop the unused table.
+    database.exec(`
+      DROP TABLE IF EXISTS external_identities;
+      INSERT INTO schema_migrations (version, applied_at) VALUES (8, datetime('now'));
+    `);
+  }
 }

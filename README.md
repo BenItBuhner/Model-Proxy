@@ -69,8 +69,6 @@ cd web && bun install && bun run build
 | `config/audio-models/` | Audio transcription routing |
 | `tests/` | `bun test` integration tests |
 
-There is no Python application in this tree. The v1 FastAPI codebase was replaced by this v2 TypeScript implementation.
-
 ## Configuration
 
 ### Environment (`.env`)
@@ -157,7 +155,7 @@ For each logical model (primary route `model_routings[0]`):
 
 ## CLI
 
-The process entrypoint is Bun, not a separate Python package:
+The process entrypoint is Bun:
 
 ```bash
 bun run start

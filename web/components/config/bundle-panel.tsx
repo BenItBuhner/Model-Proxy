@@ -188,7 +188,7 @@ export function BundlePanel({
               Download full config
             </div>
             <p className="max-w-[52ch] font-mono text-[11px] leading-relaxed text-bone-500">
-              Produces a JSON bundle byte-compatible with the Python-era exporter.
+              Produces a portable JSON bundle of the full running configuration.
               <span className="ml-1 text-alert-500">Contains unmasked API keys.</span>
             </p>
           </div>
@@ -206,7 +206,7 @@ export function BundlePanel({
               </div>
               <p className="max-w-[52ch] font-mono text-[11px] leading-relaxed text-bone-500">
                 Pick a bundle; a dry-run diff appears before anything is written.
-                Legacy Python values (auth types, compat formats, error actions)
+                Legacy values (auth types, compat formats, error actions)
                 are normalized automatically.
               </p>
             </div>

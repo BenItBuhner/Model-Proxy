@@ -71,7 +71,6 @@ import {
 } from "../../storage/policy-store.ts";
 import { activeRequestCount, recentRequestLogs } from "../request-log.ts";
 import {
-  authenticateRequestAsync,
   isAuthConfigured,
   isSessionValid,
   requireAuth,
@@ -81,7 +80,6 @@ import {
   verifyApiKeyString,
   verifyClientApiKey,
 } from "../auth.ts";
-import { isClerkConfigured } from "../clerk-auth.ts";
 
 const log = createLogger("routes.admin");
 
@@ -182,36 +180,22 @@ export function createAdminRoutes(): Hono {
 
   // -- Auth routes (public — they ESTABLISH the session) ---------------------
 
-  app.get("/v1/auth/config", (c) =>
-    c.json({
-      clerk_configured: isClerkConfigured(),
-      clerk_publishable_key: process.env["CLERK_PUBLISHABLE_KEY"],
-    }),
-  );
-
-  app.get("/v1/admin/auth/status", async (c) => {
+  app.get("/v1/admin/auth/status", (c) => {
     if (!isAuthConfigured()) {
       return c.json({
         authenticated: true,
         reason: "no-auth-configured",
         header_authenticated: true,
         session_authenticated: true,
-        clerk_configured: isClerkConfigured(),
-        clerk_publishable_key: process.env["CLERK_PUBLISHABLE_KEY"],
       });
     }
     const headerAuthenticated = verifyClientApiKey(c);
     const sessionAuthenticated = isSessionValid(c);
-    const clerkPrincipal = await authenticateRequestAsync(c, { allowSession: true });
-    const clerkAuthenticated = clerkPrincipal?.authMethod === "clerk";
-    if (headerAuthenticated || sessionAuthenticated || clerkAuthenticated) {
+    if (headerAuthenticated || sessionAuthenticated) {
       return c.json({
         authenticated: true,
         header_authenticated: headerAuthenticated,
         session_authenticated: sessionAuthenticated,
-        clerk_authenticated: clerkAuthenticated,
-        clerk_configured: isClerkConfigured(),
-        clerk_publishable_key: process.env["CLERK_PUBLISHABLE_KEY"],
       });
     }
     return c.json(
@@ -219,9 +203,6 @@ export function createAdminRoutes(): Hono {
         authenticated: false,
         header_authenticated: false,
         session_authenticated: false,
-        clerk_authenticated: false,
-        clerk_configured: isClerkConfigured(),
-        clerk_publishable_key: process.env["CLERK_PUBLISHABLE_KEY"],
       },
       401,
     );

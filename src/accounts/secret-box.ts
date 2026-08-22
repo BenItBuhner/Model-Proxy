@@ -11,7 +11,7 @@ const PREFIX = "enc:v1:";
  *
  * Production should set MODEL_PROXY_CREDENTIAL_ENCRYPTION_KEY. For local and
  * single-node installs, a random 256-bit key is generated once beside the
- * operational database with mode 0600. Convex receives only this ciphertext.
+ * operational database with mode 0600.
  */
 export function sealCredential(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;

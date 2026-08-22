@@ -471,16 +471,7 @@ function resolveErrorAction(
     const handling = cfg.error_handling ?? {};
     const entry = handling[String(status)];
     if (entry !== undefined) {
-      const rawAction = entry.action as string;
-      // Python-era bundles may still carry "ignore" / "cooldown". Map them
-      // to runtime-equivalent actions so fallback behavior stays correct
-      // even if the file was never run through the bundle normalizer.
-      const action: ErrorAction =
-        rawAction === "ignore"
-          ? "pass_through"
-          : rawAction === "cooldown"
-            ? "provider_cooldown"
-            : (rawAction as ErrorAction);
+      const action = entry.action as ErrorAction;
       const cooldown = (entry as { cooldown_seconds?: unknown }).cooldown_seconds;
       const out: ErrorActionResult = { action };
       if (typeof cooldown === "number") out.cooldownSeconds = cooldown;

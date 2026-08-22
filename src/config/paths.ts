@@ -4,8 +4,6 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
- * Port of `app/core/config_paths.py`.
- *
  * Resolves the set of directories that hold Model-Proxy JSON config
  * (`providers/*.json`, `models/*.json`, `templates/*.json`), plus the single
  * preferred directory for writes.

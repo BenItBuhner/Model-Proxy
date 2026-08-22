@@ -1,7 +1,4 @@
-/**
- * Error response shapes for OpenAI and Anthropic wire protocols.
- * Mirrors `app/core/error_formatters.py`.
- */
+/** Error response shapes for OpenAI and Anthropic wire protocols. */
 
 const STATUS_TYPE_MAP: Record<number, string> = {
   400: "invalid_request_error",

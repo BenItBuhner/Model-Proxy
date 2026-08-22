@@ -2,10 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type { MiddlewareHandler } from "hono";
 
-/**
- * Attaches a request id + start time to each incoming request. Mirrors the
- * Python `LoggingMiddleware`.
- */
+/** Attaches a request id + start time to each incoming request. */
 export function requestContextMiddleware(): MiddlewareHandler {
   return async (c, next) => {
     const inboundId = c.req.header("x-request-id");

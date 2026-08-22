@@ -141,13 +141,6 @@ export function getHealth(signal?: AbortSignal): Promise<HealthDetailed> {
 }
 
 // -------- Auth --------
-export function authConfig(): Promise<{
-  clerk_configured: boolean;
-  clerk_publishable_key?: string;
-}> {
-  return apiFetch("/v1/auth/config");
-}
-
 export async function login(apiKey: string): Promise<void> {
   await apiFetch("/v1/admin/auth/login", {
     method: "POST",
@@ -164,18 +157,12 @@ export async function authStatus(): Promise<{
   reason?: string;
   header_authenticated?: boolean;
   session_authenticated?: boolean;
-  clerk_authenticated?: boolean;
-  clerk_configured?: boolean;
-  clerk_publishable_key?: string;
 }> {
   return apiFetch<{
     authenticated: boolean;
     reason?: string;
     header_authenticated?: boolean;
     session_authenticated?: boolean;
-    clerk_authenticated?: boolean;
-    clerk_configured?: boolean;
-    clerk_publishable_key?: string;
   }>("/v1/admin/auth/status");
 }
 
@@ -485,19 +472,6 @@ export interface DeviceFlowRecord {
 
 export function listProviderAccounts(): Promise<{ accounts: ProviderAccountRecord[] }> {
   return apiFetch("/v1/accounts");
-}
-
-export function getProviderAccountsStatus(): Promise<{
-  convex: {
-    configured: boolean;
-    syncing: boolean;
-    lastSyncedAt?: string;
-    lastError?: string;
-    accountCount: number;
-  };
-  credential_encryption: string;
-}> {
-  return apiFetch("/v1/accounts/status");
 }
 
 export function startCodexOAuth(shared: boolean): Promise<{

@@ -25,7 +25,7 @@ function asPositiveInt(value: unknown): number | undefined {
   return undefined;
 }
 
-/** Context window from provider JSON `models.<id>.context_length` (legacy Python bundles). */
+/** Context window from provider JSON `models.<id>.context_length` (legacy bundles). */
 export function getProviderConfigContextWindow(
   providerName: string,
   upstreamModelId: string,

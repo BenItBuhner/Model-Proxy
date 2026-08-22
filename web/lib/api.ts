@@ -1,7 +1,5 @@
 "use client";
 
-import { getClerkToken } from "./clerk";
-
 const STORAGE_KEY = "mp_api_key";
 
 function getBaseUrl(): string {
@@ -64,17 +62,12 @@ export interface ApiOptions {
 
 export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const key = getStoredApiKey();
-  const clerkToken = key === undefined ? await getClerkToken() : undefined;
   const init: RequestInit = {
     method: options.method ?? "GET",
     credentials: "include",
     headers: {
       ...(options.body !== undefined ? { "content-type": "application/json" } : {}),
-      ...(key !== undefined
-        ? { Authorization: `Bearer ${key}` }
-        : clerkToken !== undefined
-          ? { Authorization: `Bearer ${clerkToken}` }
-          : {}),
+      ...(key !== undefined ? { Authorization: `Bearer ${key}` } : {}),
       ...(options.headers ?? {}),
     },
   };

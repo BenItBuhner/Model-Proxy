@@ -13,7 +13,6 @@ import {
   attachProviderToken,
   completeCodexOAuth,
   getMe,
-  getProviderAccountsStatus,
   importLocalCodexAccount,
   listProviderAccounts,
   pollAccountDeviceFlow,
@@ -40,13 +39,6 @@ export default function AccountsPage(): React.ReactElement {
 function AccountsBody(): React.ReactElement {
   const [accounts, setAccounts] = useState<ProviderAccountRecord[]>([]);
   const [principal, setPrincipal] = useState<PrincipalInfo>();
-  const [convex, setConvex] = useState<{
-    configured: boolean;
-    syncing: boolean;
-    lastSyncedAt?: string;
-    lastError?: string;
-    accountCount: number;
-  }>();
   const [shared, setShared] = useState(false);
   const [callbackUrl, setCallbackUrl] = useState("");
   const [deviceFlow, setDeviceFlow] = useState<{
@@ -61,11 +53,10 @@ function AccountsBody(): React.ReactElement {
   const [error, setError] = useState<string>();
 
   const reload = useCallback((): void => {
-    void Promise.all([listProviderAccounts(), getMe(), getProviderAccountsStatus()])
-      .then(([accountResult, me, status]) => {
+    void Promise.all([listProviderAccounts(), getMe()])
+      .then(([accountResult, me]) => {
         setAccounts(accountResult.accounts);
         setPrincipal(me.principal);
-        setConvex(status.convex);
       })
       .catch((reason: unknown) => setError((reason as Error).message));
   }, []);
@@ -146,24 +137,12 @@ function AccountsBody(): React.ReactElement {
         </div>
       ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid gap-4 lg:grid-cols-2">
         <Metric
           label="connected"
           value={String(accounts.filter((account) => account.status === "active").length)}
         />
         <Metric label="credential storage" value="AES-256-GCM" />
-        <Metric
-          label="Convex mirror"
-          value={
-            convex?.configured
-              ? convex.lastError
-                ? "degraded"
-                : convex.syncing
-                  ? "syncing"
-                  : "connected"
-              : "optional / off"
-          }
-        />
       </div>
 
       {isAdmin ? (

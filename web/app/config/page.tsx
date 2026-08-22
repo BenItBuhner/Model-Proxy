@@ -33,7 +33,7 @@ function ConfigBody(): React.ReactElement {
       <PageHeader
         eyebrow="config"
         title="Bundle import & export"
-        description="Download the full running configuration as a single JSON file, or import a bundle (from another Model-Proxy instance or the Python-era exporter) with a live dry-run diff before anything touches disk. Requires admin authentication."
+        description="Download the full running configuration as a single JSON file, or import a bundle from another Model-Proxy instance with a live dry-run diff before anything touches disk. Requires admin authentication."
         actions={<Badge tone="warning">contains secrets</Badge>}
       />
 

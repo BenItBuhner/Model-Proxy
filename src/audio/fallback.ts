@@ -286,13 +286,7 @@ function resolveErrorAction(
     const config = providerConfigLoader.loadProvider(providerName);
     const entry = config.error_handling?.[String(status)];
     if (entry !== undefined) {
-      const raw = entry.action as string;
-      const action: ErrorAction =
-        raw === "ignore"
-          ? "pass_through"
-          : raw === "cooldown"
-            ? "provider_cooldown"
-            : (raw as ErrorAction);
+      const action = entry.action as ErrorAction;
       const out: { action: ErrorAction; cooldownSeconds?: number } = { action };
       const cooldown = (entry as { cooldown_seconds?: unknown }).cooldown_seconds;
       if (typeof cooldown === "number") out.cooldownSeconds = cooldown;

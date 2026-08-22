@@ -11,9 +11,8 @@ import {
 } from "./model-writer.ts";
 
 /**
- * Compose a configuration bundle from the current on-disk state. Output is
- * byte-compatible with the Python exporter so a Python Model-Proxy instance
- * can re-import the file without modification.
+ * Compose a configuration bundle from the current on-disk state so another
+ * Model-Proxy instance can re-import the file without modification.
  */
 export function exportBundle(): ConfigBundle {
   const providerEntries = listProviderConfigs();

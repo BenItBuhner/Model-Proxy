@@ -1,30 +1,32 @@
 import type { BundleNormalization } from "../../shared/schemas/config-bundle.ts";
 
 /**
- * Pure legacy-value normalization for provider and model objects produced by
- * the Python-era config exporter.
+ * Pure legacy-value normalization for provider and model objects.
  *
- * Philosophy:
- *   - If the TS Zod enum was expanded to accept a legacy value as-is (e.g.
- *     `authentication.type = "api_key"`), leave it untouched — bundle
- *     fidelity is preserved and the runtime already handles it.
- *   - If a value is truly deprecated (e.g. `error_handling.action = "ignore"`),
- *     map it to the closest current equivalent and emit a `BundleNormalization`
- *     entry so the UI can surface every rewrite to the operator.
+ * Older exports and on-disk configs may carry deprecated enum values. The
+ * schemas only accept the canonical names, so every legacy value is mapped to
+ * its current equivalent here and a `BundleNormalization` entry is emitted so
+ * the UI can surface every rewrite to the operator.
  *
  * Every function is pure: the input object is never mutated. A shallow-cloned
  * copy is returned alongside the change log.
  */
 
-/**
- * Deprecated `error_handling.*.action` values. The schema accepts these
- * without error (so round-tripping is safe) but the normalizer rewrites
- * them so the on-disk files match the canonical names used by the runtime
- * router.
- */
+/** Deprecated `error_handling.*.action` values. */
 const ERROR_ACTION_MAP: Record<string, string> = {
   ignore: "pass_through",
   cooldown: "provider_cooldown",
+};
+
+/** Deprecated `authentication.type` values (all bearer-style at the wire). */
+const AUTH_TYPE_MAP: Record<string, string> = {
+  api_key: "bearer",
+  azure_key: "bearer",
+};
+
+/** Deprecated `endpoints.compatible_format` values. */
+const COMPATIBLE_FORMAT_MAP: Record<string, string> = {
+  azure: "openai",
 };
 
 interface NormalizeResult<T> {
@@ -37,7 +39,7 @@ function cloneDeep<T>(input: T): T {
 }
 
 /**
- * Normalize one raw provider record from `bundle.setup.providers[]`.
+ * Normalize one raw provider record (bundle import or on-disk config load).
  * The returned value still needs to be validated with `ProviderConfigSchema`.
  */
 export function normalizeProvider(
@@ -70,7 +72,45 @@ export function normalizeProvider(
     }
   }
 
-  // Python bundles sometimes attach extra diagnostic fields that the strict
+  // authentication.type: legacy bearer-style aliases
+  const authentication = normalized.authentication;
+  if (authentication !== null && typeof authentication === "object") {
+    const auth = authentication as Record<string, unknown>;
+    if (typeof auth.type === "string") {
+      const mapped = AUTH_TYPE_MAP[auth.type];
+      if (mapped !== undefined) {
+        changes.push({
+          kind: "provider",
+          name,
+          path: "authentication.type",
+          from: auth.type,
+          to: mapped,
+        });
+        auth.type = mapped;
+      }
+    }
+  }
+
+  // endpoints.compatible_format: "azure" behaves as OpenAI-compatible
+  const endpoints = normalized.endpoints;
+  if (endpoints !== null && typeof endpoints === "object") {
+    const ep = endpoints as Record<string, unknown>;
+    if (typeof ep.compatible_format === "string") {
+      const mapped = COMPATIBLE_FORMAT_MAP[ep.compatible_format];
+      if (mapped !== undefined) {
+        changes.push({
+          kind: "provider",
+          name,
+          path: "endpoints.compatible_format",
+          from: ep.compatible_format,
+          to: mapped,
+        });
+        ep.compatible_format = mapped;
+      }
+    }
+  }
+
+  // Legacy bundles sometimes attach extra diagnostic fields that the strict
   // inner schemas reject. Passthrough handles those, but we strip one known
   // "junk" field (`provider_notes`) quietly so the on-disk result stays lean.
   if ("provider_notes" in normalized) {
@@ -82,9 +122,9 @@ export function normalizeProvider(
 
 /**
  * Normalize one raw model record from `bundle.setup.models[]`. Currently a
- * no-op because the TS `ModelRoutingConfigSchema` already accepts every
- * field the Python exporter produces; kept as a symmetric hook so future
- * renames can land here without touching the importer.
+ * no-op because `ModelRoutingConfigSchema` already accepts every field older
+ * exporters produce; kept as a symmetric hook so future renames can land here
+ * without touching the importer.
  */
 export function normalizeModel(
   raw: Record<string, unknown>,

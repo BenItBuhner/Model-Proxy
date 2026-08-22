@@ -16,7 +16,7 @@
     "base_url": "{{base_url}}",
     "completions": "/openai/deployments/{model}/chat/completions?api-version=2024-02-15-preview",
     "streaming": "/openai/deployments/{model}/chat/completions?api-version=2024-02-15-preview",
-    "compatible_format": "azure"
+    "compatible_format": "openai"
   },
 
   "authentication": {

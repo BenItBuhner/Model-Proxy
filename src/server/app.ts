@@ -11,12 +11,10 @@ import { createHealthRoutes } from "./routes/health.ts";
 import { createOpenAIRoutes } from "./routes/openai.ts";
 import { createStaticUIRoutes } from "./routes/static-ui.ts";
 import { isDraining } from "./lifecycle.ts";
-import { startConvexMirror } from "../storage/convex-mirror.ts";
 
 const log = createLogger("server");
 
 export function createApp(): Hono {
-  startConvexMirror();
   const app = new Hono();
 
   app.use("*", requestContextMiddleware());

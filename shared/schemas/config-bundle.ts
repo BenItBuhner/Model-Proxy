@@ -1,9 +1,8 @@
 import { z } from "zod";
 
 /**
- * Schema for the full configuration bundle produced by the Python-era
- * "Export configuration" UI and consumed by the new `/v1/admin/config/import`
- * route.
+ * Schema for the full configuration bundle produced by the "Export
+ * configuration" UI and consumed by the `/v1/admin/config/import` route.
  *
  * We keep this schema permissive (`.passthrough()` on nested objects) because
  * the importer re-validates each provider / model individually against
