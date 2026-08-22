@@ -181,6 +181,23 @@ The raw server entrypoint (no browser handling; used by Docker) is
 `packages/server/src/cli/main.ts` with `--host`, `--port`, `--data-dir`,
 `--log-level`.
 
+## Desktop app (Electron)
+
+`apps/desktop` wraps the exact same engine and UI in an installable shell:
+the Electron main process spawns the compiled server binary as a sidecar on
+a free localhost port, stores all data under the OS app-data path, and
+auto-logs-in with a per-install admin key — no login screen, no terminal.
+
+```bash
+bun run build:cli && bun run build:web       # build the sidecar + UI once
+cd apps/desktop && bun install
+bun run start                                # launch the app
+bun run dist                                 # build installers (dmg/nsis/AppImage/deb)
+```
+
+The desktop app is intentionally NOT part of the Bun workspaces so normal
+installs never download Electron.
+
 ## Scripts
 
 ```bash

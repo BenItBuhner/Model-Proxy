@@ -6,7 +6,8 @@
   "description": "Model-Proxy: a fast, modular LLM routing proxy on Bun.",
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/cli",
+    "apps/web"
   ],
   "scripts": {
     "dev": "bun run --cwd packages/server dev",

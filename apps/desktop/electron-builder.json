@@ -1,0 +1,23 @@
+{
+  "appId": "dev.modelproxy.desktop",
+  "productName": "Model Proxy",
+  "directories": {
+    "output": "release"
+  },
+  "files": ["src/**/*", "assets/**/*", "package.json"],
+  "extraResources": [
+    { "from": "../../dist/model-proxy", "to": "model-proxy" },
+    { "from": "../web/out", "to": "web-static" }
+  ],
+  "mac": {
+    "category": "public.app-category.developer-tools",
+    "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }]
+  },
+  "win": {
+    "target": [{ "target": "nsis", "arch": ["x64"] }]
+  },
+  "linux": {
+    "category": "Development",
+    "target": [{ "target": "AppImage", "arch": ["x64"] }, { "target": "deb", "arch": ["x64"] }]
+  }
+}
