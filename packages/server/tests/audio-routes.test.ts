@@ -98,7 +98,7 @@ describe("audio transcription routes", () => {
 
   test("accepts a valid admin session cookie", async () => {
     mockFetch(async () => jsonResponse({ text: "hello session" }));
-    const loginRes = await app.request("/v1/admin/auth/login", {
+    const loginRes = await app.request("/v1/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ api_key: "audio-admin-key" }),

@@ -13,7 +13,7 @@ export interface Principal {
   role: UserRole;
   isOwner: boolean;
   scopes: string[];
-  authMethod: "legacy-client-key" | "api-key" | "session" | "no-auth";
+  authMethod: "admin-key" | "api-key" | "session" | "no-auth";
   ownerBypass: boolean;
   completionLoggingEnabled: boolean;
 }
@@ -136,11 +136,31 @@ const API_KEY_PREFIX = "mpu";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const PASSWORD_SCRYPT_OPTIONS = { N: 4096, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 
+/**
+ * Internal account backing admin-key sessions. Created lazily on the first
+ * admin-key login; its random password is never revealed, so password login
+ * for it is impossible.
+ */
+export const SYSTEM_OWNER_EMAIL = "owner@model-proxy.local";
+
 export function ownerUserExists(): boolean {
   const row = getOperationalDb()
-    .query("SELECT id FROM users WHERE role = 'owner' LIMIT 1")
-    .get() as { id: string } | null;
+    .query("SELECT id FROM users WHERE role = 'owner' AND email != $system LIMIT 1")
+    .get({ $system: SYSTEM_OWNER_EMAIL }) as { id: string } | null;
   return row !== null;
+}
+
+export function ensureSystemOwnerUser(): StoredUser {
+  const row = getOperationalDb()
+    .query("SELECT * FROM users WHERE email = $email")
+    .get({ $email: SYSTEM_OWNER_EMAIL }) as UserRow | null;
+  if (row !== null) return userFromRow(row);
+  return createUser({
+    email: SYSTEM_OWNER_EMAIL,
+    password: randomSecret(48),
+    role: "owner",
+    completionLoggingEnabled: true,
+  });
 }
 
 export function listUsers(): StoredUser[] {
@@ -474,16 +494,17 @@ export function writeSignupSettings(input: Partial<SignupSettings>): SignupSetti
   return next;
 }
 
-export function legacyOwnerPrincipal(): Principal {
+/** Principal for requests presenting the admin CLIENT_API_KEY as a bearer token. */
+export function adminKeyPrincipal(): Principal {
   return {
-    id: "legacy-owner",
+    id: "admin-key-owner",
     userId: undefined,
     apiKeyId: undefined,
     email: undefined,
     role: "owner",
     isOwner: true,
     scopes: ["*"],
-    authMethod: "legacy-client-key",
+    authMethod: "admin-key",
     ownerBypass: true,
     completionLoggingEnabled: true,
   };

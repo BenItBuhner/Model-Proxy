@@ -107,14 +107,14 @@ export function getHealth(signal?: AbortSignal): Promise<HealthDetailed> {
 
 // -------- Auth --------
 export async function login(apiKey: string): Promise<void> {
-  await apiFetch("/v1/admin/auth/login", {
+  await apiFetch("/v1/auth/login", {
     method: "POST",
     body: { api_key: apiKey },
   });
 }
 
 export async function logout(): Promise<void> {
-  await apiFetch("/v1/admin/auth/logout", { method: "POST" });
+  await apiFetch("/v1/auth/logout", { method: "POST" });
 }
 
 export async function authStatus(): Promise<{
@@ -128,7 +128,7 @@ export async function authStatus(): Promise<{
     reason?: string;
     header_authenticated?: boolean;
     session_authenticated?: boolean;
-  }>("/v1/admin/auth/status");
+  }>("/v1/auth/status");
 }
 
 // -------- Observability --------

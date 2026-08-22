@@ -43,6 +43,7 @@ import {
   createUserApiKey,
   consumeInvite,
   createInvite,
+  ensureSystemOwnerUser,
   isInviteUsable,
   listUserApiKeys,
   listInvites,
@@ -72,11 +73,11 @@ import {
 } from "../../storage/policy-store.ts";
 import { activeRequestCount, recentRequestLogs } from "../request-log.ts";
 import {
+  authenticateRequest,
   isAuthConfigured,
   isSessionValid,
   requireAuth,
   SESSION_COOKIE,
-  currentSessionToken,
   principal,
   verifyApiKeyString,
   verifyClientApiKey,
@@ -193,7 +194,7 @@ export function createAdminRoutes(): Hono {
 
   // -- Auth routes (public — they ESTABLISH the session) ---------------------
 
-  app.get("/v1/admin/auth/status", (c) => {
+  app.get("/v1/auth/status", (c) => {
     if (!isAuthConfigured()) {
       return c.json({
         authenticated: true,
@@ -221,43 +222,6 @@ export function createAdminRoutes(): Hono {
     );
   });
 
-  app.post("/v1/admin/auth/login", async (c) => {
-    if (!isAuthConfigured()) {
-      setSession(c);
-      return c.json({ authenticated: true, reason: "no-auth-configured" });
-    }
-
-    let presentedKey: string | undefined = undefined;
-    try {
-      const body = (await c.req.json()) as { api_key?: unknown };
-      if (typeof body.api_key === "string" && body.api_key.length > 0) {
-        presentedKey = body.api_key;
-      }
-    } catch {
-      // no body, fall through to headers
-    }
-
-    if (presentedKey === undefined) {
-      if (verifyClientApiKey(c)) {
-        setSession(c);
-        return c.json({ authenticated: true });
-      }
-      return c.json({ authenticated: false }, 401);
-    }
-
-    if (verifyApiKeyString(presentedKey)) {
-      setSession(c);
-      return c.json({ authenticated: true });
-    }
-    return c.json({ authenticated: false }, 401);
-  });
-
-  app.post("/v1/admin/auth/logout", (c) => {
-    revokeSessionToken(getCookie(c, SESSION_COOKIE));
-    deleteCookie(c, SESSION_COOKIE, { path: "/" });
-    return c.json({ success: true });
-  });
-
   app.post("/v1/auth/signup", async (c) => {
     const body = await readJsonObject(c);
     const email = typeof body["email"] === "string" ? body["email"].trim() : "";
@@ -279,7 +243,12 @@ export function createAdminRoutes(): Hono {
       }
     }
     if (bootstrappingOwner && !usingInvite && isAuthConfigured() && !verifyClientApiKey(c)) {
-      return c.json({ error: "Owner bootstrap requires the current CLIENT_API_KEY." }, 401);
+      // The admin key can also be presented via an established owner session
+      // (the UI logs in with the key first and never stores it afterwards).
+      const actor = authenticateRequest(c, { allowSession: true });
+      if (actor === undefined || !actor.isOwner) {
+        return c.json({ error: "Owner bootstrap requires the admin API key." }, 401);
+      }
     }
 
     try {
@@ -304,21 +273,39 @@ export function createAdminRoutes(): Hono {
         setUserEntitlements(user.id, entitlements);
       }
       const session = createSession(user.id);
-      setUserSession(c, session.token);
+      setSessionCookie(c, session.token);
       return c.json({ user, invite, bootstrap_owner: bootstrappingOwner }, 201);
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);
     }
   });
 
+  // One login endpoint: accepts the admin API key ({ api_key }) or account
+  // credentials ({ email, password }). Both establish the same DB-backed
+  // session cookie.
   app.post("/v1/auth/login", async (c) => {
     const body = await readJsonObject(c);
+    const apiKey = typeof body["api_key"] === "string" ? body["api_key"] : "";
     const email = typeof body["email"] === "string" ? body["email"] : "";
     const password = typeof body["password"] === "string" ? body["password"] : "";
+
+    if (apiKey.length > 0 || (email.length === 0 && password.length === 0)) {
+      // Admin-key login (explicit body key, or Authorization header fallback).
+      const keyOk = apiKey.length > 0 ? verifyApiKeyString(apiKey) : verifyClientApiKey(c);
+      if (!keyOk) return c.json({ authenticated: false }, 401);
+      if (!isAuthConfigured()) {
+        return c.json({ authenticated: true, reason: "no-auth-configured" });
+      }
+      const owner = ensureSystemOwnerUser();
+      const session = createSession(owner.id);
+      setSessionCookie(c, session.token);
+      return c.json({ authenticated: true });
+    }
+
     const user = verifyEmailPassword(email, password);
     if (user === undefined) return c.json({ authenticated: false }, 401);
     const session = createSession(user.id);
-    setUserSession(c, session.token);
+    setSessionCookie(c, session.token);
     return c.json({ authenticated: true, user });
   });
 
@@ -981,16 +968,7 @@ export function createAdminRoutes(): Hono {
   return app;
 }
 
-function setSession(c: Parameters<typeof setCookie>[0]): void {
-  setCookie(c, SESSION_COOKIE, currentSessionToken(), {
-    path: "/",
-    httpOnly: true,
-    sameSite: "Lax",
-    maxAge: SESSION_MAX_AGE,
-  });
-}
-
-function setUserSession(c: Parameters<typeof setCookie>[0], token: string): void {
+function setSessionCookie(c: Parameters<typeof setCookie>[0], token: string): void {
   setCookie(c, SESSION_COOKIE, token, {
     path: "/",
     httpOnly: true,

@@ -1,6 +1,6 @@
 "use client";
 
-import { apiFetch, getStoredApiKey } from "./api";
+import { apiFetch } from "./api";
 import type { RequestEvent } from "@model-proxy/contracts/api/events.ts";
 
 export type Protocol = "openai" | "anthropic";
@@ -102,12 +102,10 @@ export async function dispatchNonStreaming(
 ): Promise<DispatchResult> {
   const { requestId, protocol, body, enforceOverride = "default", signal } = options;
   const path = protocol === "openai" ? "/v1/chat/completions" : "/v1/messages";
-  const apiKey = getStoredApiKey();
   const headers: Record<string, string> = {
     "content-type": "application/json",
     "x-request-id": requestId,
   };
-  if (apiKey !== undefined) headers["Authorization"] = `Bearer ${apiKey}`;
   if (enforceOverride === "force-on") headers["x-enforce-tool-call"] = "true";
   if (enforceOverride === "force-off") headers["x-enforce-tool-call"] = "false";
 
@@ -145,13 +143,11 @@ export async function* dispatchStreaming(
 ): AsyncGenerator<string, { status: number }, unknown> {
   const { requestId, protocol, body, enforceOverride = "default", signal } = options;
   const path = protocol === "openai" ? "/v1/chat/completions" : "/v1/messages";
-  const apiKey = getStoredApiKey();
   const headers: Record<string, string> = {
     "content-type": "application/json",
     "x-request-id": requestId,
     accept: "text/event-stream",
   };
-  if (apiKey !== undefined) headers["Authorization"] = `Bearer ${apiKey}`;
   if (enforceOverride === "force-on") headers["x-enforce-tool-call"] = "true";
   if (enforceOverride === "force-off") headers["x-enforce-tool-call"] = "false";
 

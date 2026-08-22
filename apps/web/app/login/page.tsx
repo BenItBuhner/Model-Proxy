@@ -3,13 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
-import {
-  ApiException,
-  apiFetch,
-  getStoredApiKey,
-  setStoredApiKey,
-  clearStoredApiKey,
-} from "@/lib/api";
+import { ApiException, apiFetch } from "@/lib/api";
 import { authStatus, login } from "@/lib/endpoints";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
@@ -26,27 +20,17 @@ export default function LoginPage(): React.ReactElement {
 
   useEffect(() => {
     let cancelled = false;
-    const stored = getStoredApiKey();
-    if (stored === undefined) {
-      inputRef.current?.focus();
-      return;
-    }
     authStatus()
       .then((result) => {
         if (cancelled) return;
-        if (result.authenticated && (result.header_authenticated ?? true)) {
+        if (result.authenticated && (result.session_authenticated ?? false)) {
           router.replace("/");
           return;
-        }
-        clearStoredApiKey();
-        if (result.session_authenticated) {
-          setError("Stored client key is stale. Enter the current CLIENT_API_KEY.");
         }
         inputRef.current?.focus();
       })
       .catch(() => {
         if (cancelled) return;
-        clearStoredApiKey();
         inputRef.current?.focus();
       });
     return () => {
@@ -58,12 +42,10 @@ export default function LoginPage(): React.ReactElement {
     event.preventDefault();
     setError(undefined);
     setSubmitting(true);
-    setStoredApiKey(key.trim());
     try {
       await login(key.trim());
       router.replace("/");
     } catch (err) {
-      clearStoredApiKey();
       if (err instanceof ApiException) setError(err.message);
       else setError("Unknown error");
     } finally {
@@ -75,7 +57,6 @@ export default function LoginPage(): React.ReactElement {
     event.preventDefault();
     setError(undefined);
     setSubmitting(true);
-    clearStoredApiKey();
     try {
       await apiFetch("/v1/auth/login", {
         method: "POST",

@@ -1,7 +1,6 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { clearStoredApiKey, setStoredApiKey } from "@/lib/api";
 import { Badge, StatusDot } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/ui/panel";
@@ -143,13 +142,11 @@ export function BundlePanel({
             result.env.overwrite.includes("CLIENT_API_KEY"));
         if (clientKeyChanged) {
           setStatus("re-authenticating…");
-          setStoredApiKey(nextClientKey.trim());
           try {
             await login(nextClientKey.trim());
           } catch {
-            clearStoredApiKey();
             setError(
-              "Config applied, but browser auth changed. Enter the new CLIENT_API_KEY to continue.",
+              "Config applied, but browser auth changed. Enter the new admin key to continue.",
             );
             setStatus("reauth required");
           }

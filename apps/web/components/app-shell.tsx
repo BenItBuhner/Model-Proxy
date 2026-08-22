@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { clearStoredApiKey } from "@/lib/api";
 import {
   authStatus,
   getMe,
@@ -158,7 +157,6 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
     } catch {
       // ignore
     }
-    clearStoredApiKey();
     router.replace("/login");
   };
 

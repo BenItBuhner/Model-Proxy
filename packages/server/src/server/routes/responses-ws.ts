@@ -25,7 +25,7 @@ import {
 import { isAuthConfigured, verifyApiKeyString } from "../auth.ts";
 import {
   authenticateApiKey,
-  legacyOwnerPrincipal,
+  adminKeyPrincipal,
   noAuthPrincipal,
 } from "../../storage/identity-store.ts";
 import {
@@ -116,7 +116,7 @@ export async function responsesWsAuth(req: Request): Promise<Principal | undefin
   const userPrincipal = authenticateApiKey(presented);
   if (userPrincipal !== undefined) return userPrincipal;
   if (presented !== undefined && verifyApiKeyString(presented)) {
-    return legacyOwnerPrincipal();
+    return adminKeyPrincipal();
   }
 
   return undefined;

@@ -318,7 +318,7 @@ describe("admin routes", () => {
   });
 
   test("login endpoint issues a session cookie and auth/status recognizes it", async () => {
-    const loginRes = await app.request("/v1/admin/auth/login", {
+    const loginRes = await app.request("/v1/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ api_key: "admin-test-key" }),
@@ -327,7 +327,7 @@ describe("admin routes", () => {
     const cookie = loginRes.headers.get("set-cookie");
     expect(cookie).toContain("mp_session=");
 
-    const statusRes = await app.request("/v1/admin/auth/status", {
+    const statusRes = await app.request("/v1/auth/status", {
       headers: { cookie: cookie ?? "" },
     });
     expect(statusRes.status).toBe(200);
@@ -342,7 +342,7 @@ describe("admin routes", () => {
   });
 
   test("auth/status exposes stale bearer state even when a session cookie is still valid", async () => {
-    const loginRes = await app.request("/v1/admin/auth/login", {
+    const loginRes = await app.request("/v1/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ api_key: "admin-test-key" }),
@@ -351,7 +351,7 @@ describe("admin routes", () => {
     const cookie = loginRes.headers.get("set-cookie");
     expect(cookie).toContain("mp_session=");
 
-    const statusRes = await app.request("/v1/admin/auth/status", {
+    const statusRes = await app.request("/v1/auth/status", {
       headers: {
         cookie: cookie ?? "",
         Authorization: "Bearer stale-key",
@@ -369,7 +369,7 @@ describe("admin routes", () => {
   });
 
   test("openai inference accepts a valid admin session cookie", async () => {
-    const loginRes = await app.request("/v1/admin/auth/login", {
+    const loginRes = await app.request("/v1/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ api_key: "admin-test-key" }),
@@ -389,7 +389,7 @@ describe("admin routes", () => {
   });
 
   test("anthropic inference accepts a valid admin session cookie", async () => {
-    const loginRes = await app.request("/v1/admin/auth/login", {
+    const loginRes = await app.request("/v1/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ api_key: "admin-test-key" }),

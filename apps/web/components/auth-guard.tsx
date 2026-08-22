@@ -2,7 +2,6 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { clearStoredApiKey, getStoredApiKey } from "@/lib/api";
 import { authStatus } from "@/lib/endpoints";
 
 type GuardState = "checking" | "authenticated" | "unauthenticated";
@@ -13,39 +12,18 @@ export function AuthGuard({ children }: { children: React.ReactNode }): React.Re
 
   useEffect(() => {
     let cancelled = false;
-    const storedKey = getStoredApiKey();
-    if (storedKey === undefined) {
-      authStatus()
-        .then((result) => {
-          if (cancelled) return;
-          if (result.authenticated) {
-            setState("authenticated");
-            return;
-          }
-          setState("unauthenticated");
-          router.replace("/login");
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setState("unauthenticated");
-          router.replace("/login");
-        });
-      return;
-    }
     authStatus()
       .then((result) => {
         if (cancelled) return;
         if (result.authenticated) {
           setState("authenticated");
-        } else {
-          clearStoredApiKey();
-          setState("unauthenticated");
-          router.replace("/login");
+          return;
         }
+        setState("unauthenticated");
+        router.replace("/login");
       })
       .catch(() => {
         if (cancelled) return;
-        clearStoredApiKey();
         setState("unauthenticated");
         router.replace("/login");
       });

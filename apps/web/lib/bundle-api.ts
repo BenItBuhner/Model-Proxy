@@ -7,7 +7,7 @@ import type {
   ImportReport as ImportReportBase,
 } from "@model-proxy/contracts/schemas/config-bundle.ts";
 
-import { apiFetch, getStoredApiKey } from "./api";
+import { apiFetch } from "./api";
 
 export type {
   BundleApiKeyEntry,
@@ -36,11 +36,9 @@ export async function exportBundle(): Promise<{
   bundle: ConfigBundle;
   filename: string;
 }> {
-  const key = getStoredApiKey();
   const res = await fetch(`/v1/admin/config/export`, {
     method: "GET",
     credentials: "include",
-    headers: key !== undefined ? { Authorization: `Bearer ${key}` } : {},
   });
   if (!res.ok) {
     let message = `HTTP ${res.status}`;

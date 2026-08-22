@@ -1,13 +1,13 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 
 import type { Context, MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
 
 import { createLogger } from "../observability/logger.ts";
 import {
+  adminKeyPrincipal,
   authenticateApiKey,
   authenticateSessionToken,
-  legacyOwnerPrincipal,
   noAuthPrincipal,
   type Principal,
 } from "../storage/identity-store.ts";
@@ -80,12 +80,8 @@ export function authenticateRequest(c: Context, options: { allowSession?: boolea
     log.warn("CLIENT_API_KEY is unset; auth is DISABLED");
     return noAuthPrincipal();
   }
-  if (
-    expected !== undefined &&
-    presented !== undefined &&
-    constantTimeEquals(presented, expected)
-  ) {
-    return legacyOwnerPrincipal();
+  if (presented !== undefined && constantTimeEquals(presented, expected)) {
+    return adminKeyPrincipal();
   }
   return undefined;
 }
@@ -100,13 +96,7 @@ export async function authenticateRequestAsync(
 function authenticateSession(c: Context): Principal | undefined {
   const cookie = getCookie(c, SESSION_COOKIE);
   if (cookie === undefined) return undefined;
-  const legacyToken = clientApiKeyFingerprint();
-  if (legacyToken !== undefined && cookie === legacyToken) return legacyOwnerPrincipal();
   return authenticateSessionToken(cookie);
-}
-
-export function currentSessionToken(): string {
-  return clientApiKeyFingerprint() ?? "no-auth";
 }
 
 export function isSessionValid(c: Context): boolean {
@@ -138,15 +128,4 @@ export function requireAuth(
     await next();
     return;
   };
-}
-
-/**
- * Hash of the configured key for use in structured logs and session cookies.
- * The raw key never leaves memory; only a short SHA-256 prefix is compared.
- */
-export function clientApiKeyFingerprint(): string | undefined {
-  const key = clientApiKey();
-  if (key === undefined) return undefined;
-  const hash = createHash("sha256").update(key).digest("hex");
-  return hash.slice(0, 16);
 }

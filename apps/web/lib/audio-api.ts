@@ -1,6 +1,5 @@
 "use client";
 
-import { getStoredApiKey } from "./api";
 import { generateRequestId } from "./test-dispatch";
 
 export interface AudioModelList {
@@ -36,7 +35,6 @@ export interface AudioTranscriptionResult {
 export async function listAudioModels(): Promise<AudioModelList> {
   const res = await fetch("/v1/audio/models", {
     credentials: "include",
-    headers: authHeaders(),
   });
   if (!res.ok) throw new Error(`Unable to load audio models (${res.status})`);
   return (await res.json()) as AudioModelList;
@@ -61,7 +59,6 @@ export async function transcribeAudio(
     method: "POST",
     credentials: "include",
     headers: {
-      ...authHeaders(),
       "x-request-id": requestId,
     },
     body: form,
@@ -103,9 +100,3 @@ async function readStream(
   text += decoder.decode();
   return text;
 }
-
-function authHeaders(): Record<string, string> {
-  const key = getStoredApiKey();
-  return key !== undefined ? { Authorization: `Bearer ${key}` } : {};
-}
-

@@ -1,40 +1,15 @@
 "use client";
 
-const STORAGE_KEY = "mp_api_key";
+/**
+ * Auth model: the browser NEVER stores raw API keys. Logging in (admin key or
+ * email/password) sets an http-only session cookie; every request simply
+ * sends `credentials: "include"`.
+ */
 
 function getBaseUrl(): string {
   if (typeof window === "undefined") return "";
   const raw = window.location.origin;
   return raw;
-}
-
-export function getStoredApiKey(): string | undefined {
-  if (typeof window === "undefined") return undefined;
-  try {
-    const value = window.localStorage.getItem(STORAGE_KEY);
-    if (value === null || value.length === 0) return undefined;
-    return value;
-  } catch {
-    return undefined;
-  }
-}
-
-export function setStoredApiKey(key: string): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, key);
-  } catch {
-    // ignore
-  }
-}
-
-export function clearStoredApiKey(): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    // ignore
-  }
 }
 
 export interface ApiError {
@@ -61,13 +36,11 @@ export interface ApiOptions {
 }
 
 export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promise<T> {
-  const key = getStoredApiKey();
   const init: RequestInit = {
     method: options.method ?? "GET",
     credentials: "include",
     headers: {
       ...(options.body !== undefined ? { "content-type": "application/json" } : {}),
-      ...(key !== undefined ? { Authorization: `Bearer ${key}` } : {}),
       ...(options.headers ?? {}),
     },
   };
