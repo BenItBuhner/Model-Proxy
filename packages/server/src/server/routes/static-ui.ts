@@ -6,15 +6,23 @@ import { Hono } from "hono";
 
 import { createLogger } from "../../observability/logger.ts";
 
-const log = createLogger("routes.setup-static");
+const log = createLogger("routes.static-ui");
+
+/** Path prefixes owned by the API — never served from the static UI. */
+const API_PREFIXES = ["/v1/", "/health"];
+
+function isApiPath(path: string): boolean {
+  if (path === "/v1") return true;
+  return API_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
 
 /**
- * Locate the static UI directory produced by `web/` `next build` with
+ * Locate the static UI directory produced by `apps/web` `next build` with
  * `output: 'export'`. Tried in priority order:
  *   1. $MODEL_PROXY_WEB_ROOT
  *   2. ./web-static           (Docker image layout)
  *   3. ../web-static          (alt Docker layout)
- *   4. ./web/out              (running from repo root during dev)
+ *   4. ./apps/web/out         (running from repo root during dev)
  *   5. Relative to this module (handy for `bun run dev`)
  */
 function resolveWebRoot(): string | undefined {
@@ -75,11 +83,11 @@ function mimeFor(filePath: string): string {
 }
 
 /**
- * Safely resolve an incoming /setup/* request path to an on-disk file
- * inside `webRoot`. Refuses any path that escapes webRoot via `..`.
+ * Safely resolve an incoming request path to an on-disk file inside
+ * `webRoot`. Refuses any path that escapes webRoot via `..`.
  */
 function resolveAssetPath(requestPath: string, webRoot: string): string | undefined {
-  let trimmed = requestPath.replace(/^\/setup\/?/, "");
+  let trimmed = requestPath.replace(/^\/+/, "");
   // Strip querystring if it slipped in (hono gives us just the path, but defensive).
   const qIdx = trimmed.indexOf("?");
   if (qIdx !== -1) trimmed = trimmed.slice(0, qIdx);
@@ -120,13 +128,19 @@ export function createStaticUIRoutes(): Hono {
   const app = new Hono();
   const webRoot = resolveWebRoot();
 
+  // Legacy bookmarks: the admin UI used to live under /setup/.
+  app.get("/setup", (c) => c.redirect("/", 302));
+  app.get("/setup/*", (c) =>
+    c.redirect(c.req.path.replace(/^\/setup\/?/, "/"), 302),
+  );
+
   if (webRoot === undefined) {
     log.warn(
-      "static UI not found; /setup/* will 404 (set MODEL_PROXY_WEB_ROOT or run `bun run build:web`)",
+      "static UI not found; the admin UI will 404 (set MODEL_PROXY_WEB_ROOT or run `bun run build:web`)",
     );
-    app.get("/setup", (c) => c.redirect("/setup/", 302));
-    app.get("/setup/*", (c) =>
-      c.json(
+    app.get("/*", (c) => {
+      if (isApiPath(c.req.path)) return c.notFound();
+      return c.json(
         {
           error: {
             message:
@@ -135,17 +149,17 @@ export function createStaticUIRoutes(): Hono {
           },
         },
         404,
-      ),
-    );
+      );
+    });
     return app;
   }
 
-  log.info("serving static UI", { webRoot });
+  log.info("serving static UI at /", { webRoot });
 
-  // Canonicalise `/setup` → `/setup/` so relative asset paths resolve.
-  app.get("/setup", (c) => c.redirect("/setup/", 302));
+  app.get("/*", (c) => {
+    // API paths fall through to the JSON 404 handler; the UI never shadows them.
+    if (isApiPath(c.req.path)) return c.notFound();
 
-  app.get("/setup/*", (c) => {
     const assetPath = resolveAssetPath(c.req.path, webRoot);
     if (assetPath === undefined) {
       return c.json(
@@ -169,7 +183,7 @@ export function createStaticUIRoutes(): Hono {
       });
     }
 
-    // HTML route fallback (e.g. `/setup/models` without trailing slash).
+    // HTML route fallback (e.g. `/models` without trailing slash).
     if (!/\.[a-z0-9]+$/i.test(assetPath)) {
       const fallbackHtml = loadFileOrDirIndex(`${assetPath}.html`);
       if (fallbackHtml !== undefined) {

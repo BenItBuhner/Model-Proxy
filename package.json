@@ -1,5 +1,5 @@
 {
-  "name": "model-proxy",
+  "name": "@model-proxy/monorepo",
   "version": "2.0.0",
   "private": true,
   "type": "module",
@@ -13,6 +13,7 @@
     "start": "bun run --cwd packages/server start",
     "build": "bun run --cwd packages/server build",
     "build:web": "bun run --cwd apps/web build",
+    "build:cli": "bun build --compile apps/cli/src/main.ts --outfile dist/model-proxy",
     "test": "bun run --cwd packages/server test && bun run --cwd apps/web test",
     "test:responses-sdk": "bun run --cwd packages/server test:responses-sdk",
     "eval:fusion-quality": "bun run --cwd packages/server eval:fusion-quality",

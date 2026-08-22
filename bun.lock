@@ -5,6 +5,20 @@
     "": {
       "name": "model-proxy",
     },
+    "apps/cli": {
+      "name": "model-proxy",
+      "version": "2.0.0",
+      "bin": {
+        "model-proxy": "./src/main.ts",
+      },
+      "dependencies": {
+        "@model-proxy/server": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.1.14",
+        "typescript": "^5.6.3",
+      },
+    },
     "apps/web": {
       "name": "model-proxy-web",
       "version": "2.0.0",
@@ -351,6 +365,8 @@
     "merge2": ["merge2@1.4.1", "", {}, "sha512-8q7VEgMJW4J8tcfVPy8g09NcQwZdbwFEqhe/WZkoIzjn/3TGDwtOCYtXGxA3O8tPzpczCCDgv+P2P5y00ZJOOg=="],
 
     "micromatch": ["micromatch@4.0.8", "", { "dependencies": { "braces": "^3.0.3", "picomatch": "^2.3.1" } }, "sha512-PXwfBhYu0hBCPw8Dn0E+WDYb7af3dSLVWKi3HGv84IdF4TyFoC0ysxFd0Goxw7nSv4T/PzEJQxsYsEiFCKo2BA=="],
+
+    "model-proxy": ["model-proxy@workspace:apps/cli"],
 
     "model-proxy-web": ["model-proxy-web@workspace:apps/web"],
 

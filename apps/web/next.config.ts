@@ -6,9 +6,7 @@ const config: NextConfig = {
   trailingSlash: true,
   images: { unoptimized: true },
   transpilePackages: ["@model-proxy/contracts"],
-  // Admin panel is served at /setup/* by the Bun proxy.
-  basePath: process.env.NODE_ENV === "production" ? "/setup" : "",
-  assetPrefix: process.env.NODE_ENV === "production" ? "/setup" : undefined,
+  // The admin UI is served at the proxy root; no basePath needed.
 };
 
 export default config;

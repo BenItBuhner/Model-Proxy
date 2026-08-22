@@ -86,7 +86,7 @@ function InvitesBody(): React.ReactElement {
           </div>
           <Button onClick={() => void createInvite()}>create invite</Button>
           {lastToken !== undefined ? (
-            <pre className="overflow-auto bg-ink-900 p-3 text-xs text-bone-900">{`${window.location.origin}/setup/signup?invite_token=${lastToken}`}</pre>
+            <pre className="overflow-auto bg-ink-900 p-3 text-xs text-bone-900">{`${window.location.origin}/signup?invite_token=${lastToken}`}</pre>
           ) : null}
         </PanelBody>
       </Panel>

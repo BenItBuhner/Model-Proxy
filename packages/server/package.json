@@ -5,6 +5,10 @@
   "type": "module",
   "description": "Model-Proxy engine: Hono API, routing core, providers, config, storage.",
   "main": "./src/cli/main.ts",
+  "exports": {
+    ".": "./src/cli/main.ts",
+    "./*": "./*"
+  },
   "scripts": {
     "dev": "bun run --hot ./src/cli/main.ts",
     "start": "bun run ./src/cli/main.ts",

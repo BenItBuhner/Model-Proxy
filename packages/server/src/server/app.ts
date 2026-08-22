@@ -43,15 +43,8 @@ export function createApp(): Hono {
   app.route("/", createAudioRoutes());
   app.route("/", createAccountRoutes());
   app.route("/", createAdminRoutes());
+  // Mounted last: serves the admin UI for every non-API path, including `/`.
   app.route("/", createStaticUIRoutes());
-
-  app.get("/", (c) =>
-    c.json({
-      service: "model-proxy",
-      version: "2.0.0-dev",
-      docs: "/setup/",
-    }),
-  );
 
   app.notFound((c) =>
     c.json(

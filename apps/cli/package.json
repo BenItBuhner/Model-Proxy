@@ -1,0 +1,24 @@
+{
+  "name": "model-proxy",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Model-Proxy launcher: start the proxy and open the admin UI.",
+  "bin": {
+    "model-proxy": "./src/main.ts"
+  },
+  "scripts": {
+    "start": "bun run ./src/main.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@model-proxy/server": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  }
+}

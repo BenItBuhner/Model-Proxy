@@ -13,7 +13,7 @@ OpenAI- and Anthropic-compatible LLM proxy on **Bun** and **TypeScript**. Route 
 - **Streaming** — SSE for chat completions
 - **Context window metadata** — `GET /v1/models` exposes `context_window`, `context_length`, and `limit.context` for harness compaction
 - **Audio** — OpenAI-style `/v1/audio/transcriptions` with provider routing
-- **Admin UI** — Next.js static app at `/setup/` (models, providers, env, test bench, bundle import/export)
+- **Admin UI** — Next.js static app served at `/` (models, providers, keys, test bench, bundle import/export)
 
 ## Requirements
 
@@ -34,7 +34,7 @@ curl -s -H "Authorization: Bearer $CLIENT_API_KEY" http://127.0.0.1:9876/v1/mode
 ```
 
 Default listen address: `http://127.0.0.1:9876`  
-Admin UI: `http://127.0.0.1:9876/setup/`
+Admin UI: `http://127.0.0.1:9876/` (old `/setup/` links redirect)
 
 ## Quick start (local dev)
 
@@ -49,7 +49,7 @@ bun run dev
 cd apps/web && bun run dev
 ```
 
-With only the API process, open `/setup/` after building the UI once:
+With only the API process, open the admin UI after building it once:
 
 ```bash
 bun run build:web
@@ -131,7 +131,7 @@ Optional `context_window` on the model or on a route overrides discovery when up
 | DELETE | `/v1/responses/:responseId` | Bearer | Delete a stored response |
 | POST | `/v1/messages` | Bearer | Anthropic messages |
 | POST | `/v1/audio/transcriptions` | Bearer | Audio STT |
-| GET | `/setup/*` | Session or Bearer | Admin UI static assets |
+| GET | `/*` | Public assets; API calls need auth | Admin UI static assets (root) |
 | `/v1/admin/*` | Session or Bearer | Config CRUD, logs, bundle import |
 
 Chat responses keep the **logical** `model` id the client requested.
@@ -163,15 +163,23 @@ For each logical model (primary route `model_routings[0]`):
 
 ## CLI
 
-The process entrypoint is Bun:
+The launcher is deliberately bare-bones — start the server, open the UI,
+configure everything else in the browser:
 
 ```bash
-bun run start
-# or
-bun run packages/server/src/cli/main.ts --host 0.0.0.0 --port 9876 --log-level info
+# Launcher (opens the admin UI in your browser)
+bun run apps/cli/src/main.ts            # or: bunx model-proxy (when published)
+
+# Single-file native binary (no Bun install needed on the target machine)
+bun run build:cli                        # -> dist/model-proxy
+./dist/model-proxy --port 9876 --data-dir ~/.model-proxy
 ```
 
-Docker CMD uses the same entrypoint. Supported flags: `--host`, `--port`, `--log-level`. The optional `start` positional argument is accepted for compatibility.
+Flags: `--host`, `--port`, `--data-dir`, `--no-open`, `--version`, `--help`.
+
+The raw server entrypoint (no browser handling; used by Docker) is
+`packages/server/src/cli/main.ts` with `--host`, `--port`, `--data-dir`,
+`--log-level`.
 
 ## Scripts
 
