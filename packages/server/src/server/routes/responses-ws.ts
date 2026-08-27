@@ -322,7 +322,14 @@ async function handleWsResponseCreateNative(
       clearTimeout(streamTimeout);
       const totalMs = Math.round(performance.now() - startedAt);
       emit({ type: "request.finished", at: nowIso(), status: 200, totalMs });
-      recordRequestFinish({ requestId, responseStatus: 200, responseTimeMs: totalMs });
+      // Pass the final `response.completed` payload so analytics record
+      // real usage (including cached input tokens) instead of estimates.
+      recordRequestFinish({
+        requestId,
+        responseStatus: 200,
+        responseTimeMs: totalMs,
+        ...(completed !== undefined ? { responseBody: completed } : {}),
+      });
     } catch (err) {
       clearTimeout(streamTimeout);
       const message = err instanceof Error ? err.message : String(err);

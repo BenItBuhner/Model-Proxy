@@ -425,7 +425,14 @@ async function handleResponsesNative(c: Context, endpointPath: string): Promise<
           }
           controller.close();
           const totalMs = Math.round(performance.now() - started);
-          recordRequestFinish({ requestId, responseStatus: 200, responseTimeMs: totalMs });
+          // Pass the final `response.completed` payload so analytics record
+          // real usage (including cached input tokens) instead of estimates.
+          recordRequestFinish({
+            requestId,
+            responseStatus: 200,
+            responseTimeMs: totalMs,
+            ...(completed !== undefined ? { responseBody: completed } : {}),
+          });
           emit({ type: "request.finished", at: nowIso(), status: 200, totalMs });
         } catch (err) {
           const status = err instanceof RoutingError ? routingErrorStatus(err).status : err instanceof RouteExecutionError ? (err.statusCode ?? 502) : 500;
