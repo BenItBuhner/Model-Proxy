@@ -74,12 +74,16 @@ async function* emulateOpenAI(
     choices: [{ index: 0, delta, finish_reason: null }],
   };
 
+  const usage = isObject(response["usage"]) ? response["usage"] : undefined;
   const final = {
     id: chunkId,
     object: "chat.completion.chunk",
     created,
     model,
     choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
+    // Carry real usage (incl. cached-token details) into the emulated stream
+    // so clients and the proxy's own analytics see it.
+    ...(usage !== undefined ? { usage } : {}),
   };
 
   yield `data: ${JSON.stringify(first)}\n\n`;
