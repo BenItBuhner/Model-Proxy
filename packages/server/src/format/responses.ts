@@ -919,6 +919,49 @@ export function chatStreamChunkToResponsesEvents(
   return responsesEventsToSse(out);
 }
 
+/**
+ * Merge one Anthropic usage payload (message_start or message_delta) into the
+ * accumulated chat-shaped usage. Anthropic `input_tokens` excludes cache
+ * reads/writes, while OpenAI `prompt_tokens` includes them, so cached tokens
+ * are folded back in and surfaced via `prompt_tokens_details.cached_tokens`.
+ */
+function mergeAnthropicUsageIntoChatUsage(
+  usage: Record<string, unknown>,
+  previous: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const prev = previous ?? {};
+  const num = (value: unknown): number | undefined =>
+    typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  const prevDetails = isObject(prev["prompt_tokens_details"])
+    ? prev["prompt_tokens_details"]
+    : undefined;
+
+  const cacheRead =
+    num(usage["cache_read_input_tokens"]) ?? num(prevDetails?.["cached_tokens"]);
+  const cacheCreation =
+    num(usage["cache_creation_input_tokens"]) ?? num(prev["cache_creation_input_tokens"]);
+  const inputTokens = num(usage["input_tokens"]);
+  const promptTokens =
+    inputTokens !== undefined
+      ? inputTokens + (cacheRead ?? 0) + (cacheCreation ?? 0)
+      : num(prev["prompt_tokens"]);
+  const completionTokens = num(usage["output_tokens"]) ?? num(prev["completion_tokens"]);
+
+  const merged: Record<string, unknown> = { ...prev };
+  if (promptTokens !== undefined) merged["prompt_tokens"] = promptTokens;
+  if (completionTokens !== undefined) merged["completion_tokens"] = completionTokens;
+  if (promptTokens !== undefined || completionTokens !== undefined) {
+    merged["total_tokens"] = (promptTokens ?? 0) + (completionTokens ?? 0);
+  }
+  if (cacheRead !== undefined) {
+    merged["prompt_tokens_details"] = { cached_tokens: cacheRead };
+  }
+  if (cacheCreation !== undefined) {
+    merged["cache_creation_input_tokens"] = cacheCreation;
+  }
+  return merged;
+}
+
 /** Convert Anthropic Messages SSE frames into Responses SSE events. */
 export function anthropicStreamChunkToResponsesEvents(
   chunk: string,
@@ -944,6 +987,11 @@ export function anthropicStreamChunkToResponsesEvents(
     if (type === "message_start") {
       const message = isObject(parsed["message"]) ? parsed["message"] : {};
       if (typeof message["model"] === "string") state.model = message["model"];
+      // Anthropic reports input/cache token counts on message_start.
+      const startUsage = isObject(message["usage"]) ? message["usage"] : undefined;
+      if (startUsage !== undefined) {
+        state.usage = mergeAnthropicUsageIntoChatUsage(startUsage, state.usage);
+      }
       ensureStarted(state, out);
       continue;
     }
@@ -979,14 +1027,7 @@ export function anthropicStreamChunkToResponsesEvents(
       }
       const usage = isObject(parsed["usage"]) ? parsed["usage"] : undefined;
       if (usage !== undefined) {
-        state.usage = {
-          prompt_tokens: usage["input_tokens"],
-          completion_tokens: usage["output_tokens"],
-          total_tokens:
-            typeof usage["input_tokens"] === "number" && typeof usage["output_tokens"] === "number"
-              ? (usage["input_tokens"] as number) + (usage["output_tokens"] as number)
-              : undefined,
-        };
+        state.usage = mergeAnthropicUsageIntoChatUsage(usage, state.usage);
       }
       continue;
     }
@@ -1080,6 +1121,13 @@ export function finalizeResponsesStream(state: ResponsesStreamState): string[] {
     typeof state.usage?.["total_tokens"] === "number"
       ? state.usage["total_tokens"]
       : inputTokens + outputTokens;
+  const promptDetails = isObject(state.usage?.["prompt_tokens_details"])
+    ? state.usage["prompt_tokens_details"]
+    : undefined;
+  const cachedTokens =
+    typeof promptDetails?.["cached_tokens"] === "number"
+      ? promptDetails["cached_tokens"]
+      : undefined;
 
   const output: Array<Record<string, unknown>> = [];
   if (state.reasoningStarted) {
@@ -1126,6 +1174,9 @@ export function finalizeResponsesStream(state: ResponsesStreamState): string[] {
       input_tokens: inputTokens,
       output_tokens: outputTokens,
       total_tokens: totalTokens,
+      ...(cachedTokens !== undefined
+        ? { input_tokens_details: { cached_tokens: cachedTokens } }
+        : {}),
     },
     output_text: state.text,
   };

@@ -391,4 +391,57 @@ describe("responses streaming adapter", () => {
     expect(events).toContain('"arguments":"{\\"duration_ms\\":10}"');
     expect(events).toContain("event: response.completed");
   });
+
+  test("carries cached tokens from chat usage into response.completed", () => {
+    const state = createResponsesStreamState("m", "resp_cache_chat");
+    const events = [
+      ...chatStreamChunkToResponsesEvents(
+        'data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1000,"completion_tokens":3,"total_tokens":1003,"prompt_tokens_details":{"cached_tokens":950}}}\n\n',
+        state,
+      ),
+      ...finalizeResponsesStream(state),
+    ].join("");
+    const completedLine = events
+      .split("\n")
+      .find((line) => line.startsWith("data:") && line.includes('"response.completed"'));
+    expect(completedLine).toBeDefined();
+    const completed = JSON.parse(completedLine!.slice("data:".length)) as Record<string, unknown>;
+    const response = completed["response"] as Record<string, unknown>;
+    expect(response["usage"]).toMatchObject({
+      input_tokens: 1000,
+      output_tokens: 3,
+      input_tokens_details: { cached_tokens: 950 },
+    });
+  });
+
+  test("carries Anthropic message_start cache tokens into response.completed", () => {
+    const state = createResponsesStreamState("m", "resp_cache_anthropic");
+    const events = [
+      ...anthropicStreamChunkToResponsesEvents(
+        'data: {"type":"message_start","message":{"model":"m","usage":{"input_tokens":10,"cache_read_input_tokens":900,"cache_creation_input_tokens":90}}}\n\n',
+        state,
+      ),
+      ...anthropicStreamChunkToResponsesEvents(
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}\n\n',
+        state,
+      ),
+      ...anthropicStreamChunkToResponsesEvents(
+        'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}\n\n',
+        state,
+      ),
+      ...finalizeResponsesStream(state),
+    ].join("");
+    const completedLine = events
+      .split("\n")
+      .find((line) => line.startsWith("data:") && line.includes('"response.completed"'));
+    expect(completedLine).toBeDefined();
+    const completed = JSON.parse(completedLine!.slice("data:".length)) as Record<string, unknown>;
+    const response = completed["response"] as Record<string, unknown>;
+    expect(response["usage"]).toMatchObject({
+      input_tokens: 1000,
+      output_tokens: 5,
+      total_tokens: 1005,
+      input_tokens_details: { cached_tokens: 900 },
+    });
+  });
 });
