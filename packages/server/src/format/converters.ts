@@ -439,7 +439,13 @@ export function anthropicToOpenaiResponse(
         : "stop";
 
   const usage = isObject(anthropicResponse["usage"]) ? anthropicResponse["usage"] : {};
-  const inputTokens = Number(usage["input_tokens"] ?? 0);
+  // Anthropic input_tokens excludes cache reads/writes; OpenAI prompt_tokens
+  // includes them, so fold cached tokens back in and surface them in
+  // prompt_tokens_details for downstream cache accounting.
+  const cacheReadTokens = Number(usage["cache_read_input_tokens"] ?? 0);
+  const cacheCreationTokens = Number(usage["cache_creation_input_tokens"] ?? 0);
+  const inputTokens =
+    Number(usage["input_tokens"] ?? 0) + cacheReadTokens + cacheCreationTokens;
   const outputTokens = Number(usage["output_tokens"] ?? 0);
 
   const messageContent = toolCalls !== undefined ? null : textContent;
@@ -469,6 +475,12 @@ export function anthropicToOpenaiResponse(
       prompt_tokens: inputTokens,
       completion_tokens: outputTokens,
       total_tokens: inputTokens + outputTokens,
+      ...(cacheReadTokens > 0
+        ? { prompt_tokens_details: { cached_tokens: cacheReadTokens } }
+        : {}),
+      ...(cacheCreationTokens > 0
+        ? { cache_creation_input_tokens: cacheCreationTokens }
+        : {}),
     },
   };
 }
@@ -526,7 +538,19 @@ export function openaiToAnthropicResponse(
       : "end_turn";
 
   const usage = isObject(openaiResponse["usage"]) ? openaiResponse["usage"] : {};
-  const inputTokens = Number(usage["prompt_tokens"] ?? 0);
+  // OpenAI prompt_tokens includes cached tokens; Anthropic input_tokens
+  // excludes cache reads, so split them back out.
+  const promptDetails = isObject(usage["prompt_tokens_details"])
+    ? usage["prompt_tokens_details"]
+    : {};
+  const cacheReadTokens = Number(
+    promptDetails["cached_tokens"] ?? usage["cache_read_input_tokens"] ?? 0,
+  );
+  const cacheCreationTokens = Number(usage["cache_creation_input_tokens"] ?? 0);
+  const inputTokens = Math.max(
+    0,
+    Number(usage["prompt_tokens"] ?? 0) - cacheReadTokens - cacheCreationTokens,
+  );
   const outputTokens = Number(usage["completion_tokens"] ?? 0);
 
   return {
@@ -542,8 +566,8 @@ export function openaiToAnthropicResponse(
     usage: {
       input_tokens: inputTokens,
       output_tokens: outputTokens,
-      cache_creation_input_tokens: 0,
-      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: cacheCreationTokens,
+      cache_read_input_tokens: cacheReadTokens,
     },
   };
 }
