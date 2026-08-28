@@ -277,6 +277,26 @@ export function anthropicToOpenaiRequest(
   return openaiRequest;
 }
 
+const ANTHROPIC_THINKING_BUDGETS: Record<string, number> = {
+  minimal: 1024,
+  low: 2048,
+  medium: 8192,
+  high: 16384,
+  xhigh: 32768,
+  max: 32768,
+};
+
+function anthropicThinkingBudget(openaiRequest: Record<string, unknown>): number | undefined {
+  const reasoning = openaiRequest["reasoning"];
+  const effort = typeof openaiRequest["reasoning_effort"] === "string"
+    ? openaiRequest["reasoning_effort"]
+    : isObject(reasoning) && typeof reasoning["effort"] === "string"
+      ? reasoning["effort"]
+      : undefined;
+  if (effort === undefined) return undefined;
+  return ANTHROPIC_THINKING_BUDGETS[effort.trim().toLowerCase()];
+}
+
 export function openaiToAnthropicRequest(
   openaiRequest: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -388,6 +408,27 @@ export function openaiToAnthropicRequest(
     delete out["tools"];
   } else if (isObject(toolChoice)) {
     out["tool_choice"] = toolChoice;
+  }
+
+  // Anthropic rejects extended thinking combined with forced tool use
+  // ({type: "any"} / {type: "tool"}), so the explicit tool requirement wins
+  // over the reasoning-effort hint. Evaluated after the tool_choice mapping
+  // above so the check sees the converted Anthropic shape.
+  const thinkingBudget = anthropicThinkingBudget(openaiRequest);
+  const convertedToolChoice = out["tool_choice"];
+  const forcesToolUse =
+    isObject(convertedToolChoice) &&
+    (convertedToolChoice["type"] === "any" || convertedToolChoice["type"] === "tool");
+  if (thinkingBudget !== undefined && !forcesToolUse) {
+    out["thinking"] = { type: "enabled", budget_tokens: thinkingBudget };
+    const maxTokens = out["max_tokens"];
+    if (typeof maxTokens !== "number" || maxTokens <= thinkingBudget) {
+      // Anthropic requires max_tokens to exceed the thinking budget.
+      out["max_tokens"] = thinkingBudget + 1024;
+    }
+    // Anthropic rejects modified temperature/top_p while thinking is enabled.
+    delete out["temperature"];
+    delete out["top_p"];
   }
 
   return out;

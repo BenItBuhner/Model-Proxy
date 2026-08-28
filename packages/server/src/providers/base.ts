@@ -52,6 +52,7 @@ export interface OpenAICallArgs {
   parallel_tool_calls?: boolean | undefined;
   response_format?: unknown;
   reasoning?: unknown;
+  reasoning_effort?: unknown;
   [key: string]: unknown;
 }
 
@@ -67,6 +68,7 @@ export interface AnthropicCallArgs {
   stop_sequences?: string[] | undefined;
   tools?: unknown[] | undefined;
   tool_choice?: unknown;
+  thinking?: unknown;
   [key: string]: unknown;
 }
 

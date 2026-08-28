@@ -153,4 +153,16 @@ describe("OpenAIProvider buildPayload: chat_template_kwargs passthrough", () => 
     expect(payload["parallel_tool_calls"]).toBe(false);
     expect(payload["reasoning"]).toEqual({ effort: "medium" });
   });
+
+  test("forwards reasoning_effort and drops it for gemini", () => {
+    const payload = makeProvider("openai")["buildPayload"](
+      baseArgs({ reasoning_effort: "high" }),
+    );
+    expect(payload["reasoning_effort"]).toBe("high");
+
+    const geminiPayload = makeProvider("gemini")["buildPayload"](
+      baseArgs({ reasoning_effort: "high" }),
+    );
+    expect("reasoning_effort" in geminiPayload).toBe(false);
+  });
 });

@@ -86,6 +86,7 @@ function openaiArgsFromRequest(
     parallel_tool_calls: request["parallel_tool_calls"] as boolean | undefined,
     response_format: request["response_format"],
     reasoning: request["reasoning"],
+    reasoning_effort: request["reasoning_effort"],
     chat_template_kwargs: request["chat_template_kwargs"] as
       | Record<string, unknown>
       | undefined,
@@ -110,6 +111,7 @@ function anthropicArgsFromRequest(
     stop_sequences: request["stop_sequences"] as string[] | undefined,
     tools: request["tools"] as unknown[] | undefined,
     tool_choice: request["tool_choice"],
+    thinking: request["thinking"],
   };
 }
 
@@ -132,7 +134,8 @@ function convertRequest(
   return request;
 }
 
-function openaiToResponsesRequest(request: Record<string, unknown>): Record<string, unknown> {
+/** Exported for tests. */
+export function openaiToResponsesRequest(request: Record<string, unknown>): Record<string, unknown> {
   const messages = Array.isArray(request["messages"]) ? request["messages"] : [];
   const input: Array<Record<string, unknown>> = [];
 
@@ -187,6 +190,12 @@ function openaiToResponsesRequest(request: Record<string, unknown>): Record<stri
   if (request["tool_choice"] !== undefined) responses["tool_choice"] = request["tool_choice"];
   if (request["parallel_tool_calls"] !== undefined) responses["parallel_tool_calls"] = request["parallel_tool_calls"];
   if (request["response_format"] !== undefined) responses["text"] = { format: request["response_format"] };
+  // Chat Completions carries effort as a bare string; Responses nests it.
+  if (request["reasoning"] !== undefined) {
+    responses["reasoning"] = request["reasoning"];
+  } else if (typeof request["reasoning_effort"] === "string") {
+    responses["reasoning"] = { effort: request["reasoning_effort"] };
+  }
 
   const maxTokens = request["max_tokens"] ?? request["max_completion_tokens"];
   if (typeof maxTokens === "number") responses["max_output_tokens"] = maxTokens;

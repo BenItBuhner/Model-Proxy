@@ -406,6 +406,9 @@ export class OpenAIProvider extends AbstractProvider {
     if (args.reasoning !== undefined && !isGemini) {
       payload["reasoning"] = args.reasoning;
     }
+    if (args.reasoning_effort !== undefined && !isGemini) {
+      payload["reasoning_effort"] = args.reasoning_effort;
+    }
     if (
       args.chat_template_kwargs !== undefined &&
       !isChatTemplateKwargsPassthroughDisabled()
@@ -453,6 +456,7 @@ async function* synthesizeSingleChunkStream(
   let toolCalls: unknown = undefined;
   let reasoning: unknown = undefined;
   let reasoningContent: unknown = undefined;
+  let finishReason: string | null = "stop";
   const choices = data["choices"];
   if (Array.isArray(choices) && choices.length > 0) {
     const first = choices[0] as Record<string, unknown>;
@@ -463,6 +467,14 @@ async function* synthesizeSingleChunkStream(
     if (msg["reasoning"] !== undefined) reasoning = msg["reasoning"];
     if (msg["reasoning_content"] !== undefined) {
       reasoningContent = msg["reasoning_content"];
+    }
+    if (typeof first["finish_reason"] === "string") {
+      finishReason = first["finish_reason"];
+    } else if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+      // Canonical OpenAI value; downstream converters map it to Anthropic
+      // "tool_use" / Responses tool statuses, so anything else breaks agent
+      // loops on non-SSE upstreams.
+      finishReason = "tool_calls";
     }
   }
   const delta: Record<string, unknown> = { role: "assistant", content };
@@ -475,7 +487,7 @@ async function* synthesizeSingleChunkStream(
     object: "chat.completion.chunk",
     created: now,
     model,
-    choices: [{ index: 0, delta }],
+    choices: [{ index: 0, delta, finish_reason: finishReason }],
   };
   yield `data: ${JSON.stringify(chunk)}\n\n`;
   yield "data: [DONE]\n\n";
@@ -686,7 +698,18 @@ function normalizeStreamDelta(
     delete normalized["role"];
   }
   const content = normalized["content"];
-  if (content !== undefined && typeof content !== "string") {
+  if (content === null) {
+    if ("role" in normalized) {
+      // Preserve `{role, content: null}` on the first delta: it is the
+      // canonical OpenAI signal that a tool-call turn is starting. Coercing
+      // to "" makes strict accumulators open an empty visible text part.
+    } else {
+      // Null content on continuation deltas is upstream spam; canonical
+      // deltas omit the key entirely (mirrors the empty-string cleanup
+      // below).
+      delete normalized["content"];
+    }
+  } else if (content !== undefined && typeof content !== "string") {
     normalized["content"] = "";
   }
   // Canonical deltas only carry `content` when there is content to add (or on

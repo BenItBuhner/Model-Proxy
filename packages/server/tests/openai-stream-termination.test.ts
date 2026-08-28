@@ -695,6 +695,162 @@ describe("OpenAIProvider streaming termination", () => {
     expect(delta["reasoning_content"]).toBe("");
   });
 
+  test("synthesizes a canonical tool_calls finish_reason from a JSON tool-call response", async () => {
+    server = Bun.serve({
+      port: 0,
+      fetch() {
+        // Non-SSE upstream that omits finish_reason on a tool-call turn.
+        return Response.json({
+          id: "json-tool-response",
+          object: "chat.completion",
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  {
+                    id: "call_9",
+                    type: "function",
+                    function: { name: "lookup", arguments: "{}" },
+                  },
+                ],
+              },
+            },
+          ],
+        });
+      },
+    });
+
+    writeProviderConfig(server.url.origin);
+
+    const provider = new OpenAIProvider("stream-test");
+    const result = await collect(
+      provider.streamOpenAI(
+        {
+          model: "stream-model",
+          messages: [{ role: "user", content: "look something up" }],
+          stream: true,
+        },
+        {
+          apiKey: "test-key",
+          baseUrlOverride: undefined,
+          timeoutSeconds: 30,
+          signal: undefined,
+        },
+      ),
+    );
+
+    expect(result).toHaveLength(2);
+    const payload = JSON.parse(result[0]!.slice("data: ".length)) as Record<string, unknown>;
+    const choice = (payload["choices"] as Array<Record<string, unknown>>)[0]!;
+    // "tool_calls" is the only value downstream converters map to Anthropic
+    // "tool_use" / Responses tool statuses — anything else ends agent loops.
+    expect(choice["finish_reason"]).toBe("tool_calls");
+    const delta = choice["delta"] as Record<string, unknown>;
+    const toolCalls = delta["tool_calls"] as Array<Record<string, unknown>>;
+    expect(toolCalls[0]?.["id"]).toBe("call_9");
+    expect(result[1]).toBe("data: [DONE]\n\n");
+  });
+
+  test("synthesizes finish_reason stop for plain JSON text responses", async () => {
+    server = Bun.serve({
+      port: 0,
+      fetch() {
+        return Response.json({
+          id: "json-text-response",
+          object: "chat.completion",
+          choices: [
+            { index: 0, message: { role: "assistant", content: "hello" } },
+          ],
+        });
+      },
+    });
+
+    writeProviderConfig(server.url.origin);
+
+    const provider = new OpenAIProvider("stream-test");
+    const result = await collect(
+      provider.streamOpenAI(
+        {
+          model: "stream-model",
+          messages: [{ role: "user", content: "hi" }],
+          stream: true,
+        },
+        {
+          apiKey: "test-key",
+          baseUrlOverride: undefined,
+          timeoutSeconds: 30,
+          signal: undefined,
+        },
+      ),
+    );
+
+    const payload = JSON.parse(result[0]!.slice("data: ".length)) as Record<string, unknown>;
+    const choice = (payload["choices"] as Array<Record<string, unknown>>)[0]!;
+    expect(choice["finish_reason"]).toBe("stop");
+    expect((choice["delta"] as Record<string, unknown>)["content"]).toBe("hello");
+  });
+
+  test("preserves content null on the role-bearing first delta of a tool-call turn", async () => {
+    const encoder = new TextEncoder();
+    server = Bun.serve({
+      port: 0,
+      fetch() {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            // Canonical OpenAI first delta of a tool-call turn.
+            controller.enqueue(
+              encoder.encode(
+                'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]}}]}\n\n',
+              ),
+            );
+            controller.enqueue(
+              encoder.encode(
+                'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+              ),
+            );
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          },
+        });
+        return new Response(stream, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+    });
+
+    writeProviderConfig(server.url.origin);
+
+    const provider = new OpenAIProvider("stream-test");
+    const result = await collect(
+      provider.streamOpenAI(
+        {
+          model: "stream-model",
+          messages: [{ role: "user", content: "look something up" }],
+          stream: true,
+        },
+        {
+          apiKey: "test-key",
+          baseUrlOverride: undefined,
+          timeoutSeconds: 30,
+          signal: undefined,
+        },
+      ),
+    );
+
+    expect(result).toHaveLength(3);
+    const payload = JSON.parse(result[0]!.slice("data: ".length)) as Record<string, unknown>;
+    const delta = ((payload["choices"] as Array<Record<string, unknown>>)[0]![
+      "delta"
+    ]) as Record<string, unknown>;
+    // The SDK's tool-call-turn signal must survive normalization: coercing it
+    // to "" makes strict accumulators open an empty visible text part.
+    expect(delta["role"]).toBe("assistant");
+    expect("content" in delta).toBe(true);
+    expect(delta["content"]).toBeNull();
+  });
+
   test("preserves reasoning fields when synthesizing SSE from JSON", async () => {
     server = Bun.serve({
       port: 0,

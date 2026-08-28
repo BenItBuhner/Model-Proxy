@@ -113,6 +113,81 @@ describe("openaiToAnthropicRequest", () => {
       tool_choice: { type: "function", function: { name: "lookup" } },
     })["tool_choice"]).toEqual({ type: "tool", name: "lookup" });
   });
+
+  test("maps reasoning_effort to an anthropic thinking budget", () => {
+    const result = openaiToAnthropicRequest({
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+      max_tokens: 1024,
+      reasoning_effort: "high",
+    });
+    expect(result["thinking"]).toEqual({ type: "enabled", budget_tokens: 16384 });
+    expect(result["max_tokens"]).toBe(17408);
+  });
+
+  test("maps reasoning.effort to thinking and drops sampling params", () => {
+    const result = openaiToAnthropicRequest({
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+      max_tokens: 4096,
+      temperature: 0.3,
+      top_p: 0.9,
+      reasoning: { effort: "medium" },
+    });
+    expect(result["thinking"]).toEqual({ type: "enabled", budget_tokens: 8192 });
+    expect(result["temperature"]).toBeUndefined();
+    expect(result["top_p"]).toBeUndefined();
+  });
+
+  test("leaves thinking disabled for none, unknown, and absent effort", () => {
+    const base = { model: "m", messages: [{ role: "user", content: "hi" }] };
+    expect(openaiToAnthropicRequest({ ...base, reasoning_effort: "none" })["thinking"]).toBeUndefined();
+    expect(openaiToAnthropicRequest({ ...base, reasoning_effort: "bogus" })["thinking"]).toBeUndefined();
+    expect(openaiToAnthropicRequest(base)["thinking"]).toBeUndefined();
+  });
+
+  test("suppresses thinking when tool_choice forces tool use (anthropic rejects the combination)", () => {
+    const base = {
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+      max_tokens: 4096,
+      temperature: 0.4,
+      reasoning_effort: "high",
+      tools: [
+        { type: "function", function: { name: "lookup", parameters: {} } },
+      ],
+    };
+
+    const required = openaiToAnthropicRequest({ ...base, tool_choice: "required" });
+    expect(required["tool_choice"]).toEqual({ type: "any" });
+    expect(required["thinking"]).toBeUndefined();
+    // Sampling params and max_tokens stay untouched when thinking is skipped.
+    expect(required["temperature"]).toBe(0.4);
+    expect(required["max_tokens"]).toBe(4096);
+
+    const forced = openaiToAnthropicRequest({
+      ...base,
+      tool_choice: { type: "function", function: { name: "lookup" } },
+    });
+    expect(forced["tool_choice"]).toEqual({ type: "tool", name: "lookup" });
+    expect(forced["thinking"]).toBeUndefined();
+  });
+
+  test("keeps thinking enabled alongside auto tool_choice", () => {
+    const result = openaiToAnthropicRequest({
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+      max_tokens: 4096,
+      reasoning_effort: "high",
+      tools: [
+        { type: "function", function: { name: "lookup", parameters: {} } },
+      ],
+      tool_choice: "auto",
+    });
+    expect(result["tool_choice"]).toEqual({ type: "auto" });
+    expect(result["thinking"]).toEqual({ type: "enabled", budget_tokens: 16384 });
+    expect(result["max_tokens"]).toBe(17408);
+  });
 });
 
 describe("anthropicToOpenaiRequest", () => {
