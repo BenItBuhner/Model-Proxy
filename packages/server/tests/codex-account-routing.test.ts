@@ -1,4 +1,5 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { rmWithRetry } from "./support.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,7 +18,7 @@ const root = join(tmpdir(), `mp-codex-routing-${process.pid}-${Date.now()}`);
 let upstream: ReturnType<typeof Bun.serve> | undefined;
 
 beforeEach(() => {
-  rmSync(root, { recursive: true, force: true });
+  rmWithRetry(root, { recursive: true, force: true });
   mkdirSync(join(root, "providers"), { recursive: true });
   mkdirSync(join(root, "models"), { recursive: true });
   setPrimaryConfigDirForTests(root);
@@ -35,7 +36,7 @@ afterEach(() => {
   closeOperationalDbForTests();
   setStorageRootForTests(undefined);
   setPrimaryConfigDirForTests(undefined);
-  rmSync(root, { recursive: true, force: true });
+  rmWithRetry(root, { recursive: true, force: true });
 });
 
 describe("Codex subscription account routing", () => {

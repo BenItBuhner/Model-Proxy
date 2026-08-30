@@ -1,4 +1,5 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { rmWithRetry } from "./support.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -110,7 +111,7 @@ afterAll(() => {
   providerRegistry.unregisterProvider("fakex");
   resetKeyState("fakex");
   delete process.env.FAKEX_API_KEY;
-  rmSync(tmpRoot, { recursive: true, force: true });
+  rmWithRetry(tmpRoot, { recursive: true, force: true });
 });
 
 afterEach(() => {

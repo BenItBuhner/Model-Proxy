@@ -1,3 +1,4 @@
+import { sleep } from "../shared/utils.ts";
 import { randomBytes } from "node:crypto";
 
 import {
@@ -229,16 +230,3 @@ function numberField(value: unknown, fallback: number): number {
   return Number.isFinite(number) && number > 0 ? number : fallback;
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        reject(new DOMException("Aborted", "AbortError"));
-      },
-      { once: true },
-    );
-  });
-}

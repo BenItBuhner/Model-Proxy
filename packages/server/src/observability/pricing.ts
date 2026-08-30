@@ -99,7 +99,10 @@ function routeMatches(route: RouteConfig, input: PricingLookupInput): boolean {
 }
 
 function costFor(usage: UsageSnapshot, pricing: TokenPricing): number {
-  const inputTokens = Math.max(0, (usage.promptTokens ?? 0) - (usage.cacheReadTokens ?? 0));
+  const inputTokens = Math.max(
+    0,
+    (usage.promptTokens ?? 0) - (usage.cacheReadTokens ?? 0) - (usage.cacheCreationTokens ?? 0),
+  );
   const outputTokens = usage.completionTokens ?? 0;
   const cacheReadTokens = usage.cacheReadTokens ?? 0;
   const cacheCreationTokens = usage.cacheCreationTokens ?? 0;

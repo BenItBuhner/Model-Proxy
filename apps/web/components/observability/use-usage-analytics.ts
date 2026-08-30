@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getAnalytics,
   getAnalyticsTimeseries,
@@ -10,120 +10,88 @@ import {
   type AnalyticsTimeseriesPoint,
   type ObservabilityFilters,
 } from "@/lib/endpoints";
-import {
-  fillTimeseriesGaps,
-  mergeUsageFilters,
-  readCounterStart,
-  suggestedBucket,
-  type UsageBucket,
-  type UsagePreset,
-  writeCounterStart,
-} from "@/lib/usage-range";
+import { fillTimeseriesGaps, type UsageBucket } from "@/lib/usage-range";
 
 export type UsageAudience = "admin" | "user";
 
+/** Fetches the analytics summary + timeseries for externally-owned filters and
+ * bucket. Callers own the time-range/filter state; this hook only handles
+ * fetching, polling, and stale-response races. */
 export function useUsageAnalytics({
   audience,
-  baseFilters = {},
-  scope,
+  filters,
+  bucket,
   pollMs = 8000,
 }: {
   audience: UsageAudience;
-  baseFilters?: ObservabilityFilters;
-  scope?: string;
+  filters: ObservabilityFilters;
+  bucket: UsageBucket;
   pollMs?: number;
 }): {
-  preset: UsagePreset;
-  setPreset: (preset: UsagePreset) => void;
-  customSince: string | undefined;
-  customUntil: string | undefined;
-  setCustomRange: (since: string | undefined, until: string | undefined) => void;
-  counterStart: string | undefined;
-  setCounterStart: (iso: string | undefined) => void;
-  bucket: UsageBucket;
-  setBucket: (bucket: UsageBucket) => void;
-  filters: ObservabilityFilters;
   summary: AnalyticsSummary | undefined;
   points: AnalyticsTimeseriesPoint[];
   loading: boolean;
   error: string | undefined;
   reload: () => Promise<void>;
 } {
-  const [preset, setPreset] = useState<UsagePreset>("7d");
-  const [customSince, setCustomSince] = useState<string | undefined>(undefined);
-  const [customUntil, setCustomUntil] = useState<string | undefined>(undefined);
-  const [counterStart, setCounterStartState] = useState<string | undefined>(undefined);
-  const [bucketOverride, setBucketOverride] = useState<UsageBucket | undefined>(undefined);
   const [summary, setSummary] = useState<AnalyticsSummary | undefined>(undefined);
   const [rawPoints, setRawPoints] = useState<AnalyticsTimeseriesPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | undefined>(undefined);
-
+  const sequenceRef = useRef(0);
+  const inFlightRef = useRef(false);
+  const pendingRef = useRef(false);
+  const liveRef = useRef({ filters, bucket, audience });
   useEffect(() => {
-    setCounterStartState(readCounterStart(scope));
-  }, [scope]);
+    liveRef.current = { filters, bucket, audience };
+  }, [filters, bucket, audience]);
 
-  const filters = useMemo(
-    () =>
-      mergeUsageFilters({
-        base: baseFilters,
-        preset,
-        customSince,
-        customUntil,
-        counterStart,
-      }),
-    [baseFilters, counterStart, customSince, customUntil, preset],
-  );
-
-  const bucket = bucketOverride ?? suggestedBucket(filters.since, filters.until);
-
-  const setCounterStart = useCallback(
-    (iso: string | undefined): void => {
-      writeCounterStart(iso, scope);
-      setCounterStartState(iso);
-    },
-    [scope],
-  );
-
-  const setCustomRange = useCallback((since: string | undefined, until: string | undefined): void => {
-    setCustomSince(since);
-    setCustomUntil(until);
-    setPreset("custom");
-    setBucketOverride(undefined);
-  }, []);
-
-  const setPresetAndResetBucket = useCallback((next: UsagePreset): void => {
-    setPreset(next);
-    setBucketOverride(undefined);
-  }, []);
-
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (): Promise<void> => {
+    if (inFlightRef.current) {
+      // A filter/bucket change arrived mid-flight; refetch when it settles.
+      pendingRef.current = true;
+      return;
+    }
+    inFlightRef.current = true;
+    const sequence = ++sequenceRef.current;
     try {
-      const fetchSummary = audience === "admin" ? getAnalytics : getCurrentUserAnalytics;
+      const current = liveRef.current;
+      const fetchSummary = current.audience === "admin" ? getAnalytics : getCurrentUserAnalytics;
       const fetchTimeseries =
-        audience === "admin" ? getAnalyticsTimeseries : getCurrentUserAnalyticsTimeseries;
+        current.audience === "admin"
+          ? getAnalyticsTimeseries
+          : getCurrentUserAnalyticsTimeseries;
       const [summaryResult, timeseriesResult] = await Promise.all([
-        fetchSummary(filters),
-        fetchTimeseries(filters, bucket),
+        fetchSummary(current.filters),
+        fetchTimeseries(current.filters, current.bucket),
       ]);
+      if (sequence !== sequenceRef.current) return;
       setSummary(summaryResult.summary);
       setRawPoints(timeseriesResult.points);
       setError(undefined);
     } catch (err) {
+      if (sequence !== sequenceRef.current) return;
       setError((err as Error).message);
     } finally {
-      setLoading(false);
+      inFlightRef.current = false;
+      if (pendingRef.current) {
+        pendingRef.current = false;
+        void reload();
+      } else if (sequence === sequenceRef.current) {
+        setLoading(false);
+      }
     }
-  }, [audience, bucket, filters]);
+  }, []);
 
+  const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
   useEffect(() => {
-    setLoading(true);
+    sequenceRef.current += 1; // discard any in-flight result for the old filters
     void reload();
     const id = setInterval(() => {
       void reload();
     }, pollMs);
     return () => clearInterval(id);
-  }, [pollMs, reload]);
+  }, [bucket, filtersKey, pollMs, reload]);
 
   const points = useMemo(
     () =>
@@ -145,21 +113,5 @@ export function useUsageAnalytics({
     [bucket, filters.since, filters.until, rawPoints],
   );
 
-  return {
-    preset,
-    setPreset: setPresetAndResetBucket,
-    customSince,
-    customUntil,
-    setCustomRange,
-    counterStart,
-    setCounterStart,
-    bucket,
-    setBucket: (next: UsageBucket) => setBucketOverride(next),
-    filters,
-    summary,
-    points,
-    loading,
-    error,
-    reload,
-  };
+  return { summary, points, loading, error, reload };
 }

@@ -5,6 +5,7 @@ import { Input, Label } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { listModels, type ModelListItem } from "@/lib/endpoints";
+import type { ReasoningEffort } from "@model-proxy/contracts/schemas/reasoning.ts";
 import type {
   EnforceOverride,
   ParamState,
@@ -88,7 +89,7 @@ export function Composer(props: ComposerProps): React.ReactElement {
             onChange={(e) => props.onLogicalModelChange(e.target.value)}
             className="h-9 w-full bg-ink-700 px-3 text-sm text-bone-900 shadow-edge focus:shadow-edge-phosphor focus:outline-none font-mono"
           >
-            {props.logicalModel.length === 0 ? <option value="">— pick a model —</option> : null}
+            {props.logicalModel.length === 0 ? <option value="">- pick a model -</option> : null}
             {models.map((m) => (
               <option key={m.logical_name} value={m.logical_name}>
                 {m.logical_name}
@@ -147,6 +148,35 @@ export function Composer(props: ComposerProps): React.ReactElement {
               onChange={(v) => updateParam("frequency_penalty", v)}
               hideOnAnthropic={props.protocol === "anthropic"}
             />
+          </div>
+          <div>
+            <Label
+              hint={
+                props.params.reasoning_effort !== undefined
+                  ? props.protocol === "anthropic"
+                    ? "sent as thinking.budget_tokens"
+                    : "sent as reasoning_effort"
+                  : "not sent"
+              }
+            >
+              Reasoning effort
+            </Label>
+            <select
+              value={props.params.reasoning_effort ?? ""}
+              onChange={(e) =>
+                updateParam(
+                  "reasoning_effort",
+                  e.target.value === "" ? undefined : (e.target.value as ReasoningEffort),
+                )
+              }
+              className="h-9 w-full bg-ink-700 px-3 text-sm text-bone-900 shadow-edge focus:shadow-edge-phosphor focus:outline-none font-mono"
+            >
+              <option value="">default (not sent)</option>
+              <option value="minimal">minimal</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+            </select>
           </div>
         </div>
 

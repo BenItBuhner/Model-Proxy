@@ -12,16 +12,10 @@ function getBaseUrl(): string {
   return raw;
 }
 
-export interface ApiError {
-  status: number;
-  message: string;
-  body: unknown;
-}
-
 export class ApiException extends Error {
   readonly status: number;
   readonly body: unknown;
-  constructor(error: ApiError) {
+  constructor(error: { status: number; message: string; body: unknown }) {
     super(error.message);
     this.status = error.status;
     this.body = error.body;

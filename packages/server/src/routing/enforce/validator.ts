@@ -1,8 +1,6 @@
+import { isObject } from "../../shared/utils.ts";
 import type { EnforceProtocol, ValidationResult } from "./types.ts";
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function ok(reason: string, kind: "tool_calls" | "termination"): ValidationResult {
   return { valid: true, reason, responseType: kind };

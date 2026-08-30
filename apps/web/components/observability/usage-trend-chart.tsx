@@ -12,7 +12,7 @@ import {
   YAxis,
 } from "recharts";
 import type { AnalyticsTimeseriesPoint } from "@/lib/endpoints";
-import { formatCount, formatUsd } from "./metric-widget";
+import { formatCount, formatUsd } from "@/lib/format";
 import type { UsageBucket } from "@/lib/usage-range";
 
 type ChartRow = AnalyticsTimeseriesPoint & {

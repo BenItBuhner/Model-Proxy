@@ -1,6 +1,7 @@
+import { rmWithRetry } from "./support.ts";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../src/server/app.ts";
@@ -192,7 +193,7 @@ describe("Responses HTTP route", () => {
     providerRegistry.unregisterProvider("failing-responses-fake");
     closeOperationalDbForTests();
     setStorageRootForTests(undefined);
-    rmSync(root, { recursive: true, force: true });
+    rmWithRetry(root, { recursive: true, force: true });
     if (originalClientKey === undefined) delete process.env.CLIENT_API_KEY;
     else process.env.CLIENT_API_KEY = originalClientKey;
   });

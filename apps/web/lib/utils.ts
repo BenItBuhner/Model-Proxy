@@ -19,12 +19,6 @@ export function formatRelativeTime(iso: string): string {
   return `${days}d ago`;
 }
 
-export function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-
 export function truncate(value: string, max = 40): string {
   if (value.length <= max) return value;
   return `${value.slice(0, max - 1)}…`;

@@ -1,3 +1,4 @@
+import { envInt as envNumber, substituteEnvVars } from "../shared/utils.ts";
 import { createLogger } from "../observability/logger.ts";
 import { providerConfigLoader } from "./provider-loader.ts";
 import { getAvailableKeys } from "../providers/api-key-manager.ts";
@@ -8,12 +9,6 @@ import {
 
 const log = createLogger("config.upstream-models");
 
-function envNumber(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined) return fallback;
-  const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
-}
 
 const CACHE_TTL_MS = envNumber("UPSTREAM_MODELS_CACHE_TTL_SECONDS", 3600) * 1000;
 const FETCH_TIMEOUT_MS = envNumber("UPSTREAM_MODELS_FETCH_TIMEOUT_MS", 2000);
@@ -53,11 +48,6 @@ export function parseContextFromModelItem(
   return asPositiveInt(item["context_length"]);
 }
 
-function substituteEnvVars(text: string): string {
-  return text.replace(/\$\{([^}]+)\}/g, (_match, varName: string) => {
-    return process.env[varName] ?? `\${${varName}}`;
-  });
-}
 
 function resolveBaseUrl(providerName: string): string | undefined {
   try {

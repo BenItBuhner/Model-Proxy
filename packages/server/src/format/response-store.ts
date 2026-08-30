@@ -1,3 +1,4 @@
+import { parsePositiveInt } from "../shared/utils.ts";
 /**
  * Persistent previous_response_id store for Responses API chaining.
  *
@@ -198,11 +199,6 @@ export function resetGlobalResponseStoreForTests(options?: ResponseStoreOptions)
   return globalStore;
 }
 
-function parsePositiveInt(value: string | undefined): number | undefined {
-  if (value === undefined || value.trim() === "") return undefined;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
 
 export function previousResponseNotFoundError(id: string): Record<string, unknown> {
   return {

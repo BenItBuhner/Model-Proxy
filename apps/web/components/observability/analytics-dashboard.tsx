@@ -1,14 +1,13 @@
 "use client";
 
-import { MetricWidget, formatCount, formatDurationMs, formatUsd } from "./metric-widget";
+import { MetricWidget } from "./metric-widget";
+import { formatCount, formatDurationMs, formatUsd } from "@/lib/format";
 import type { AnalyticsSummary } from "@/lib/endpoints";
 
 export function AnalyticsDashboard({
   summary,
-  emphasizeSpend = false,
 }: {
   summary: AnalyticsSummary | undefined;
-  emphasizeSpend?: boolean;
 }): React.ReactElement {
   const cacheRate =
     summary !== undefined && summary.completedRequests > 0
@@ -22,23 +21,15 @@ export function AnalyticsDashboard({
         value={formatCount(summary?.totalTokens)}
         sublabel={`${formatCount(summary?.promptTokens)} in · ${formatCount(summary?.completionTokens)} out`}
       />
-      {emphasizeSpend ? (
-        <MetricWidget
-          label="Spend"
-          value={formatUsd(summary?.userCostUsd)}
-          sublabel={`${formatUsd(summary?.typicalCostUsd)} typical · ${formatUsd(summary?.savedCostUsd)} saved`}
-        />
-      ) : (
-        <MetricWidget
-          label="Saved cost"
-          value={formatUsd(summary?.savedCostUsd)}
-          sublabel={`${formatUsd(summary?.typicalCostUsd)} typical · ${formatUsd(summary?.userCostUsd)} user`}
-        />
-      )}
+      <MetricWidget
+        label="Saved"
+        value={formatUsd(summary?.savedCostUsd)}
+        sublabel={`${formatUsd(summary?.userCostUsd)} spend · ${formatUsd(summary?.typicalCostUsd)} typical`}
+      />
       <MetricWidget
         label="Cache hits"
         value={`${cacheRate}%`}
-        sublabel={`${formatCount(summary?.matchedTokens)} matched tokens`}
+        sublabel={`${formatCount(summary?.cacheReadTokens)} cached · ${formatCount(summary?.matchedTokens)} matched`}
       />
       <MetricWidget
         label="Requests"

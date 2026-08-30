@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import type {
   Protocol,
   ThreadMessage,
@@ -576,20 +577,6 @@ function LiveAssistantCard({
         </pre>
       </div>
     </div>
-  );
-}
-
-function Input(props: React.InputHTMLAttributes<HTMLInputElement> & { monospace?: boolean }): React.ReactElement {
-  const { monospace, className, ...rest } = props;
-  return (
-    <input
-      {...rest}
-      className={
-        (className ?? "") +
-        " h-9 w-full bg-ink-800 px-3 text-[13px] text-bone-900 shadow-edge focus:shadow-edge-phosphor focus:outline-none" +
-        (monospace ? " font-mono" : "")
-      }
-    />
   );
 }
 

@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  authStatus,
   getMe,
   getHealth,
   logout as logoutRequest,
@@ -30,17 +29,14 @@ type ResolvedTheme = Exclude<ThemePreference, "system">;
 const NAV: NavItem[] = [
   { label: "Overview", href: "/", audience: "all" },
   { label: "Usage", href: "/usage", audience: "all" },
-  { label: "Accounts", href: "/accounts", audience: "all" },
+  { label: "Account", href: "/account", audience: "all" },
   { label: "Models", href: "/models", audience: "admin" },
   { label: "Providers", href: "/providers", audience: "admin" },
   { label: "Config", href: "/config", audience: "admin" },
   { label: "Test environment", href: "/test-environment", audience: "admin" },
-  { label: "Observability", href: "/observability", audience: "admin" },
-  { label: "Fusion", href: "/fusion", audience: "admin" },
   { label: "Proxies", href: "/proxies", audience: "admin" },
   { label: "Users", href: "/users", audience: "admin" },
   { label: "Invites", href: "/invites", audience: "admin" },
-  { label: "Account", href: "/account", audience: "user" },
   { label: "Docs", href: "/docs", audience: "user" },
 ];
 
@@ -95,7 +91,6 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
     let cancelled = false;
     const load = async () => {
       try {
-        await authStatus();
         const me = await getMe();
         const detail = await getHealth();
         if (!cancelled) setPrincipal(me.principal);

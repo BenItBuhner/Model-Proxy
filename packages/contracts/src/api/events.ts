@@ -59,6 +59,14 @@ export type RequestEvent =
       contextWindow?: number;
     }
   | {
+      type: "route.images_described";
+      at: string;
+      visionModel: string;
+      imageCount: number;
+      cacheHits: number;
+      sourceLogicalModel: string;
+    }
+  | {
       type: "route.hedge.started";
       at: string;
       candidates: number;

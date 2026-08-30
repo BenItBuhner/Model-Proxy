@@ -1,4 +1,4 @@
-import type { ProviderType } from "@model-proxy/contracts/schemas/provider.ts";
+import type { ProviderConfig, ProviderType } from "@model-proxy/contracts/schemas/provider.ts";
 
 import { providerConfigLoader } from "../config/provider-loader.ts";
 import type { BaseProvider } from "./base.ts";
@@ -37,19 +37,29 @@ const inferredTypeByName: Record<string, ProviderType> = {
 
 const customFactories = new Map<string, ProviderFactory>();
 
-function resolveProviderType(providerName: string): ProviderType {
-  const config = providerConfigLoader.loadProvider(providerName);
-  const declared = config.type;
-  if (declared !== undefined) return declared;
-  return inferredTypeByName[providerName] ?? "openai-compat";
+interface ProviderInstanceEntry {
+  config: ProviderConfig;
+  provider: BaseProvider;
 }
+
+/**
+ * Instances keyed by the config object identity the loader handed out. The
+ * loader returns the same object until the provider JSON changes on disk, so
+ * a new object means the instance must be rebuilt with the fresh config.
+ */
+const instanceCache = new Map<string, ProviderInstanceEntry>();
 
 export const providerRegistry = {
   getProvider(providerName: string): BaseProvider {
     const custom = customFactories.get(providerName);
     if (custom !== undefined) return custom();
-    const type = resolveProviderType(providerName);
-    return typeFactories[type](providerName);
+    const config = providerConfigLoader.loadProvider(providerName);
+    const cached = instanceCache.get(providerName);
+    if (cached !== undefined && cached.config === config) return cached.provider;
+    const type = config.type ?? inferredTypeByName[providerName] ?? "openai-compat";
+    const provider = typeFactories[type](providerName);
+    instanceCache.set(providerName, { config, provider });
+    return provider;
   },
 
   isValidProvider(providerName: string): boolean {

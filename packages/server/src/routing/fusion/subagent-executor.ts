@@ -1,6 +1,8 @@
+import { estimateMessageTokens, estimateTokens } from "../../shared/utils.ts";
 import { createLogger } from "../../observability/logger.ts";
-import { modelConfigLoader } from "../../config/model-loader.ts";
 import { FallbackRouter } from "../fallback.ts";
+import { resolveDeclaredContextWindow } from "../context-window.ts";
+import { modelConfigLoader } from "../../config/model-loader.ts";
 import type { FusionRequestContext, SubTask, SubagentResult, GoalpostEvent } from "./types.ts";
 import {
   parseOpenAIDelta,
@@ -9,7 +11,6 @@ import {
   stripToolCallArtifacts,
   type SummarySegment,
 } from "./reasoning-summarizer.ts";
-import { SYSTEM_DEFAULT_CONTEXT_WINDOW } from "../context-window.ts";
 import { emitFusion, nowIso } from "./fusion-events.ts";
 import {
   finishFusionSubagentRun,
@@ -45,20 +46,10 @@ const MIN_FLUSH_SEGMENT_CHARS = 120;
 const MIN_PARAGRAPH_FLUSH_CHARS = 500;
 
 /** Rough token estimate: chars / 4. */
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
 
 /**
  * Estimate the total token count for an array of messages.
  */
-function estimateMessageTokens(messages: unknown[]): number {
-  let total = 0;
-  for (const msg of messages) {
-    total += estimateTokens(JSON.stringify(msg));
-  }
-  return total;
-}
 
 // ── Goalpost patterns ─────────────────────────────────────────────────
 
@@ -749,7 +740,7 @@ Be thorough and complete — do not truncate or trim your analysis.`,
   private subagentContextBudget(ctx: FusionRequestContext, modelRouting: string): SubagentContextBudget {
     const contextWindow = Math.max(
       4096,
-      Math.min(ctx.fusionConfig.context_window, this.resolveDeclaredContextWindow(modelRouting)),
+      Math.min(ctx.fusionConfig.context_window, resolveDeclaredContextWindow(modelRouting)),
     );
     const outputReserve = Math.min(
       DEFAULT_MAX_OUTPUT_TOKENS,
@@ -764,15 +755,6 @@ Be thorough and complete — do not truncate or trim your analysis.`,
     };
   }
 
-  private resolveDeclaredContextWindow(modelRouting: string): number {
-    try {
-      const cfg = modelConfigLoader.loadConfig(modelRouting);
-      const primary = cfg.model_routings[0];
-      return primary?.context_window ?? cfg.context_window ?? SYSTEM_DEFAULT_CONTEXT_WINDOW;
-    } catch {
-      return SYSTEM_DEFAULT_CONTEXT_WINDOW;
-    }
-  }
 
   private buildAdaptiveContextPack(
     ctx: FusionRequestContext,

@@ -1,5 +1,7 @@
 "use client";
 
+import type { ReasoningEffort } from "@model-proxy/contracts/schemas/reasoning.ts";
+
 /**
  * Persistent, single-session state for the Test tab. Stored in localStorage
  * so a refresh preserves the thread + params + tool definitions.
@@ -8,7 +10,9 @@
  * subscribes and persists on change.
  */
 
-export type Protocol = "openai" | "anthropic";
+import type { Protocol } from "./test-dispatch";
+
+export type { Protocol };
 export type EnforceOverride = "default" | "force-on" | "force-off";
 
 export interface ThreadMessageOpenAI {
@@ -64,6 +68,7 @@ export interface ParamState {
   frequency_penalty?: number;
   stop?: string[];
   response_format_json?: boolean;
+  reasoning_effort?: ReasoningEffort;
   stream: boolean;
   enforceOverride: EnforceOverride;
   /** Anthropic-only system prompt */
@@ -170,21 +175,6 @@ export function saveSession(state: TestSessionState): void {
   }, 250);
 }
 
-export function clearSession(): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    // ignore
-  }
-}
-
-// Small pure helpers re-used by the thread component.
-
 export function newToolId(): string {
   return `tool-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-export function emptyToolCallId(): string {
-  return `call_${Math.random().toString(36).slice(2, 12)}`;
 }

@@ -13,6 +13,7 @@ export class StreamUsageTracker {
   private bufferedLine = "";
   private capturedText = "";
   private responseChars = 0;
+  private contentChars = 0;
   private lastUsage: Partial<UsageSnapshot> | undefined;
 
   constructor(
@@ -37,7 +38,8 @@ export class StreamUsageTracker {
       this.ingestLine(this.bufferedLine);
       this.bufferedLine = "";
     }
-    const completionTokens = this.lastUsage?.completionTokens ?? estimateFromChars(this.responseChars);
+    const estimateSource = this.contentChars > 0 ? this.contentChars : this.responseChars;
+    const completionTokens = this.lastUsage?.completionTokens ?? estimateFromChars(estimateSource);
     return {
       usage: this.lastUsage,
       completionTokens,
@@ -59,6 +61,8 @@ export class StreamUsageTracker {
     }
     if (typeof parsed !== "object" || parsed === null) return;
     const event = parsed as Record<string, unknown>;
+    this.contentChars +=
+      this.protocol === "anthropic" ? anthropicDeltaChars(event) : openAIDeltaChars(event);
     const usageObj = extractEventUsage(event);
     if (usageObj === undefined) return;
     this.lastUsage =
@@ -120,7 +124,20 @@ function anthropicUsage(
   usage: Record<string, unknown>,
   previous: Partial<UsageSnapshot> | undefined,
 ): Partial<UsageSnapshot> {
-  const promptTokens = numberField(usage, "input_tokens") ?? previous?.promptTokens;
+  const cacheReadTokens = numberField(usage, "cache_read_input_tokens") ?? previous?.cacheReadTokens;
+  const cacheCreationTokens = numberField(usage, "cache_creation_input_tokens") ?? previous?.cacheCreationTokens;
+  // Anthropic input_tokens excludes cache reads/writes; normalize to the full
+  // prompt (OpenAI semantics) so totals and cost math stay consistent with the
+  // non-streaming path in usage.ts.
+  const previousInputTokens =
+    previous?.promptTokens !== undefined
+      ? previous.promptTokens - (previous.cacheReadTokens ?? 0) - (previous.cacheCreationTokens ?? 0)
+      : undefined;
+  const inputTokens = numberField(usage, "input_tokens") ?? previousInputTokens;
+  const promptTokens =
+    inputTokens === undefined
+      ? undefined
+      : inputTokens + (cacheReadTokens ?? 0) + (cacheCreationTokens ?? 0);
   const completionTokens = numberField(usage, "output_tokens") ?? previous?.completionTokens;
   return {
     promptTokens,
@@ -129,10 +146,45 @@ function anthropicUsage(
       promptTokens !== undefined && completionTokens !== undefined
         ? promptTokens + completionTokens
         : previous?.totalTokens,
-    cacheReadTokens: numberField(usage, "cache_read_input_tokens") ?? previous?.cacheReadTokens,
-    cacheCreationTokens: numberField(usage, "cache_creation_input_tokens") ?? previous?.cacheCreationTokens,
-    cachedTokens: numberField(usage, "cache_read_input_tokens") ?? previous?.cachedTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+    cachedTokens: cacheReadTokens,
   };
+}
+
+function openAIDeltaChars(event: Record<string, unknown>): number {
+  const choices = event["choices"];
+  if (!Array.isArray(choices)) return 0;
+  let total = 0;
+  for (const choice of choices) {
+    if (typeof choice !== "object" || choice === null) continue;
+    const delta = (choice as Record<string, unknown>)["delta"];
+    if (typeof delta !== "object" || delta === null) continue;
+    const d = delta as Record<string, unknown>;
+    total +=
+      stringLength(d["content"]) + stringLength(d["reasoning"]) + stringLength(d["reasoning_content"]);
+    const toolCalls = d["tool_calls"];
+    if (!Array.isArray(toolCalls)) continue;
+    for (const toolCall of toolCalls) {
+      if (typeof toolCall !== "object" || toolCall === null) continue;
+      const fn = (toolCall as Record<string, unknown>)["function"];
+      if (typeof fn !== "object" || fn === null) continue;
+      total += stringLength((fn as Record<string, unknown>)["arguments"]);
+    }
+  }
+  return total;
+}
+
+function anthropicDeltaChars(event: Record<string, unknown>): number {
+  if (event["type"] !== "content_block_delta") return 0;
+  const delta = event["delta"];
+  if (typeof delta !== "object" || delta === null) return 0;
+  const d = delta as Record<string, unknown>;
+  return stringLength(d["text"]) + stringLength(d["thinking"]) + stringLength(d["partial_json"]);
+}
+
+function stringLength(value: unknown): number {
+  return typeof value === "string" ? value.length : 0;
 }
 
 function appendCaptured(existing: string, chunk: string, maxChars: number): string {

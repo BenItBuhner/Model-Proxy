@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
-import { join } from "node:path";
+import { mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import { getStorageDir } from "./storage-paths.ts";
 
@@ -11,6 +12,7 @@ export function getOperationalDb(): Database {
   if (db !== undefined && dbPath === nextPath) return db;
   db?.close();
   dbPath = nextPath;
+  mkdirSync(dirname(nextPath), { recursive: true });
   db = new Database(nextPath, { create: true });
   db.exec("PRAGMA busy_timeout = 5000");
   db.exec("PRAGMA journal_mode = WAL");

@@ -1,3 +1,4 @@
+import { envInt as envNumber } from "../shared/utils.ts";
 import { createLogger } from "../observability/logger.ts";
 import { providerConfigLoader } from "../config/provider-loader.ts";
 import { matchEnvKeys, providerNameToEnvToken } from "./env-matcher.ts";
@@ -11,12 +12,6 @@ const log = createLogger("egress-proxy");
 const DEFAULT_PROXY_COOLDOWN_SECONDS = 86400;
 const SHARED_EGRESS_PROXY_PATTERNS = ["MODEL_PROXY_EGRESS_PROXY", "MODEL_PROXY_EGRESS_PROXY_{INDEX}"];
 
-function envNumber(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined) return fallback;
-  const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) ? n : fallback;
-}
 
 const MAX_PROXY_RETRY_CYCLES = envNumber("MAX_PROXY_RETRY_CYCLES", 1);
 

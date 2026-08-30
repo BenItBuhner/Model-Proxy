@@ -1,4 +1,5 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { rmWithRetry } from "./support.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -238,7 +239,7 @@ afterAll(() => {
   setPrimaryConfigDirForTests(undefined);
   setStorageRootForTests(undefined);
   try {
-    rmSync(tmpRoot, { recursive: true, force: true });
+    rmWithRetry(tmpRoot, { recursive: true, force: true });
   } catch {
     // ignore windows file-lock issues
   }
@@ -252,7 +253,7 @@ afterEach(() => {
   FakeProvider.streamCalls = [];
   eventSink._resetForTests();
   resetRequestLogForTests();
-  rmSync(join(tmpRoot, ".storage"), { recursive: true, force: true });
+  rmWithRetry(join(tmpRoot, ".storage"), { recursive: true, force: true });
 });
 
 const app = createApp();

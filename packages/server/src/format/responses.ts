@@ -5,9 +5,11 @@
  * chat-completions pipeline and maps results back to Responses shapes.
  */
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+import { isObject } from "../shared/utils.ts";
+import {
+  asReasoningEffort,
+  reasoningEffortFromReasoningObject,
+} from "@model-proxy/contracts/schemas/reasoning.ts";
 
 function asString(value: unknown): string {
   if (typeof value === "string") return value;
@@ -372,6 +374,10 @@ export function responsesRequestToChat(
     chat["response_format"] = text["format"];
   }
   if (request["reasoning"] !== undefined) chat["reasoning"] = request["reasoning"];
+  const effort =
+    reasoningEffortFromReasoningObject(request["reasoning"]) ??
+    asReasoningEffort(request["reasoning_effort"]);
+  if (effort !== undefined) chat["reasoning_effort"] = effort;
 
   const maxOut = request["max_output_tokens"] ?? request["max_tokens"];
   if (typeof maxOut === "number") {

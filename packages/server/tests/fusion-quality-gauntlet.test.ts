@@ -1,3 +1,4 @@
+import { rmWithRetry } from "./support.ts";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import type { FusionRequestContext } from "../src/routing/fusion/types.ts";
@@ -199,7 +200,7 @@ describe("Fusion quality gauntlet", () => {
   afterAll(() => {
     globalThis.fetch = originalFetch;
     closeOperationalDbForTests();
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    rmWithRetry(tmpRoot, { recursive: true, force: true });
     delete process.env.FAKE_FUSION_QUALITY_API_KEY;
     if (originalXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
     else process.env.XDG_DATA_HOME = originalXdgDataHome;
@@ -209,7 +210,7 @@ describe("Fusion quality gauntlet", () => {
 
   beforeEach(() => {
     scenarioFingerprint = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    fs.rmSync(path.join(cacheRoot, "model-proxy"), { recursive: true, force: true });
+    rmWithRetry(path.join(cacheRoot, "model-proxy"), { recursive: true, force: true });
     router = new FusionRouter();
     process.env.FAKE_FUSION_QUALITY_API_KEY = "fake-key";
     resetKeyState("openai");
