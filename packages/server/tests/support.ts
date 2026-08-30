@@ -20,9 +20,13 @@ export function rmWithRetry(
   attempts = 6,
 ): void {
   const maxAttempts = typeof options === "number" ? options : attempts;
+  const rmOptions =
+    typeof options === "number"
+      ? { recursive: true, force: true }
+      : { recursive: options.recursive ?? true, force: options.force ?? true };
   for (let attempt = 1; ; attempt++) {
     try {
-      rmSync(path, { recursive: true, force: true });
+      rmSync(path, rmOptions);
       return;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;

@@ -448,7 +448,7 @@ async function handleResponsesNative(c: Context, endpointPath: string): Promise<
           for await (const chunk of generator) {
             completed = completedResponseFromSseChunk(chunk) ?? completed;
             if (!safeEnqueue(chunk)) break;
-            recordRequestProgress({ requestId, streamBytes: encoder.encode(chunk).byteLength, streamChunkCount: 1 });
+            recordRequestProgress({ requestId, streamBytes: Buffer.byteLength(chunk, "utf8"), streamChunkCount: 1 });
           }
           if (storeEnabled && completed !== undefined && typeof completed["id"] === "string") {
             const chatRequest = responsesRequestToChat(requestDict);
@@ -894,7 +894,7 @@ async function handleChatCompletions(
                 if (!safeEnqueue(chunk)) break;
                 recordRequestProgress({
                   requestId,
-                  streamBytes: encoder.encode(chunk).byteLength,
+                  streamBytes: Buffer.byteLength(chunk, "utf8"),
                   streamChunkCount: 1,
                 });
               }

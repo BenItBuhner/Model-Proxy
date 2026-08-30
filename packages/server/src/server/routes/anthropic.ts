@@ -245,7 +245,7 @@ export function createAnthropicRoutes(): Hono {
                   if (!safeEnqueue(chunk)) break;
                   recordRequestProgress({
                     requestId,
-                    streamBytes: encoder.encode(chunk).byteLength,
+                    streamBytes: Buffer.byteLength(chunk, "utf8"),
                     streamChunkCount: 1,
                   });
                 }
