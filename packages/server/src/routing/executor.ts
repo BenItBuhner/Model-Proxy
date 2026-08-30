@@ -81,6 +81,7 @@ function openaiArgsFromRequest(
     user: request["user"] as string | undefined,
     seed: request["seed"] as number | undefined,
     prompt_cache_key: request["prompt_cache_key"] as string | undefined,
+    stream_options: request["stream_options"] as Record<string, unknown> | undefined,
     tools: request["tools"] as unknown[] | undefined,
     tool_choice: request["tool_choice"],
     parallel_tool_calls: request["parallel_tool_calls"] as boolean | undefined,

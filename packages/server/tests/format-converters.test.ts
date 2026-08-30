@@ -213,4 +213,70 @@ describe("anthropicToOpenaiResponse", () => {
     const usage = result["usage"] as Record<string, unknown>;
     expect(usage["total_tokens"]).toBe(7);
   });
+
+  test("folds Anthropic cache tokens into OpenAI usage semantics", () => {
+    const result = anthropicToOpenaiResponse(
+      {
+        id: "m_2",
+        type: "message",
+        role: "assistant",
+        model: "claude-3",
+        content: [{ type: "text", text: "hi" }],
+        stop_reason: "end_turn",
+        usage: {
+          input_tokens: 20,
+          output_tokens: 4,
+          cache_read_input_tokens: 900,
+          cache_creation_input_tokens: 80,
+        },
+      },
+      "gpt-4",
+    );
+    const usage = result["usage"] as Record<string, unknown>;
+    expect(usage["prompt_tokens"]).toBe(1000);
+    expect(usage["total_tokens"]).toBe(1004);
+    expect(usage["prompt_tokens_details"]).toEqual({ cached_tokens: 900 });
+    expect(usage["cache_creation_input_tokens"]).toBe(80);
+  });
+});
+
+describe("usage cache token mapping (openai -> anthropic)", () => {
+  test("maps prompt_tokens_details.cached_tokens to cache_read_input_tokens", () => {
+    const result = openaiToAnthropicResponse(
+      {
+        id: "c_1",
+        choices: [
+          { index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" },
+        ],
+        usage: {
+          prompt_tokens: 1000,
+          completion_tokens: 5,
+          total_tokens: 1005,
+          prompt_tokens_details: { cached_tokens: 950 },
+        },
+      },
+      "claude-3",
+    );
+    const usage = result["usage"] as Record<string, unknown>;
+    expect(usage["input_tokens"]).toBe(50);
+    expect(usage["cache_read_input_tokens"]).toBe(950);
+    expect(usage["cache_creation_input_tokens"]).toBe(0);
+  });
+
+  test("keeps zero cache fields when no cache details are reported", () => {
+    const result = openaiToAnthropicResponse(
+      {
+        id: "c_2",
+        choices: [
+          { index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" },
+        ],
+        usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+      },
+      "claude-3",
+    );
+    const usage = result["usage"] as Record<string, unknown>;
+    expect(usage["input_tokens"]).toBe(10);
+    expect(usage["cache_read_input_tokens"]).toBe(0);
+    expect(usage["cache_creation_input_tokens"]).toBe(0);
+  });
 });

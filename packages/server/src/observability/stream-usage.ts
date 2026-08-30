@@ -59,9 +59,8 @@ export class StreamUsageTracker {
     }
     if (typeof parsed !== "object" || parsed === null) return;
     const event = parsed as Record<string, unknown>;
-    const usage = event["usage"];
-    if (typeof usage !== "object" || usage === null) return;
-    const usageObj = usage as Record<string, unknown>;
+    const usageObj = extractEventUsage(event);
+    if (usageObj === undefined) return;
     this.lastUsage =
       this.protocol === "anthropic"
         ? anthropicUsage(usageObj, this.lastUsage)
@@ -69,17 +68,51 @@ export class StreamUsageTracker {
   }
 }
 
+/**
+ * Usage lives at the top level for OpenAI chunks and Anthropic
+ * `message_delta` events, but Anthropic `message_start` nests it inside
+ * `message.usage` — and that is where `cache_read_input_tokens` is reported.
+ */
+function extractEventUsage(event: Record<string, unknown>): Record<string, unknown> | undefined {
+  const topLevel = event["usage"];
+  if (typeof topLevel === "object" && topLevel !== null) {
+    return topLevel as Record<string, unknown>;
+  }
+  const message = event["message"];
+  if (typeof message === "object" && message !== null) {
+    const nested = (message as Record<string, unknown>)["usage"];
+    if (typeof nested === "object" && nested !== null) {
+      return nested as Record<string, unknown>;
+    }
+  }
+  return undefined;
+}
+
 function openAIUsage(
   usage: Record<string, unknown>,
   previous: Partial<UsageSnapshot> | undefined,
 ): Partial<UsageSnapshot> {
+  // `prompt_tokens_details.cached_tokens` is the standard OpenAI field;
+  // some OpenAI-compatible upstreams report Anthropic-style top-level
+  // `cache_read_input_tokens` / `cache_creation_input_tokens` instead.
+  const details = usage["prompt_tokens_details"];
+  const detailsObj =
+    typeof details === "object" && details !== null
+      ? (details as Record<string, unknown>)
+      : undefined;
+  const cacheReadTokens =
+    (detailsObj !== undefined ? numberField(detailsObj, "cached_tokens") : undefined) ??
+    numberField(usage, "cache_read_input_tokens") ??
+    previous?.cacheReadTokens;
+  const cacheCreationTokens =
+    numberField(usage, "cache_creation_input_tokens") ?? previous?.cacheCreationTokens;
   return {
     promptTokens: numberField(usage, "prompt_tokens") ?? previous?.promptTokens,
     completionTokens: numberField(usage, "completion_tokens") ?? previous?.completionTokens,
     totalTokens: numberField(usage, "total_tokens") ?? previous?.totalTokens,
-    cacheReadTokens: previous?.cacheReadTokens,
-    cacheCreationTokens: previous?.cacheCreationTokens,
-    cachedTokens: previous?.cachedTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+    cachedTokens: cacheReadTokens,
   };
 }
 

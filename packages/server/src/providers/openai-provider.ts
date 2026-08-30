@@ -395,6 +395,11 @@ export class OpenAIProvider extends AbstractProvider {
     if (args.prompt_cache_key !== undefined && !isGemini) {
       payload["prompt_cache_key"] = args.prompt_cache_key;
     }
+    // Forward stream_options (e.g. include_usage) so upstreams that gate
+    // usage reporting behind it still emit the final usage chunk.
+    if (args.stream_options !== undefined && args.stream === true && !isGemini) {
+      payload["stream_options"] = args.stream_options;
+    }
     if (args.tools !== undefined) payload["tools"] = args.tools;
     if (args.tool_choice !== undefined) payload["tool_choice"] = args.tool_choice;
     if (args.parallel_tool_calls !== undefined && !isGemini) {

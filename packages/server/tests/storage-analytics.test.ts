@@ -262,6 +262,52 @@ describe("persistent completion storage and analytics", () => {
     expect(miss?.isCacheHit).toBe(false);
   });
 
+  test("streamed usage with provider cached tokens records a cache hit", () => {
+    recordRequestStart({
+      requestId: "stream-cache-1",
+      endpoint: "/v1/chat/completions",
+      method: "POST",
+      requestedModel: "demo",
+      resolvedModel: "demo",
+      wireProtocol: "openai",
+      isStreaming: true,
+      enforceMode: false,
+      promptTokens: 999,
+      promptTokensEstimated: true,
+      requestBody: { model: "demo", messages: [{ role: "user", content: "grown conversation" }] },
+      persistCompletions: true,
+    });
+    recordRequestProgress({
+      requestId: "stream-cache-1",
+      resolvedProvider: "openai",
+      resolvedModel: "gpt-demo",
+      apiKeyEnvVar: "OPENAI_API_KEY",
+    });
+    // Mirrors what StreamUsageTracker.finish() emits after parsing an SSE
+    // usage chunk containing prompt_tokens_details.cached_tokens.
+    recordRequestFinish({
+      requestId: "stream-cache-1",
+      responseStatus: 200,
+      responseTimeMs: 80,
+      completionTokens: 50,
+      completionTokensEstimated: false,
+      usage: {
+        promptTokens: 1200,
+        completionTokens: 50,
+        totalTokens: 1250,
+        cacheReadTokens: 1024,
+        cachedTokens: 1024,
+      },
+    });
+
+    const rows = listRequestIndexRows({ limit: undefined, offset: 0 }).records;
+    const row = rows.find((candidate) => candidate.requestId === "stream-cache-1");
+    expect(row?.isCacheHit).toBe(true);
+    expect(row?.matchedTokens).toBe(1200);
+    expect(row?.cacheReadTokens).toBe(1024);
+    expect(row?.promptTokens).toBe(1200);
+  });
+
   test("timeseries aggregates tokens and dollar costs by hour and day", () => {
     recordRequestStart({
       requestId: "ts-1",

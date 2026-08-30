@@ -47,6 +47,7 @@ export interface OpenAICallArgs {
   user?: string | undefined;
   seed?: number | undefined;
   prompt_cache_key?: string | undefined;
+  stream_options?: Record<string, unknown> | undefined;
   tools?: unknown[] | undefined;
   tool_choice?: unknown;
   parallel_tool_calls?: boolean | undefined;
