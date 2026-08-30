@@ -1240,6 +1240,46 @@ describe("FallbackRouter", () => {
     ]);
   });
 
+  test("hedged streaming survives a candidate dropped for oversized buffering", async () => {
+    FakeProvider.calls = [];
+    // Primary floods >1MB of non-meaningful chunks (role-only deltas padded
+    // with filler) so the hedge buffer cap drops it. Secondary delivers real
+    // content slightly later. The drop must count as exactly one terminal
+    // event; double accounting would end the hedge loop before the secondary
+    // can win and fail the whole request.
+    const pad = "x".repeat(300_000);
+    const paddedChunk = `data: {"id":"primary","object":"chat.completion.chunk","pad":"${pad}","choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}\n\n`;
+    FakeProvider.streamResponses = [
+      [paddedChunk, paddedChunk, paddedChunk, paddedChunk],
+      [
+        {
+          delayMs: 40,
+          chunk:
+            'data: {"id":"secondary","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"survivor"}}]}\n\n',
+        },
+        "data: [DONE]\n\n",
+      ],
+    ];
+
+    const router = makeRouter({ random: () => 0.5 });
+    const chunks: string[] = [];
+    for await (const chunk of router.streamWithFallback({
+      logicalModel: "fake-hedged-stream-model",
+      requestData: {
+        model: "fake-hedged-stream-model",
+        messages: [{ role: "user", content: "hi" }],
+        stream: true,
+      },
+      targetProtocol: "openai",
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.join("")).toContain("survivor");
+    expect(chunks.join("")).not.toContain('"id":"primary"');
+    expect(FakeProvider.calls[0]?.ctx.signal?.aborted).toBe(true);
+  });
+
   test("hedged streaming replays only the winning stream buffer", async () => {
     FakeProvider.calls = [];
     FakeProvider.streamResponses = [
