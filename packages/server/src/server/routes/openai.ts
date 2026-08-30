@@ -192,23 +192,33 @@ function clientRequestedUsageChunks(request: Record<string, unknown>): boolean {
   return (options as Record<string, unknown>)["include_usage"] === true;
 }
 
+/**
+ * True only when every data event in the chunk is a usage-only chunk (usage
+ * object present, no choices) and nothing else - [DONE], content deltas, or
+ * non-JSON payloads - rides along. Skipping is all-or-nothing per enqueued
+ * chunk, so anything that must reach the client forces a forward.
+ */
 function isUsageOnlySseChunk(chunk: string): boolean {
+  let usageOnlyEvents = 0;
   for (const line of chunk.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed.startsWith("data:")) continue;
     const payload = trimmed.slice(5).trim();
-    if (payload.length === 0 || payload === "[DONE]") continue;
+    if (payload.length === 0) continue;
+    if (payload === "[DONE]") return false;
     try {
       const parsed = JSON.parse(payload) as Record<string, unknown>;
-      if (typeof parsed !== "object" || parsed === null) continue;
-      if (typeof parsed["usage"] !== "object" || parsed["usage"] === null) continue;
+      if (typeof parsed !== "object" || parsed === null) return false;
+      if (typeof parsed["usage"] !== "object" || parsed["usage"] === null) return false;
       const choices = parsed["choices"];
-      if (!Array.isArray(choices) || choices.length === 0) return true;
+      if (Array.isArray(choices) && choices.length > 0) return false;
+      usageOnlyEvents += 1;
     } catch {
       // Not JSON - forward untouched.
+      return false;
     }
   }
-  return false;
+  return usageOnlyEvents > 0;
 }
 
 function responseOwnerId(p: ReturnType<typeof principal>): string | undefined {

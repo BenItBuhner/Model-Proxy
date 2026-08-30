@@ -167,7 +167,7 @@ export function createAdminRoutes(): Hono {
     });
   });
 
-  // -- Auth routes (public â€” they ESTABLISH the session) ---------------------
+  // -- Auth routes (public — they ESTABLISH the session) ---------------------
 
   app.get("/v1/auth/status", (c) => {
     if (!isAuthConfigured()) {
@@ -628,7 +628,7 @@ export function createAdminRoutes(): Hono {
           safeEnqueue(`: keepalive ${Date.now()}\n\n`);
         }, 15000);
 
-        // 4. Client disconnect â€” clean up promptly.
+        // 4. Client disconnect — clean up promptly.
         const onAbort = () => {
           clearInterval(heartbeat);
           unsubscribe();

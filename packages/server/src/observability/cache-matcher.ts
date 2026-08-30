@@ -34,6 +34,9 @@ const MAX_INLINE_FINGERPRINT_STRING_CHARS =
   parsePositiveInt(process.env.CACHE_FINGERPRINT_INLINE_STRING_CHARS) ?? 4096;
 const FLUSH_DEBOUNCE_MS = 2000;
 const FLUSH_MAX_PENDING = 100;
+/** Cap on retained entries, enforced in memory as well as on disk so the
+ * module-level cache cannot grow unboundedly in a long-lived process. */
+const MAX_CACHE_ENTRIES = 5000;
 
 let cache: CacheEntry[] | undefined;
 let cacheRoot: string | undefined;
@@ -83,7 +86,7 @@ function flushNow(): void {
     return;
   }
   try {
-    writeFileSync(path, JSON.stringify(cache.slice(-5000), null, 2) + "\n", "utf8");
+    writeFileSync(path, JSON.stringify(cache.slice(-MAX_CACHE_ENTRIES), null, 2) + "\n", "utf8");
     dirty = false;
     pendingCount = 0;
   } catch {
@@ -95,6 +98,10 @@ function flushNow(): void {
 export function flushCacheMatchesForTests(): void {
   flushNow();
 }
+
+// flushNow is fully synchronous (writeFileSync), so debounced entries survive
+// a graceful process exit instead of losing up to FLUSH_DEBOUNCE_MS of state.
+process.on("exit", flushNow);
 
 export function recordCacheMatch(input: CacheMatchInput): CacheMatchResult {
   const cacheScope = buildScope(input);
@@ -126,6 +133,9 @@ export function recordCacheMatch(input: CacheMatchInput): CacheMatchResult {
     completedAt: input.completedAt,
     promptTokens: input.promptTokens,
   });
+  if (entries.length > MAX_CACHE_ENTRIES) {
+    entries.splice(0, entries.length - MAX_CACHE_ENTRIES);
+  }
   if (!dirty) {
     dirty = true;
     dirtySince = Date.now();

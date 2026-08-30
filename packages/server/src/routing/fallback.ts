@@ -1131,6 +1131,9 @@ export class FallbackRouter {
         if (streamState.bufferedBytes > HEDGE_BUFFER_MAX_BYTES) {
           // Candidate buffered too much without meaningful content; it is not
           // viable as a winner and would otherwise grow memory unboundedly.
+          // Push exactly one terminal event ("failed") and stop consuming;
+          // the post-loop "done" push and the catch below both check
+          // `dropped` so this state is never reported twice.
           streamState.dropped = true;
           streamState.controller.abort();
           queue.push({
@@ -1142,7 +1145,7 @@ export class FallbackRouter {
               { provider: streamState.candidate.route.provider },
             ),
           });
-          continue;
+          break;
         }
         if (
           isMeaningfulStreamChunk(chunk, targetProtocol, minContentChars, {
@@ -1156,10 +1159,10 @@ export class FallbackRouter {
           });
         }
       }
-      queue.push({ type: "done", state: streamState });
+      if (!streamState.dropped) queue.push({ type: "done", state: streamState });
     } catch (error) {
       if (streamState.dropped) {
-        queue.push({ type: "cancelled", state: streamState });
+        // Terminal "failed" event already queued when the buffer cap tripped.
       } else if (shared.settled && isAbortLikeError(error)) {
         queue.push({ type: "cancelled", state: streamState });
       } else {
