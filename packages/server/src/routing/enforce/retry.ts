@@ -1,3 +1,4 @@
+import { isObject } from "../../shared/utils.ts";
 import type { EnforceProtocol } from "./types.ts";
 
 function buildRetryText(failureReason: string): string {
@@ -12,9 +13,6 @@ function buildRetryText(failureReason: string): string {
 
 const RETRY_MARKER_KEY = "__mp_enforce_retry" as const;
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /**
  * Returns a NEW request object with a fresh retry-correction message appended.

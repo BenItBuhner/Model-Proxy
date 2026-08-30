@@ -1,4 +1,5 @@
-import { rmSync } from "node:fs";
+import { rmWithRetry } from "./support.ts";
+
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,13 +22,13 @@ const root = join(tmpdir(), `mp-provider-accounts-${process.pid}-${Date.now()}`)
 beforeEach(() => {
   setStorageRootForTests(root);
   closeOperationalDbForTests();
-  rmSync(root, { recursive: true, force: true });
+  rmWithRetry(root, { recursive: true, force: true });
 });
 
 afterEach(() => {
   closeOperationalDbForTests();
   setStorageRootForTests(undefined);
-  rmSync(root, { recursive: true, force: true });
+  rmWithRetry(root, { recursive: true, force: true });
 });
 
 describe("provider account store", () => {

@@ -1,3 +1,5 @@
+import { matchesLogFilters } from "../shared/log-filters.ts";
+import { parsePositiveInt } from "../shared/utils.ts";
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -48,7 +50,7 @@ export function listRequestIndexRows({
   filters?: RequestLogFilters;
 }): { records: RequestIndexRow[]; total: number } {
   const rows = readAllIndexRows()
-    .filter((row) => matchesFilters(row, filters))
+    .filter((row) => matchesLogFilters(row, filters))
     .sort(compareNewestFirst);
   return {
     records: limit === undefined ? rows.slice(offset) : rows.slice(offset, offset + limit),
@@ -97,11 +99,6 @@ function summarizeLongString(value: string): unknown {
   };
 }
 
-function parsePositiveInt(value: string | undefined): number | undefined {
-  if (value === undefined || value.trim() === "") return undefined;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
 
 function readAllIndexRows(): RequestIndexRow[] {
   const dir = getStorageDir("indexes");
@@ -168,30 +165,6 @@ function indexRowFromEnvelope(envelope: CompletionEnvelope, path: string): Reque
   };
 }
 
-function matchesFilters(row: RequestIndexRow, filters: RequestLogFilters): boolean {
-  if (filters.provider !== undefined && row.resolvedProvider !== filters.provider) return false;
-  if (filters.model !== undefined && row.resolvedModel !== filters.model && row.requestedModel !== filters.model) return false;
-  if (filters.apiKeyEnvVar !== undefined && row.apiKeyEnvVar !== filters.apiKeyEnvVar) return false;
-  if (filters.state !== undefined && row.state !== filters.state) return false;
-  if (filters.cacheHit !== undefined && row.isCacheHit !== filters.cacheHit) return false;
-  if (filters.status === "ok" && (row.responseStatus === undefined || row.responseStatus >= 400)) return false;
-  if (filters.status === "error" && (row.responseStatus !== undefined && row.responseStatus < 400)) return false;
-  if (filters.status === "running" && row.state !== "running") return false;
-  if (filters.since !== undefined && Date.parse(row.timestamp) < Date.parse(filters.since)) return false;
-  if (filters.until !== undefined && Date.parse(row.timestamp) > Date.parse(filters.until)) return false;
-  if (filters.search !== undefined && filters.search.trim() !== "") {
-    const haystack = [
-      row.requestId,
-      row.requestedModel,
-      row.resolvedProvider,
-      row.resolvedModel,
-      row.apiKeyEnvVar,
-      row.errorType,
-    ].join(" ").toLowerCase();
-    if (!haystack.includes(filters.search.toLowerCase())) return false;
-  }
-  return true;
-}
 
 function safeFilename(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 160);

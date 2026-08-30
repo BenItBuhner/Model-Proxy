@@ -1,6 +1,7 @@
+import { rmWithRetry } from "./support.ts";
 import { afterEach, describe, expect, test } from "bun:test";
 import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { OpenAIProvider } from "../src/providers/openai-provider.ts";
@@ -11,7 +12,7 @@ const roots: string[] = [];
 afterEach(() => {
   setPrimaryConfigDirForTests(undefined);
   for (const server of servers.splice(0)) server.stop();
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) rmWithRetry(root, { recursive: true, force: true });
 });
 
 describe("native Responses provider transport", () => {

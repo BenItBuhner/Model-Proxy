@@ -63,6 +63,8 @@ export const ModelRoutingConfigSchema = z
     fusion: FusionConfigSchema.optional(),
     /** Buffer streamed tool-call deltas until the upstream completes the tool call. */
     buffer_partial_tool_calls: z.boolean().default(false),
+    /** Re-chunk streamed content deltas into a smooth, paced stream. */
+    smooth_streaming: z.boolean().optional(),
     /** Default context window (tokens) for routes that omit `context_window`. */
     context_window: z.number().int().positive().optional(),
     /** Optional logical-model cost assumptions for analytics. */
@@ -101,6 +103,8 @@ export interface ResolvedRoute {
   openaiBodyExtensions?: Record<string, unknown>;
   /** Avoid exposing half-built streamed tool calls to strict clients. */
   bufferPartialToolCalls?: boolean;
+  /** Re-chunk content deltas into a smooth, paced stream. */
+  smoothStreaming?: boolean;
 }
 
 export interface Attempt {

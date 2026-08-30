@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { rmWithRetry } from "./support.ts";
+import { mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -34,7 +35,7 @@ afterAll(() => {
   setPrimaryConfigDirForTests(undefined);
   setStorageRootForTests(undefined);
   try {
-    rmSync(tmpRoot, { recursive: true, force: true });
+    rmWithRetry(tmpRoot, { recursive: true, force: true });
   } catch {
     // Windows occasionally holds file handles; safe to ignore in tests.
   }
@@ -119,7 +120,7 @@ describe("admin routes", () => {
 
   test("admin logs paginate runtime request history with totals", async () => {
     resetRequestLogForTests();
-    rmSync(join(tmpRoot, ".storage"), { recursive: true, force: true });
+    rmWithRetry(join(tmpRoot, ".storage"), { recursive: true, force: true });
     for (let i = 0; i < 3; i++) {
       const requestId = `paginated-${i}`;
       recordRequestStart({
@@ -164,12 +165,12 @@ describe("admin routes", () => {
       "paginated-0",
     ]);
     resetRequestLogForTests();
-    rmSync(join(tmpRoot, ".storage"), { recursive: true, force: true });
+    rmWithRetry(join(tmpRoot, ".storage"), { recursive: true, force: true });
   });
 
   test("admin analytics summarizes persisted requests and log filters", async () => {
     resetRequestLogForTests();
-    rmSync(join(tmpRoot, ".storage"), { recursive: true, force: true });
+    rmWithRetry(join(tmpRoot, ".storage"), { recursive: true, force: true });
     recordRequestStart({
       requestId: "analytics-route-1",
       endpoint: "/v1/chat/completions",
@@ -223,7 +224,7 @@ describe("admin routes", () => {
     expect(timeseries.points[0]?.promptTokens).toBe(7);
 
     resetRequestLogForTests();
-    rmSync(join(tmpRoot, ".storage"), { recursive: true, force: true });
+    rmWithRetry(join(tmpRoot, ".storage"), { recursive: true, force: true });
   });
 
   test("model config create -> get -> patch -> delete lifecycle", async () => {

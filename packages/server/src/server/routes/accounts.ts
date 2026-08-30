@@ -1,4 +1,5 @@
-import type { Context } from "hono";
+import { readJsonObject } from "../read-json-object.ts";
+import { isSameOriginMutation } from "../same-origin.ts";
 import { Hono } from "hono";
 
 import { refreshAttachedAccount } from "../../accounts/account-auth.ts";
@@ -32,10 +33,20 @@ import { principal, requireAuth } from "../auth.ts";
 const codexDeviceFlows = new Map<string, CodexDeviceFlow>();
 const superGrokDeviceFlows = new Map<string, SuperGrokDeviceFlow>();
 
+function pruneExpiredDeviceFlows(): void {
+  const now = Date.now();
+  for (const [id, flow] of codexDeviceFlows) {
+    if (Date.parse(flow.expiresAt) <= now) codexDeviceFlows.delete(id);
+  }
+  for (const [id, flow] of superGrokDeviceFlows) {
+    if (Date.parse(flow.expiresAt) <= now) superGrokDeviceFlows.delete(id);
+  }
+}
+
 export function createAccountRoutes(): Hono {
   const app = new Hono();
   const gate: Parameters<Hono["use"]>[1] = async (c, next) => {
-    if (!sameOriginMutation(c)) return c.json({ error: "Cross-origin mutation denied" }, 403);
+    if (!isSameOriginMutation(c)) return c.json({ error: "Cross-origin mutation denied" }, 403);
     return requireAuth({ allowSession: true })(c, next);
   };
   app.use("/v1/accounts", gate);
@@ -63,7 +74,7 @@ export function createAccountRoutes(): Hono {
   app.post("/v1/accounts/token", async (c) => {
     const actor = principal(c);
     if (actor === undefined) return c.json({ error: "Unauthorized" }, 401);
-    const body = await readObject(c);
+    const body = await readJsonObject(c);
     const provider = optionalString(body["provider"]);
     const accessToken = optionalString(body["access_token"]);
     if (provider === undefined || accessToken === undefined) {
@@ -93,7 +104,7 @@ export function createAccountRoutes(): Hono {
     const account = getAccount(c.req.param("accountId"));
     if (account === undefined) return c.json({ error: "Account not found" }, 404);
     if (!principalCanManageAccount(actor, account)) return c.json({ error: "Forbidden" }, 403);
-    const body = await readObject(c);
+    const body = await readJsonObject(c);
     if (body["shared"] === true && (actor === undefined || !isAdmin(actor))) {
       return c.json({ error: "Only admins can share accounts" }, 403);
     }
@@ -138,7 +149,7 @@ export function createAccountRoutes(): Hono {
   // deployment, paste the localhost callback URL into /complete.
   app.post("/v1/accounts/codex/oauth/start", async (c) => {
     const actor = principal(c)!;
-    const body = await readObject(c);
+    const body = await readJsonObject(c);
     const shared = body["shared"] === true;
     if (shared && !isAdmin(actor)) return c.json({ error: "Only admins can share accounts" }, 403);
     const flow = beginCodexBrowserFlow({
@@ -157,7 +168,7 @@ export function createAccountRoutes(): Hono {
 
   app.post("/v1/accounts/codex/oauth/complete", async (c) => {
     const actor = principal(c)!;
-    const body = await readObject(c);
+    const body = await readJsonObject(c);
     try {
       const account = await completeCodexBrowserFlow({
         code: optionalString(body["code"]),
@@ -177,10 +188,11 @@ export function createAccountRoutes(): Hono {
 
   app.post("/v1/accounts/codex/device/start", async (c) => {
     const actor = principal(c)!;
-    const body = await readObject(c);
+    const body = await readJsonObject(c);
     const shared = body["shared"] === true;
     if (shared && !isAdmin(actor)) return c.json({ error: "Only admins can share accounts" }, 403);
     try {
+      pruneExpiredDeviceFlows();
       const flow = await beginCodexDeviceFlow({ ownerUserId: actor.userId, shared });
       codexDeviceFlows.set(flow.id, flow);
       return c.json({
@@ -199,6 +211,7 @@ export function createAccountRoutes(): Hono {
 
   app.post("/v1/accounts/codex/device/:flowId/poll", async (c) => {
     const actor = principal(c)!;
+    pruneExpiredDeviceFlows();
     const flow = codexDeviceFlows.get(c.req.param("flowId"));
     if (flow === undefined) return c.json({ error: "Device flow not found" }, 404);
     if (flow.ownerUserId !== actor.userId && !actor.ownerBypass) {
@@ -228,10 +241,11 @@ export function createAccountRoutes(): Hono {
 
   app.post("/v1/accounts/supergrok/device/start", async (c) => {
     const actor = principal(c)!;
-    const body = await readObject(c);
+    const body = await readJsonObject(c);
     const shared = body["shared"] === true;
     if (shared && !isAdmin(actor)) return c.json({ error: "Only admins can share accounts" }, 403);
     try {
+      pruneExpiredDeviceFlows();
       const flow = await beginSuperGrokDeviceFlow({ ownerUserId: actor.userId, shared });
       superGrokDeviceFlows.set(flow.id, flow);
       return c.json({
@@ -250,6 +264,7 @@ export function createAccountRoutes(): Hono {
 
   app.post("/v1/accounts/supergrok/device/:flowId/poll", async (c) => {
     const actor = principal(c)!;
+    pruneExpiredDeviceFlows();
     const flow = superGrokDeviceFlows.get(c.req.param("flowId"));
     if (flow === undefined) return c.json({ error: "Device flow not found" }, 404);
     if (flow.ownerUserId !== actor.userId && !actor.ownerBypass) {
@@ -304,32 +319,8 @@ function audit(actor: Principal, type: string, account: ProviderAccount): void {
   });
 }
 
-async function readObject(c: Context): Promise<Record<string, unknown>> {
-  try {
-    const value = (await c.req.json()) as unknown;
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
-}
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function sameOriginMutation(c: Context): boolean {
-  if (c.req.method === "GET" || c.req.method === "HEAD" || c.req.method === "OPTIONS") {
-    return true;
-  }
-  const origin = c.req.header("origin");
-  if (origin === undefined) return true;
-  try {
-    if (new URL(origin).origin === new URL(c.req.url).origin) return true;
-  } catch {
-    return false;
-  }
-  const allowed = process.env["CORS_ORIGINS"]?.split(",").map((item) => item.trim()) ?? [];
-  return allowed.includes("*") || allowed.includes(origin);
-}

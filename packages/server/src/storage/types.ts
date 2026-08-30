@@ -171,7 +171,12 @@ export interface AnalyticsSummary {
     apiKeyEnvVar: string;
     model: string;
     requests: number;
+    promptTokens: number;
+    completionTokens: number;
     totalTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
+    matchedTokens: number;
     userCostUsd: number;
     typicalCostUsd: number;
     savedCostUsd: number;

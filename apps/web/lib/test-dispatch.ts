@@ -1,6 +1,5 @@
 "use client";
 
-import { apiFetch } from "./api";
 import type { RequestEvent } from "@model-proxy/contracts/api/events.ts";
 
 export type Protocol = "openai" | "anthropic";
@@ -187,6 +186,3 @@ export async function* dispatchStreaming(
   }
   return { status: res.status };
 }
-
-// Re-export for convenience.
-export { apiFetch };

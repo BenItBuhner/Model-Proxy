@@ -1,4 +1,5 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { rmWithRetry } from "./support.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -77,7 +78,7 @@ afterAll(() => {
   delete process.env.UPSTREAM_MODELS_CACHE_TTL_SECONDS;
   delete process.env.UPSTREAM_MODELS_FETCH_TIMEOUT_MS;
   setPrimaryConfigDirForTests(undefined);
-  rmSync(tmpRoot, { recursive: true, force: true });
+  rmWithRetry(tmpRoot, { recursive: true, force: true });
 });
 
 function writeModel(

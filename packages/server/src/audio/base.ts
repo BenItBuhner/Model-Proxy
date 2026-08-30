@@ -1,3 +1,4 @@
+export { mergeAbortSignals as mergeSignals } from "../shared/utils.ts";
 import type {
   AudioCapabilities,
   ResolvedAudioRoute,
@@ -100,21 +101,4 @@ export function audioContentType(format: AudioResponseFormat): string {
   return "application/json; charset=utf-8";
 }
 
-export function mergeSignals(
-  ...signals: Array<AbortSignal | undefined>
-): AbortSignal | undefined {
-  const real = signals.filter((s): s is AbortSignal => s !== undefined);
-  if (real.length === 0) return undefined;
-  if (real.length === 1) return real[0];
-  const controller = new AbortController();
-  const onAbort = () => controller.abort();
-  for (const signal of real) {
-    if (signal.aborted) {
-      controller.abort();
-      break;
-    }
-    signal.addEventListener("abort", onAbort, { once: true });
-  }
-  return controller.signal;
-}
 

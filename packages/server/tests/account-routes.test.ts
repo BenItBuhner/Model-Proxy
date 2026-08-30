@@ -1,4 +1,5 @@
-import { rmSync } from "node:fs";
+import { rmWithRetry } from "./support.ts";
+
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,14 +15,14 @@ beforeEach(() => {
   process.env.CLIENT_API_KEY = "account-admin-key";
   setStorageRootForTests(root);
   closeOperationalDbForTests();
-  rmSync(root, { recursive: true, force: true });
+  rmWithRetry(root, { recursive: true, force: true });
 });
 
 afterEach(() => {
   delete process.env.CLIENT_API_KEY;
   closeOperationalDbForTests();
   setStorageRootForTests(undefined);
-  rmSync(root, { recursive: true, force: true });
+  rmWithRetry(root, { recursive: true, force: true });
 });
 
 describe("provider account routes", () => {

@@ -115,13 +115,12 @@ export function isMeaningfulStreamChunk(
 export async function* requireMeaningfulStream(
   stream: AsyncGenerator<string, void, unknown>,
   route: ResolvedRoute,
-  requestData: Record<string, unknown>,
+  _requestData: Record<string, unknown>,
   targetProtocol: "openai" | "anthropic" | "responses",
   options: { allowEmptyPassthrough?: boolean } = {},
 ): AsyncGenerator<string, void, unknown> {
   const buffered: string[] = [];
   let emittedMeaningfulChunk = false;
-  void requestData;
 
   for await (const chunk of stream) {
     if (emittedMeaningfulChunk) {

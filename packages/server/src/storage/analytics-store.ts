@@ -1,17 +1,11 @@
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
-
 import { calculateCosts, resolvePricing } from "../observability/pricing.ts";
 import type { UsageSnapshot } from "../observability/usage.ts";
-import { getStorageDir } from "./storage-paths.ts";
 import { listRequestMetricRows } from "./metrics-store.ts";
 import type { AnalyticsSummary, RequestLogFilters, RequestMetricRow } from "./types.ts";
 
 export function getAnalyticsSummary(filters: RequestLogFilters = {}, activeRequests = 0): AnalyticsSummary {
   const rows = listRequestMetricRows({ limit: undefined, offset: 0, filters }).records;
-  const summary = summarizeRows(rows, activeRequests);
-  writeFileSync(join(getStorageDir("analytics"), "summary.json"), JSON.stringify(summary, null, 2) + "\n", "utf8");
-  return summary;
+  return summarizeRows(rows, activeRequests);
 }
 
 export interface AnalyticsTimeseriesPoint {
@@ -102,14 +96,24 @@ function summarizeRows(rows: RequestMetricRow[], activeRequests: number): Analyt
       apiKeyEnvVar: row.apiKeyEnvVar ?? "-",
       model: row.resolvedModel ?? "-",
       requests: 0,
+      promptTokens: 0,
+      completionTokens: 0,
       totalTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      matchedTokens: 0,
       userCostUsd: 0,
       typicalCostUsd: 0,
       savedCostUsd: 0,
       cacheHits: 0,
     };
     group.requests += 1;
+    group.promptTokens += row.promptTokens ?? 0;
+    group.completionTokens += row.completionTokens ?? 0;
     group.totalTokens += row.totalTokens ?? 0;
+    group.cacheReadTokens += row.cacheReadTokens ?? 0;
+    group.cacheCreationTokens += row.cacheCreationTokens ?? 0;
+    group.matchedTokens += row.matchedTokens;
     group.userCostUsd += costs.userCostUsd;
     group.typicalCostUsd += costs.typicalCostUsd;
     group.savedCostUsd += costs.savedCostUsd;

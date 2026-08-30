@@ -1,13 +1,9 @@
+import { substituteEnvVars } from "../shared/utils.ts";
 import {
   providerConfigLoader,
 } from "../config/provider-loader.ts";
 import type { ProviderConfig } from "@model-proxy/contracts/schemas/provider.ts";
 
-function substituteEnvVars(text: string): string {
-  return text.replace(/\$\{([^}]+)\}/g, (_match, varName: string) => {
-    return process.env[varName] ?? `\${${varName}}`;
-  });
-}
 
 export function buildEndpointUrl(
   config: ProviderConfig,

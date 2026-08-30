@@ -25,5 +25,3 @@ export function MetricWidget({
     </div>
   );
 }
-
-export { formatCount, formatDurationMs, formatUsd } from "@/lib/format";

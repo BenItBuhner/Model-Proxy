@@ -20,19 +20,32 @@ export const BUILTIN_DEFAULT_PRICING: PricingConfig = {
   },
 };
 
+let cachedSettings: AnalyticsPricingSettings | undefined;
+let cachedSettingsPath: string | undefined;
+
 export function readAnalyticsPricingSettings(): AnalyticsPricingSettings {
   const path = pricingPath();
-  if (!existsSync(path)) return { default_pricing: BUILTIN_DEFAULT_PRICING };
+  if (cachedSettings !== undefined && cachedSettingsPath === path) return cachedSettings;
+  cachedSettingsPath = path;
+  if (!existsSync(path)) {
+    cachedSettings = { default_pricing: BUILTIN_DEFAULT_PRICING };
+    return cachedSettings;
+  }
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
     const defaultPricing = parsed["default_pricing"];
     if (defaultPricing !== undefined) {
       const result = PricingConfigSchema.safeParse(defaultPricing);
-      if (result.success) return { default_pricing: result.data };
+      if (result.success) {
+        cachedSettings = { default_pricing: result.data };
+        return cachedSettings;
+      }
     }
-    return { default_pricing: BUILTIN_DEFAULT_PRICING };
+    cachedSettings = { default_pricing: BUILTIN_DEFAULT_PRICING };
+    return cachedSettings;
   } catch {
-    return { default_pricing: BUILTIN_DEFAULT_PRICING };
+    cachedSettings = { default_pricing: BUILTIN_DEFAULT_PRICING };
+    return cachedSettings;
   }
 }
 
@@ -41,7 +54,10 @@ export function writeAnalyticsPricingSettings(settings: AnalyticsPricingSettings
   if (settings.default_pricing !== undefined) {
     normalized.default_pricing = PricingConfigSchema.parse(settings.default_pricing);
   }
-  writeFileSync(pricingPath(), JSON.stringify(normalized, null, 2) + "\n", "utf8");
+  const path = pricingPath();
+  writeFileSync(path, JSON.stringify(normalized, null, 2) + "\n", "utf8");
+  cachedSettings = normalized;
+  cachedSettingsPath = path;
   return normalized;
 }
 

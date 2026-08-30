@@ -1,3 +1,4 @@
+import { sleep } from "../shared/utils.ts";
 import type {
   HedgedRoutingConfig,
   ModelRoutingConfig,
@@ -6,7 +7,6 @@ import type {
 } from "@model-proxy/contracts/schemas/index.ts";
 import {
   Attempt,
-  AttemptResult,
   RoutingError,
 } from "@model-proxy/contracts/schemas/routing.ts";
 import { modelConfigLoader } from "../config/model-loader.ts";
@@ -16,9 +16,6 @@ import { currentRequestId, emit, nowIso } from "../observability/request-context
 import { canUseLogicalModel, canUseRouteConfig } from "../policy/access-control.ts";
 import {
   KeyCycleTracker,
-  getAvailableKeys,
-  getKeyCooldownSeconds,
-  getMaxKeyRetryCycles,
 } from "../providers/api-key-manager.ts";
 import {
   ProxyCycleTracker,
@@ -30,6 +27,7 @@ import { getProviderWireProtocol } from "../providers/provider-helpers.ts";
 import { recordRequestProgress } from "../server/request-log.ts";
 import type { Principal } from "../storage/identity-store.ts";
 import { getProviderConfigContextWindow } from "./context-window.ts";
+import { describeRequestImages, resolveVisionModel } from "./image-describer.ts";
 import { execute, executeStream } from "./executor.ts";
 import {
   analyzeRequestForRouting,
@@ -83,11 +81,6 @@ function recordRouteProgress(route: ResolvedRoute, attemptNumber: number): void 
     retryCount: Math.max(0, attemptNumber - 1),
   });
 }
-
-// Unused-declaration helpers to keep imports stable across callers.
-void getAvailableKeys;
-void getKeyCooldownSeconds;
-void getMaxKeyRetryCycles;
 
 const log = createLogger("routing.fallback");
 
@@ -147,7 +140,12 @@ interface HedgedStreamState {
   controller: AbortController;
   buffer: string[];
   emittedCount: number;
+  bufferedBytes: number;
+  dropped: boolean;
 }
+
+/** Cap on pre-meaningful chunks buffered per hedged candidate. */
+const HEDGE_BUFFER_MAX_BYTES = 1024 * 1024;
 
 type HedgedStreamEvent =
   | { type: "ready"; state: HedgedStreamState; latencyMs: number }
@@ -161,10 +159,6 @@ interface FallbackRouterOptions {
   principal?: Principal;
 }
 
-function sleep(ms: number): Promise<void> {
-  if (ms <= 0) return Promise.resolve();
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 function emitHedgeCancelled(
   candidate: HedgedResolvedCandidate,
@@ -225,6 +219,8 @@ export interface CallWithFallbackArgs {
   validateResponse?: boolean;
   /** Extra headers forwarded to upstream providers (e.g. x-opencode-*). */
   extraHeaders?: Record<string, string>;
+  /** Internal: skip the image-description fallback (vision description calls). */
+  skipImageDescription?: boolean;
 }
 
 export class FallbackRouter {
@@ -487,6 +483,9 @@ export class FallbackRouter {
     }
     if (modelConfig.buffer_partial_tool_calls) {
       route.bufferPartialToolCalls = true;
+    }
+    if (modelConfig.smooth_streaming) {
+      route.smoothStreaming = true;
     }
     return route;
   }
@@ -1128,6 +1127,23 @@ export class FallbackRouter {
           continue;
         }
         streamState.buffer.push(chunk);
+        streamState.bufferedBytes += chunk.length;
+        if (streamState.bufferedBytes > HEDGE_BUFFER_MAX_BYTES) {
+          // Candidate buffered too much without meaningful content; it is not
+          // viable as a winner and would otherwise grow memory unboundedly.
+          streamState.dropped = true;
+          streamState.controller.abort();
+          queue.push({
+            type: "failed",
+            state: streamState,
+            error: new ProviderAPIError(
+              `${streamState.candidate.route.provider} stream buffered ${HEDGE_BUFFER_MAX_BYTES} bytes without meaningful content`,
+              502,
+              { provider: streamState.candidate.route.provider },
+            ),
+          });
+          continue;
+        }
         if (
           isMeaningfulStreamChunk(chunk, targetProtocol, minContentChars, {
             ignoreReasoning: ignoreReasoningForWinner,
@@ -1142,7 +1158,9 @@ export class FallbackRouter {
       }
       queue.push({ type: "done", state: streamState });
     } catch (error) {
-      if (shared.settled && isAbortLikeError(error)) {
+      if (streamState.dropped) {
+        queue.push({ type: "cancelled", state: streamState });
+      } else if (shared.settled && isAbortLikeError(error)) {
         queue.push({ type: "cancelled", state: streamState });
       } else {
         queue.push({ type: "failed", state: streamState, error });
@@ -1216,6 +1234,8 @@ export class FallbackRouter {
       controller: new AbortController(),
       buffer: [],
       emittedCount: 0,
+      bufferedBytes: 0,
+      dropped: false,
     }));
     let finishedStates = 0;
     let failedCount = 0;
@@ -1524,7 +1544,69 @@ export class FallbackRouter {
     return "throw";
   }
 
+  /**
+   * When a request carries images but no route of the chosen logical model
+   * accepts them, describe the images via a vision-capable model and swap the
+   * image parts for their descriptions so the original model can still answer.
+   */
+  private async withImageDescriptions(args: CallWithFallbackArgs): Promise<CallWithFallbackArgs> {
+    if (args.skipImageDescription === true) return args;
+    const principal = args.principal ?? this.principal;
+    const analysis = analyzeRequestForRouting(args.requestData);
+    if (!analysis.hasMultimodalContent) return args;
+    const routeTuples = this.collectRouteConfigs(args.logicalModel, principal);
+    if (routeTuples.length === 0) return args;
+    const { eligible, skipped } = this.eligibleRouteTuples(routeTuples, analysis, { emitSkips: false });
+    if (eligible.length > 0) return args;
+    if (!skipped.some((skip) => skip.reason === "multimodal_unsupported")) return args;
+    const visionModel = resolveVisionModel(principal, new Set([args.logicalModel]));
+    if (visionModel === undefined) {
+      log.info("no vision-capable model available to describe images", { logicalModel: args.logicalModel });
+      return args;
+    }
+    try {
+      const result = await describeRequestImages({
+        requestData: args.requestData,
+        visionModel,
+        callModel: async (requestData) =>
+          await this.callWithFallback({
+            logicalModel: visionModel,
+            requestData,
+            targetProtocol: "openai",
+            signal: args.signal,
+            principal,
+            validateResponse: false,
+            skipImageDescription: true,
+          }),
+      });
+      if (result === undefined) return args;
+      log.info("routed image request through vision descriptions", {
+        logicalModel: args.logicalModel,
+        visionModel,
+        imageCount: result.imageCount,
+        cacheHits: result.cacheHits,
+      });
+      emit({
+        type: "route.images_described",
+        at: nowIso(),
+        visionModel,
+        imageCount: result.imageCount,
+        cacheHits: result.cacheHits,
+        sourceLogicalModel: args.logicalModel,
+      });
+      return { ...args, requestData: result.requestData, skipImageDescription: true };
+    } catch (err) {
+      log.warn("image description fallback failed", {
+        logicalModel: args.logicalModel,
+        visionModel,
+        error: String(err),
+      });
+      return args;
+    }
+  }
+
   async callWithFallback(args: CallWithFallbackArgs): Promise<Record<string, unknown>> {
+    args = await this.withImageDescriptions(args);
     const { logicalModel, requestData, targetProtocol, maxKeyCycles, signal, validateResponse, extraHeaders, principal } =
       args;
     const hedgedConfig = this.hedgedConfigFor(logicalModel);
@@ -1766,6 +1848,7 @@ export class FallbackRouter {
   async *streamWithFallback(
     args: CallWithFallbackArgs,
   ): AsyncGenerator<string, void, unknown> {
+    args = await this.withImageDescriptions(args);
     const { logicalModel, requestData, targetProtocol, maxKeyCycles, signal, extraHeaders, principal } =
       args;
     const hedgedConfig = this.hedgedConfigFor(logicalModel);
@@ -2033,6 +2116,3 @@ export class FallbackRouter {
     return parts.join("\n");
   }
 }
-
-// Silence unused-name diagnostic for a type that's exported for downstream use.
-export type { AttemptResult };

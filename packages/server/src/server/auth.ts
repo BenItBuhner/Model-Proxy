@@ -86,13 +86,6 @@ export function authenticateRequest(c: Context, options: { allowSession?: boolea
   return undefined;
 }
 
-export async function authenticateRequestAsync(
-  c: Context,
-  options: { allowSession?: boolean } = {},
-): Promise<Principal | undefined> {
-  return authenticateRequest(c, options);
-}
-
 function authenticateSession(c: Context): Principal | undefined {
   const cookie = getCookie(c, SESSION_COOKIE);
   if (cookie === undefined) return undefined;
@@ -112,7 +105,7 @@ export function requireAuth(
   options: { allowSession?: boolean } = {},
 ): MiddlewareHandler {
   return async (c, next) => {
-    const authenticated = await authenticateRequestAsync(c, options);
+    const authenticated = authenticateRequest(c, options);
     if (authenticated === undefined) {
       return c.json(
         {

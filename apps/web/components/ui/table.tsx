@@ -53,10 +53,12 @@ export function Tr({
   children,
   onClick,
   className,
+  title,
 }: {
   children: ReactNode;
   onClick?: () => void;
   className?: string;
+  title?: string;
 }): React.ReactElement {
   return (
     <tr
@@ -66,6 +68,7 @@ export function Tr({
         className,
       )}
       onClick={onClick}
+      title={title}
     >
       {children}
     </tr>
@@ -77,11 +80,13 @@ export function Td({
   align = "left",
   mono = true,
   className,
+  title,
 }: {
   children: ReactNode;
   align?: "left" | "right" | "center";
   mono?: boolean;
   className?: string;
+  title?: string;
 }): React.ReactElement {
   return (
     <td
@@ -92,6 +97,7 @@ export function Td({
         mono ? "font-mono" : "font-sans",
         className,
       )}
+      title={title}
     >
       {children}
     </td>

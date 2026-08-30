@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
-import { getStorageDir } from "../storage/storage-paths.ts";
+import { getStorageDir, getStorageRoot } from "../storage/storage-paths.ts";
 
 interface CacheEntry {
   scope: string;
@@ -32,6 +32,69 @@ export interface CacheMatchResult {
 const DEFAULT_CACHE_WINDOW_MS = 5 * 60 * 1000;
 const MAX_INLINE_FINGERPRINT_STRING_CHARS =
   parsePositiveInt(process.env.CACHE_FINGERPRINT_INLINE_STRING_CHARS) ?? 4096;
+const FLUSH_DEBOUNCE_MS = 2000;
+const FLUSH_MAX_PENDING = 100;
+
+let cache: CacheEntry[] | undefined;
+let cacheRoot: string | undefined;
+let dirty = false;
+let dirtySince = 0;
+let pendingCount = 0;
+
+function loadEntries(): CacheEntry[] {
+  const root = getStorageRoot();
+  if (cache === undefined || cacheRoot !== root) {
+    cacheRoot = root;
+    const path = cachePath();
+    if (existsSync(path)) {
+      try {
+        const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+        cache = Array.isArray(parsed) ? parsed as CacheEntry[] : [];
+      } catch {
+        cache = [];
+      }
+    } else {
+      cache = [];
+    }
+  }
+  return cache;
+}
+
+/** Flush pending changes if the batch is old or large enough. Called on each
+ * record instead of from a timer so writes never race storage teardown. */
+function maybeFlush(): void {
+  if (!dirty) return;
+  if (Date.now() - dirtySince < FLUSH_DEBOUNCE_MS && pendingCount < FLUSH_MAX_PENDING) return;
+  flushNow();
+}
+
+function flushNow(): void {
+  if (!dirty || cache === undefined) return;
+  if (cacheRoot !== getStorageRoot()) {
+    dirty = false;
+    pendingCount = 0;
+    return;
+  }
+  const path = cachePath();
+  if (!existsSync(dirname(path))) {
+    dirty = false;
+    pendingCount = 0;
+    cache = undefined;
+    return;
+  }
+  try {
+    writeFileSync(path, JSON.stringify(cache.slice(-5000), null, 2) + "\n", "utf8");
+    dirty = false;
+    pendingCount = 0;
+  } catch {
+    // Retain in memory; the next successful flush persists everything.
+  }
+}
+
+/** Force-persist pending cache-match state. Used by tests and graceful drains. */
+export function flushCacheMatchesForTests(): void {
+  flushNow();
+}
 
 export function recordCacheMatch(input: CacheMatchInput): CacheMatchResult {
   const cacheScope = buildScope(input);
@@ -40,7 +103,7 @@ export function recordCacheMatch(input: CacheMatchInput): CacheMatchResult {
     return emptyResult(cacheScope, promptFingerprint);
   }
 
-  const entries = readEntries();
+  const entries = loadEntries();
   const nowMs = Date.parse(input.completedAt);
   const previous = entries.find(
     (entry) => entry.scope === cacheScope && entry.fingerprint === promptFingerprint,
@@ -63,7 +126,12 @@ export function recordCacheMatch(input: CacheMatchInput): CacheMatchResult {
     completedAt: input.completedAt,
     promptTokens: input.promptTokens,
   });
-  writeEntries(entries);
+  if (!dirty) {
+    dirty = true;
+    dirtySince = Date.now();
+  }
+  pendingCount += 1;
+  maybeFlush();
 
   return {
     cacheScope,
@@ -135,21 +203,6 @@ function parsePositiveInt(value: string | undefined): number | undefined {
 
 function cachePath(): string {
   return join(getStorageDir("analytics"), "cache-matches.json");
-}
-
-function readEntries(): CacheEntry[] {
-  const path = cachePath();
-  if (!existsSync(path)) return [];
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    return Array.isArray(parsed) ? parsed as CacheEntry[] : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeEntries(entries: CacheEntry[]): void {
-  writeFileSync(cachePath(), JSON.stringify(entries.slice(-5000), null, 2) + "\n", "utf8");
 }
 
 function upsertEntry(entries: CacheEntry[], entry: CacheEntry): void {

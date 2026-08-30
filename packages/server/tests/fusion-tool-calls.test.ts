@@ -1,3 +1,4 @@
+import { rmWithRetry } from "./support.ts";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect } from "bun:test";
 import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import { FusionRouter } from "../src/routing/fusion/fusion-router.ts";
@@ -168,7 +169,7 @@ describe("Fusion Tool Calls", () => {
 
   afterAll(() => {
     globalThis.fetch = originalFetch;
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    rmWithRetry(tmpRoot, { recursive: true, force: true });
     delete process.env.FAKE_FUSION_API_KEY;
   });
 

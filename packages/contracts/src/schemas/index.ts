@@ -6,6 +6,7 @@ export * from "./fusion.ts";
 export * from "./provider.ts";
 export * from "./openai-wire.ts";
 export * from "./anthropic-wire.ts";
+export * from "./reasoning.ts";
 export * from "./config-bundle.ts";
 export * from "./audio-wire.ts";
 export * from "./audio-routing.ts";

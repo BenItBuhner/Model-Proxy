@@ -1,3 +1,4 @@
+import { parsePositiveInt } from "../../shared/utils.ts";
 import { Hono, type Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 
@@ -34,6 +35,7 @@ import type { FusionRequestContext, FusionResult } from "../../routing/fusion/ty
 import {
   buildUpstreamExtraHeaders,
   completionPersistenceForRequest,
+  fusionUsageFromTrace,
   shouldPersistCompletion,
 } from "./route-helpers.ts";
 import { principal, requireAuth } from "../auth.ts";
@@ -58,11 +60,6 @@ function routingErrorStatus(err: RoutingError): ContentfulStatusCode {
   return 503;
 }
 
-function parsePositiveInt(value: string | undefined): number | undefined {
-  if (value === undefined || value.trim() === "") return undefined;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
 
 export function createAnthropicRoutes(): Hono {
   const app = new Hono();
@@ -190,12 +187,22 @@ export function createAnthropicRoutes(): Hono {
       const stream = new ReadableStream<Uint8Array>({
         async start(controller) {
           const encoder = new TextEncoder();
-          const enqueueHeartbeat = () => {
+          // If the client disconnects, controller.enqueue throws. Every write
+          // goes through this guard so a mid-stream disconnect can never skip
+          // the request-finish accounting below.
+          let clientGone = false;
+          const safeEnqueue = (text: string): boolean => {
+            if (clientGone) return false;
             try {
-              controller.enqueue(encoder.encode(`: keep-alive ${Date.now()}\n\n`));
+              controller.enqueue(encoder.encode(text));
+              return true;
             } catch {
-              // The stream may already be closed or cancelled.
+              clientGone = true;
+              return false;
             }
+          };
+          const enqueueHeartbeat = () => {
+            safeEnqueue(`: keep-alive ${Date.now()}\n\n`);
           };
           // Flush immediately so Cloudflare sees response bytes while slow
           // upstreams are still processing the prompt or cycling fallbacks.
@@ -235,15 +242,18 @@ export function createAnthropicRoutes(): Hono {
                     });
                 for await (const chunk of generator) {
                   streamUsage.ingest(chunk);
-                  const encoded = encoder.encode(chunk);
-                  controller.enqueue(encoded);
+                  if (!safeEnqueue(chunk)) break;
                   recordRequestProgress({
                     requestId,
-                    streamBytes: encoded.byteLength,
+                    streamBytes: encoder.encode(chunk).byteLength,
                     streamChunkCount: 1,
                   });
                 }
-                controller.close();
+                try {
+                  controller.close();
+                } catch {
+                  // stream already errored/cancelled
+                }
                 const totalMs = Math.round(performance.now() - startedAt);
                 emit({ type: "request.finished", at: nowIso(), status: 200, totalMs });
                 const usageResult = streamUsage.finish();
@@ -261,8 +271,12 @@ export function createAnthropicRoutes(): Hono {
                 const message =
                   err instanceof Error ? err.message : `Streaming error: ${String(err)}`;
                 const errorPayload = formatAnthropicError(status, message);
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorPayload)}\n\n`));
-                controller.close();
+                safeEnqueue(`data: ${JSON.stringify(errorPayload)}\n\n`);
+                try {
+                  controller.close();
+                } catch {
+                  // stream already errored/cancelled
+                }
                 const totalMs = Math.round(performance.now() - startedAt);
                 const errorType = err instanceof Error ? err.name : "Unknown";
                 emit({
@@ -330,26 +344,13 @@ export function createAnthropicRoutes(): Hono {
           ...response,
           model: request.model,
         };
-        const usage = responseObj["usage"];
-        const usageObj =
-          typeof usage === "object" && usage !== null
-            ? (usage as Record<string, unknown>)
-            : {};
         const totalMs = Math.round(performance.now() - startedAt);
-        const finish: Parameters<typeof recordRequestFinish>[0] = {
+        recordRequestFinish({
           requestId,
           responseStatus: 200,
           responseTimeMs: totalMs,
           responseBody: responseObj,
-        };
-        const input = usageObj["input_tokens"];
-        const output = usageObj["output_tokens"];
-        if (typeof input === "number") finish.promptTokens = input;
-        if (typeof output === "number") finish.completionTokens = output;
-        if (typeof input === "number" && typeof output === "number") {
-          finish.totalTokens = input + output;
-        }
-        recordRequestFinish(finish);
+        });
         emit({ type: "request.finished", at: nowIso(), status: 200, totalMs });
         return c.json(responseObj);
       } catch (err) {
@@ -470,8 +471,8 @@ async function handleAnthropicFusionRequest({
   if (!fusionConfig?.enabled) {
     return c.json(formatAnthropicError(400, "Fusion not enabled for this model"), 400);
   }
-  const { FusionRouter } = await import("../../routing/fusion/fusion-router.ts");
-  const fusionRouter = new FusionRouter();
+  const { getSharedFusionRouter } = await import("../../routing/fusion/fusion-router.ts");
+  const fusionRouter = getSharedFusionRouter();
   const messages = (requestDict["messages"] as unknown[]) ?? [];
   const fusionCtx: FusionRequestContext = {
     logicalModel,
@@ -608,12 +609,22 @@ function handleAnthropicFusionStream(
           latencyMs: totalMs,
         });
       }
+      const fusionUsage = status === 200 ? fusionUsageFromTrace(fusionCtx.streamFusionTrace) : undefined;
       recordRequestFinish({
         requestId,
         responseStatus: status,
         responseTimeMs: totalMs,
         resolvedModel: "fusion-stream",
         resolvedProvider: "fusion",
+        ...(fusionUsage !== undefined
+          ? {
+              promptTokens: fusionUsage.promptTokens,
+              completionTokens: fusionUsage.completionTokens,
+              totalTokens: fusionUsage.totalTokens,
+              promptTokensEstimated: true,
+              completionTokensEstimated: true,
+            }
+          : {}),
       });
       const finishEvent: Record<string, unknown> = {
         type: "request.finished",

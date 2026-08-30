@@ -29,6 +29,8 @@ export interface ProviderCallContext {
   extraHeaders?: Record<string, string>;
   /** Buffer streamed tool-call chunks until upstream emits a completed tool call. */
   bufferPartialToolCalls?: boolean;
+  /** Re-chunk content deltas into a smooth, paced stream (route opt-in or global env). */
+  smoothStreaming?: boolean;
 }
 
 export interface OpenAICallArgs {
@@ -47,12 +49,13 @@ export interface OpenAICallArgs {
   user?: string | undefined;
   seed?: number | undefined;
   prompt_cache_key?: string | undefined;
-  stream_options?: Record<string, unknown> | undefined;
   tools?: unknown[] | undefined;
   tool_choice?: unknown;
   parallel_tool_calls?: boolean | undefined;
   response_format?: unknown;
   reasoning?: unknown;
+  reasoning_effort?: string | undefined;
+  stream_options?: Record<string, unknown> | undefined;
   [key: string]: unknown;
 }
 
@@ -68,6 +71,7 @@ export interface AnthropicCallArgs {
   stop_sequences?: string[] | undefined;
   tools?: unknown[] | undefined;
   tool_choice?: unknown;
+  thinking?: unknown;
   [key: string]: unknown;
 }
 

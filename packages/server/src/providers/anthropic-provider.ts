@@ -123,6 +123,7 @@ export class AnthropicProvider extends AbstractProvider {
     if (args.stop_sequences !== undefined) payload["stop_sequences"] = args.stop_sequences;
     if (args.tools !== undefined) payload["tools"] = args.tools;
     if (args.tool_choice !== undefined) payload["tool_choice"] = args.tool_choice;
+    if (args.thinking !== undefined) payload["thinking"] = args.thinking;
     return payload;
   }
 }

@@ -1,3 +1,4 @@
+import { usageSnapshotFromCounts } from "../../shared/usage-snapshot.ts";
 import { createLogger } from "../../observability/logger.ts";
 import { ComplexityScorer } from "./complexity-scorer.ts";
 import { TaskDividerAgent } from "./task-divider.ts";
@@ -6,6 +7,7 @@ import { ResponseFuser } from "./response-fuser.ts";
 import { classifyConversationDelta, ReasoningCache } from "./reasoning-cache.ts";
 import { ReasoningSummarizer, SummaryPump, paceReasoningText } from "./reasoning-summarizer.ts";
 import { resolveFusionEffort } from "./effort-resolver.ts";
+import { resolveDeclaredContextWindow } from "../context-window.ts";
 import type {
   ComplexityScore,
   FusionCostEntry,
@@ -20,7 +22,6 @@ import { ImagePreprocessor } from "./image-preprocessor.ts";
 import { captureFusionEmitter, emitFusion, nowIso } from "./fusion-events.ts";
 import { resolvePricing, calculateCosts } from "../../observability/pricing.ts";
 import { currentRequestId } from "../../observability/request-context.ts";
-import { modelConfigLoader } from "../../config/model-loader.ts";
 import {
   finishFusionRun,
   finishFusionSubagentRun,
@@ -66,20 +67,6 @@ interface SubagentDecisionSignals {
   suppressors: string[];
 }
 
-function usageSnapshotFromCounts(counts: {
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-}) {
-  return {
-    ...counts,
-    promptTokensEstimated: true,
-    completionTokensEstimated: true,
-    cacheReadTokens: undefined,
-    cacheCreationTokens: undefined,
-    cachedTokens: undefined,
-  };
-}
 
 function traceSubTasks(results: SubagentResult[]): Array<{
   id: string;
@@ -121,6 +108,16 @@ function traceSubTasks(results: SubagentResult[]): Array<{
  *   - Subagent execution details
  *   - Cache hit/miss status
  */
+let sharedFusionRouter: FusionRouter | undefined;
+
+/** Process-wide FusionRouter. The router holds no per-request state (all
+ * request context flows through FusionRequestContext), so one instance can
+ * serve every request without rebuilding its pipeline per call. */
+export function getSharedFusionRouter(): FusionRouter {
+  if (sharedFusionRouter === undefined) sharedFusionRouter = new FusionRouter();
+  return sharedFusionRouter;
+}
+
 export class FusionRouter {
   private readonly fallbackRouter: FallbackRouter;
   private readonly complexityScorer: ComplexityScorer;
@@ -1180,7 +1177,7 @@ export class FusionRouter {
       ? classifyConversationDelta(ctx.messages, toolResultMessages)
       : undefined;
     const significantToolResults = toolDeltaClassification?.significant === true;
-    const declaredFusionContextWindow = this.resolveDeclaredContextWindow(ctx.fusionConfig.fusion.model_routing);
+    const declaredFusionContextWindow = resolveDeclaredContextWindow(ctx.fusionConfig.fusion.model_routing);
     const activeFusionContextWindow = this.activeFusionContextWindow(ctx, declaredFusionContextWindow);
     const largeContextThreshold = this.largeContextThreshold(activeFusionContextWindow);
     const largeContext = score.tokenCount >= largeContextThreshold;
@@ -1429,15 +1426,6 @@ export class FusionRouter {
     return Math.max(8_000, Math.min(160_000, Math.floor(activeContextWindow * 0.35)));
   }
 
-  private resolveDeclaredContextWindow(modelRouting: string): number {
-    try {
-      const cfg = modelConfigLoader.loadConfig(modelRouting);
-      const primary = cfg.model_routings[0];
-      return primary?.context_window ?? cfg.context_window ?? 128_000;
-    } catch {
-      return 128_000;
-    }
-  }
 
   private shouldCacheSubagentResults(results: SubagentResult[]): boolean {
     return results.length > 0 && results.every((result) => result.success && result.content.trim().length > 0);

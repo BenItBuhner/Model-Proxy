@@ -18,7 +18,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge, StatusDot, type BadgeTone } from "@/components/ui/badge";
 import { Panel, PanelBody } from "@/components/ui/panel";
 import type { RequestEvent } from "@model-proxy/contracts/api/events.ts";
-import { formatCount, formatDurationMs, formatUsd } from "./metric-widget";
+import { formatCount, formatDurationMs, formatUsd } from "@/lib/format";
 import {
   derivePipelineState,
   PHASE_LABEL,

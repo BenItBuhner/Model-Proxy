@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { rmWithRetry } from "./support.ts";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -56,7 +57,7 @@ afterAll(() => {
   delete process.env.MODEL_PROXY_EGRESS_PROXY_2;
   setPrimaryConfigDirForTests(undefined);
   setStorageRootForTests(undefined);
-  rmSync(tmpRoot, { recursive: true, force: true });
+  rmWithRetry(tmpRoot, { recursive: true, force: true });
 });
 
 describe("discoverProxies", () => {

@@ -84,25 +84,6 @@ export class ImagePreprocessor {
    * Count images in a request context without processing them.
    * Useful for streaming status messages before processing.
    */
-  static countImages(ctx: FusionRequestContext): number {
-    const { messages } = ctx;
-    let count = 0;
-
-    for (const msg of messages) {
-      const content = (msg as Record<string, unknown>)["content"];
-      if (Array.isArray(content)) {
-        for (const part of content) {
-          const p = part as Record<string, unknown>;
-          if (p["type"] === "image_url") {
-            count += 1;
-          }
-        }
-      }
-    }
-
-    return count;
-  }
-
   // ── Image detection ─────────────────────────────────────────────────
 
   /**
@@ -272,6 +253,7 @@ Be thorough and specific — these descriptions will be used by other AI models 
         signal: ctx.signal,
         principal: ctx.principal,
         validateResponse: false,
+        skipImageDescription: true,
       });
 
       const description = this.extractText(response);

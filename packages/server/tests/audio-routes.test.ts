@@ -1,4 +1,5 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { rmWithRetry } from "./support.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -72,7 +73,7 @@ afterEach(() => {
   resetKeyState("fake-audio");
   resetKeyState("fake-nim");
   resetRequestLogForTests();
-  rmSync(join(tmpRoot, ".storage"), { recursive: true, force: true });
+  rmWithRetry(join(tmpRoot, ".storage"), { recursive: true, force: true });
 });
 
 afterAll(() => {
@@ -81,7 +82,7 @@ afterAll(() => {
   delete process.env.FAKE_AUDIO_API_KEY;
   setPrimaryConfigDirForTests(undefined);
   setStorageRootForTests(undefined);
-  rmSync(tmpRoot, { recursive: true, force: true });
+  rmWithRetry(tmpRoot, { recursive: true, force: true });
 });
 
 describe("audio transcription routes", () => {

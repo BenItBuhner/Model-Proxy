@@ -513,7 +513,7 @@ export function AudioBody({
             <div className="flex h-full min-h-0 flex-col gap-3">
               <div className="flex flex-wrap gap-2">
                 <Badge tone={result !== undefined && result.status < 400 ? "phosphor" : "muted"}>
-                  status {result?.status ?? "—"}
+                  status {result?.status ?? "-"}
                 </Badge>
                 <Badge tone="muted">{result?.contentType || "no response yet"}</Badge>
               </div>

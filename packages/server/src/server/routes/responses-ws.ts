@@ -153,13 +153,26 @@ export function onWsMessage(ws: ServerWebSocket<WsData>, raw: string | Buffer): 
       return;
     }
     state.inflight = true;
-    void handleWsResponseCreateNative(ws, state, msg).finally(() => {
-      state.inflight = false;
-    });
+    handleWsResponseCreateNative(ws, state, msg)
+      .catch((err) => {
+        try {
+          const message = err instanceof Error ? err.message : String(err);
+          ws.send(JSON.stringify({ type: "error", error: { message } }));
+        } catch {
+          // socket already closed
+        }
+      })
+      .finally(() => {
+        state.inflight = false;
+      });
     return;
   }
 
-  ws.send(JSON.stringify({ type: "error", error: { message: `Unknown message type: ${type}` } }));
+  try {
+    ws.send(JSON.stringify({ type: "error", error: { message: `Unknown message type: ${type}` } }));
+  } catch {
+    // socket already closed
+  }
 }
 
 export function onWsClose(ws: ServerWebSocket<WsData>): void {
@@ -169,8 +182,8 @@ export function onWsClose(ws: ServerWebSocket<WsData>): void {
   log.info("responses WS disconnected");
 }
 
-export function onWsDrain(ws: ServerWebSocket<WsData>): void {
-  void ws;
+export function onWsDrain(_ws: ServerWebSocket<WsData>): void {
+  // Backpressure drain notification; nothing to flush.
 }
 
 function extractWsJsonFromSse(sse: string): Record<string, unknown> | undefined {

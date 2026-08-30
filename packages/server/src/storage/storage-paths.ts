@@ -18,7 +18,12 @@ export function getStorageRoot(): string {
 
 export function getStorageDir(...parts: string[]): string {
   const dir = join(getStorageRoot(), ...parts);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  try {
+    // Idempotent: no-op when the directory already exists.
+    mkdirSync(dir, { recursive: true });
+  } catch {
+    // Surface failures on first write instead.
+  }
   return dir;
 }
 

@@ -1,5 +1,6 @@
+import { parsePositiveInt as parseOptionalPositiveInt } from "../shared/utils.ts";
 import { requestLogRingBuffer, type RequestLogRecord } from "../observability/ring-buffer.ts";
-import { recordCacheMatch } from "../observability/cache-matcher.ts";
+import { recordCacheMatch, type CacheMatchResult } from "../observability/cache-matcher.ts";
 import { createLogger } from "../observability/logger.ts";
 import { calculateCosts, resolvePricing } from "../observability/pricing.ts";
 import {
@@ -171,15 +172,30 @@ export function recordRequestFinish(entry: FinishEntry): void {
   const apiKeyEnvVar = entry.apiKeyEnvVar ?? base.apiKeyEnvVar;
   const keyHint = entry.keyHint ?? base.keyHint;
   const usage = buildUsageSnapshot(base, entry);
-  const cache = recordCacheMatch({
-    requestBody: base.requestBody,
-    completedAt,
-    provider: resolvedProvider,
-    model: resolvedModel,
-    apiKeyEnvVar,
-    promptTokens: usage.promptTokens,
-    cacheReadTokens: usage.cacheReadTokens,
-  });
+  let cache: CacheMatchResult;
+  try {
+    cache = recordCacheMatch({
+      requestBody: base.requestBody,
+      completedAt,
+      provider: resolvedProvider,
+      model: resolvedModel,
+      apiKeyEnvVar,
+      promptTokens: usage.promptTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+    });
+  } catch (err) {
+    log.warn("cache match recording failed", {
+      requestId: entry.requestId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    cache = {
+      cacheScope: undefined,
+      promptFingerprint: undefined,
+      matchedTokens: 0,
+      isCacheHit: false,
+      msSinceLastMatch: undefined,
+    };
+  }
   const usageForAnalytics = usage.cacheReadTokens === undefined && cache.matchedTokens > 0
     ? mergeUsage(usage, {
         cacheReadTokens: cache.matchedTokens,
@@ -429,11 +445,6 @@ function pruneStaleInflight(): void {
   }
 }
 
-function parseOptionalPositiveInt(value: string | undefined): number | undefined {
-  if (value === undefined || value.trim() === "") return undefined;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
 
 function completionPersistenceDefault(): boolean {
   return /^(1|true|yes|on)$/i.test(process.env.PERSIST_COMPLETIONS?.trim() ?? "");

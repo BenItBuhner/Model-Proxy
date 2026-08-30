@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { rmWithRetry } from "./support.ts";
+import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,13 +23,13 @@ beforeEach(() => {
   delete process.env.PERSIST_COMPLETIONS;
   setStorageRootForTests(tmpRoot);
   resetRequestLogForTests();
-  rmSync(tmpRoot, { recursive: true, force: true });
+  rmWithRetry(tmpRoot, { recursive: true, force: true });
 });
 
 afterEach(() => {
   resetRequestLogForTests();
   setStorageRootForTests(undefined);
-  rmSync(tmpRoot, { recursive: true, force: true });
+  rmWithRetry(tmpRoot, { recursive: true, force: true });
 });
 
 describe("persistent completion storage and analytics", () => {
@@ -166,10 +167,16 @@ describe("persistent completion storage and analytics", () => {
 
     const summary = getAnalyticsSummary({}, 0);
     expect(summary.completedRequests).toBe(1);
-    expect(summary.totalTokens).toBe(20);
+    expect(summary.promptTokens).toBe(18);
+    expect(summary.totalTokens).toBe(26);
     expect(summary.cacheReadTokens).toBe(6);
     expect(summary.byProviderKey[0]?.provider).toBe("anthropic");
     expect(summary.byProviderKey[0]?.apiKeyEnvVar).toBe("ANTHROPIC_API_KEY");
+    expect(summary.byProviderKey[0]?.promptTokens).toBe(18);
+    expect(summary.byProviderKey[0]?.completionTokens).toBe(8);
+    expect(summary.byProviderKey[0]?.totalTokens).toBe(26);
+    expect(summary.byProviderKey[0]?.cacheReadTokens).toBe(6);
+    expect(summary.byProviderKey[0]?.cacheCreationTokens).toBe(0);
   });
 
   test("analytics summary includes more than the first 100 persisted rows", () => {

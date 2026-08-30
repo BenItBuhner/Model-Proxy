@@ -79,6 +79,7 @@ export const OpenAIChatCompletionRequest = z
     tools: z.array(OpenAIToolDefinition).optional(),
     tool_choice: z.unknown().optional(),
     response_format: z.record(z.unknown()).optional(),
+    reasoning_effort: z.string().optional(),
     n: z.number().int().positive().optional(),
   })
   .passthrough();

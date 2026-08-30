@@ -70,7 +70,7 @@ export function EnvBody({ embedded = false }: { embedded?: boolean }): React.Rea
     try {
       const entries = rows
         .filter((r) => r.key.trim().length > 0)
-        .map((r) => ({ key: r.key.trim(), value: r.touched ? r.value : r.value }));
+        .map((r) => ({ key: r.key.trim(), value: r.value }));
       const result = await saveEnv(entries);
       setStatus(
         result.skipped.length > 0

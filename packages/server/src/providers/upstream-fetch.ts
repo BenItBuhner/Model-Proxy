@@ -1,3 +1,4 @@
+import { mergeAbortSignals } from "../shared/utils.ts";
 /**
  * Proxy-aware upstream fetch wrapper. Uses Bun's native `proxy` fetch option.
  */
@@ -12,24 +13,6 @@ export interface UpstreamFetchOptions extends RequestInit {
   fetcher?: UpstreamFetcher;
 }
 
-function mergeAbortSignals(
-  ...signals: Array<AbortSignal | undefined>
-): AbortSignal | undefined {
-  const real = signals.filter((s): s is AbortSignal => s !== undefined);
-  if (real.length === 0) return undefined;
-  if (real.length === 1) return real[0];
-
-  const controller = new AbortController();
-  const onAbort = () => controller.abort();
-  for (const signal of real) {
-    if (signal.aborted) {
-      controller.abort();
-      break;
-    }
-    signal.addEventListener("abort", onAbort, { once: true });
-  }
-  return controller.signal;
-}
 
 export async function upstreamFetch(
   url: string,

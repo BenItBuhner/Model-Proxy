@@ -10,7 +10,8 @@ import { AnalyticsDashboard } from "./analytics-dashboard";
 import { UsageBreakdownTable } from "./usage-breakdown";
 import { UsageTimeRangeControls } from "./usage-time-range";
 import { UsageTrendChart } from "./usage-trend-chart";
-import { useUsageAnalytics, type UsageAudience } from "./use-usage-analytics";
+import { useUsageAnalytics } from "./use-usage-analytics";
+import { useUsageRange } from "./use-usage-range";
 
 export function UsageDashboard({
   audience,
@@ -18,32 +19,38 @@ export function UsageDashboard({
   scope,
   showCostSettingsSlot,
 }: {
-  audience: UsageAudience;
+  audience: "admin" | "user";
   baseFilters?: ObservabilityFilters;
   scope?: string;
   showCostSettingsSlot?: React.ReactNode;
 }): React.ReactElement {
   const [chartMetric, setChartMetric] = useState<"both" | "tokens" | "cost">("both");
-  const usage = useUsageAnalytics({ audience, baseFilters, scope });
+  const range = useUsageRange(scope);
+  const filters = { ...baseFilters, since: range.since, until: range.until };
+  const { summary, points, loading, error, reload } = useUsageAnalytics({
+    audience,
+    filters,
+    bucket: range.bucket,
+  });
 
   return (
     <div className="space-y-5">
       <UsageTimeRangeControls
-        preset={usage.preset}
-        onPresetChange={usage.setPreset}
-        customSince={usage.customSince}
-        customUntil={usage.customUntil}
-        onCustomRangeChange={usage.setCustomRange}
-        counterStart={usage.counterStart}
-        onCounterStartChange={usage.setCounterStart}
-        bucket={usage.bucket}
-        onBucketChange={usage.setBucket}
+        preset={range.preset}
+        onPresetChange={range.setPreset}
+        customSince={range.customSince}
+        customUntil={range.customUntil}
+        onCustomRangeChange={range.setCustomRange}
+        counterStart={range.counterStart}
+        onCounterStartChange={range.setCounterStart}
+        bucket={range.bucket}
+        onBucketChange={range.setBucket}
       />
 
-      {usage.error !== undefined ? (
+      {error !== undefined ? (
         <div className="flex items-center gap-3 bg-[rgba(255,59,48,0.08)] px-4 py-3 font-mono text-[11px] shadow-[inset_0_0_0_1px_rgba(255,59,48,0.3)]">
           <StatusDot tone="danger" />
-          <span className="text-alert-500">{usage.error}</span>
+          <span className="text-alert-500">{error}</span>
         </div>
       ) : null}
 
@@ -51,18 +58,18 @@ export function UsageDashboard({
 
       <div className="flex items-center justify-between gap-3">
         <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-bone-300">
-          {usage.loading && usage.summary === undefined ? "loading usage…" : "usage window"}
+          {loading && summary === undefined ? "loading usage…" : "usage window"}
         </div>
-        <Button type="button" variant="outline" size="sm" onClick={() => void usage.reload()}>
+        <Button type="button" variant="outline" size="sm" onClick={() => void reload()}>
           refresh
         </Button>
       </div>
 
-      <AnalyticsDashboard summary={usage.summary} emphasizeSpend />
+      <AnalyticsDashboard summary={summary} />
 
       <Panel
         title="usage trends"
-        subtitle={`hover any point · ${usage.bucket} buckets`}
+        subtitle={`hover any point · ${range.bucket} buckets`}
         accent
         toolbar={
           <div className="flex gap-1" role="group" aria-label="Chart metric">
@@ -96,12 +103,12 @@ export function UsageDashboard({
         }
       >
         <PanelBody>
-          <UsageTrendChart points={usage.points} bucket={usage.bucket} metric={chartMetric} />
+          <UsageTrendChart points={points} bucket={range.bucket} metric={chartMetric} />
         </PanelBody>
       </Panel>
 
       <Panel title="route breakdown" subtitle="tokens and dollars by provider / model / key" accent>
-        <UsageBreakdownTable summary={usage.summary} />
+        <UsageBreakdownTable summary={summary} />
       </Panel>
     </div>
   );

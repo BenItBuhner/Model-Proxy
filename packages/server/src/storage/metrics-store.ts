@@ -1,4 +1,5 @@
-import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { matchesLogFilters } from "../shared/log-filters.ts";
+import { appendFileSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { getStorageDir } from "./storage-paths.ts";
@@ -27,7 +28,7 @@ export function listRequestMetricRows({
   filters?: RequestLogFilters;
 }): { records: RequestMetricRow[]; total: number } {
   const rows = readAllMetricRows()
-    .filter((row) => matchesFilters(row, filters))
+    .filter((row) => matchesLogFilters(row, filters))
     .sort(compareNewestFirst);
   return {
     records: limit === undefined ? rows.slice(offset) : rows.slice(offset, offset + limit),
@@ -85,13 +86,31 @@ function metricRowFromRecord(record: RequestLogRecord): RequestMetricRow {
   };
 }
 
-function readAllMetricRows(): RequestMetricRow[] {
-  const dir = getStorageDir("metrics");
-  if (!existsSync(dir)) return [];
+interface CachedMetricFile {
+  mtimeMs: number;
+  size: number;
+  rows: RequestMetricRow[];
+}
+
+const metricFileCache = new Map<string, CachedMetricFile>();
+
+function readMetricFile(dir: string, file: string): RequestMetricRow[] {
+  const path = join(dir, file);
+  let stat: { mtimeMs: number; size: number };
+  try {
+    const info = statSync(path);
+    stat = { mtimeMs: info.mtimeMs, size: info.size };
+  } catch {
+    metricFileCache.delete(path);
+    return [];
+  }
+  const cached = metricFileCache.get(path);
+  if (cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    return cached.rows;
+  }
   const rows: RequestMetricRow[] = [];
-  for (const file of readdirSync(dir)) {
-    if (!file.endsWith(".jsonl")) continue;
-    const text = readFileSync(join(dir, file), "utf8");
+  try {
+    const text = readFileSync(path, "utf8");
     for (const line of text.split(/\r?\n/)) {
       if (line.trim() === "") continue;
       try {
@@ -100,6 +119,26 @@ function readAllMetricRows(): RequestMetricRow[] {
         // Ignore malformed metric rows so a partial write does not break analytics.
       }
     }
+  } catch {
+    return cached?.rows ?? [];
+  }
+  metricFileCache.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, rows });
+  if (metricFileCache.size > 64) {
+    for (const key of metricFileCache.keys()) {
+      metricFileCache.delete(key);
+      if (metricFileCache.size <= 48) break;
+    }
+  }
+  return rows;
+}
+
+function readAllMetricRows(): RequestMetricRow[] {
+  const dir = getStorageDir("metrics");
+  if (!existsSync(dir)) return [];
+  const rows: RequestMetricRow[] = [];
+  for (const file of readdirSync(dir)) {
+    if (!file.endsWith(".jsonl")) continue;
+    rows.push(...readMetricFile(dir, file));
   }
   return rows;
 }
@@ -112,31 +151,3 @@ function compareNewestFirst(a: RequestMetricRow, b: RequestMetricRow): number {
   return b.requestId.localeCompare(a.requestId);
 }
 
-function matchesFilters(row: RequestMetricRow, filters: RequestLogFilters): boolean {
-  if (filters.provider !== undefined && row.resolvedProvider !== filters.provider) return false;
-  if (filters.model !== undefined && row.resolvedModel !== filters.model && row.requestedModel !== filters.model) return false;
-  if (filters.apiKeyEnvVar !== undefined && row.apiKeyEnvVar !== filters.apiKeyEnvVar) return false;
-  if (filters.userId !== undefined && row.userId !== filters.userId) return false;
-  if (filters.apiKeyId !== undefined && row.apiKeyId !== filters.apiKeyId) return false;
-  if (filters.state !== undefined && row.state !== filters.state) return false;
-  if (filters.cacheHit !== undefined && row.isCacheHit !== filters.cacheHit) return false;
-  if (filters.status === "ok" && (row.responseStatus === undefined || row.responseStatus >= 400)) return false;
-  if (filters.status === "error" && (row.responseStatus !== undefined && row.responseStatus < 400)) return false;
-  if (filters.status === "running" && row.state !== "running") return false;
-  if (filters.since !== undefined && Date.parse(row.timestamp) < Date.parse(filters.since)) return false;
-  if (filters.until !== undefined && Date.parse(row.timestamp) > Date.parse(filters.until)) return false;
-  if (filters.search !== undefined && filters.search.trim() !== "") {
-    const haystack = [
-      row.requestId,
-      row.requestedModel,
-      row.resolvedProvider,
-      row.resolvedModel,
-      row.apiKeyEnvVar,
-      row.errorType,
-      row.userId,
-      row.apiKeyId,
-    ].join(" ").toLowerCase();
-    if (!haystack.includes(filters.search.toLowerCase())) return false;
-  }
-  return true;
-}

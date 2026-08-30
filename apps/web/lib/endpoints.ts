@@ -52,7 +52,12 @@ export interface AnalyticsSummary {
     apiKeyEnvVar: string;
     model: string;
     requests: number;
+    promptTokens: number;
+    completionTokens: number;
     totalTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
+    matchedTokens: number;
     userCostUsd: number;
     typicalCostUsd: number;
     savedCostUsd: number;
@@ -413,6 +418,21 @@ export function saveSignupSettingsAdmin(input: Record<string, unknown>): Promise
 
 export function createUserApiKey(label: string): Promise<{ api_key: { id: string; key: string; keyPrefix: string; keyLastFour: string } }> {
   return apiFetch("/v1/user/api-keys", { method: "POST", body: { label } });
+}
+
+export interface UserApiKeySummary {
+  id: string;
+  keyPrefix: string;
+  keyLastFour: string;
+  label: string | undefined;
+  status: string;
+  createdAt: string;
+  lastUsedAt: string | undefined;
+  revokedAt: string | undefined;
+}
+
+export function listUserApiKeys(): Promise<{ keys: UserApiKeySummary[] }> {
+  return apiFetch("/v1/user/api-keys");
 }
 
 // -------- Provider subscription accounts --------

@@ -10,14 +10,10 @@ import type {
 import { apiFetch } from "./api";
 
 export type {
-  BundleApiKeyEntry,
-  BundleEnvDiff,
-  BundleNormalization,
   BundleSectionDiff,
   ConfigBundle,
   ImportConflictPolicy,
   ImportOptions,
-  ImportSectionsFlags,
 } from "@model-proxy/contracts/schemas/config-bundle.ts";
 
 export type BundleDiff = BundleDiffBase & { dry_run: true };

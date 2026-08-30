@@ -1,6 +1,7 @@
 "use client";
 
-import { MetricWidget, formatCount, formatDurationMs, formatUsd } from "./metric-widget";
+import { MetricWidget } from "./metric-widget";
+import { formatCount, formatDurationMs, formatUsd } from "@/lib/format";
 import type { AnalyticsSummary } from "@/lib/endpoints";
 
 export function AnalyticsDashboard({
@@ -38,7 +39,7 @@ export function AnalyticsDashboard({
       <MetricWidget
         label="Cache hits"
         value={`${cacheRate}%`}
-        sublabel={`${formatCount(summary?.matchedTokens)} matched tokens`}
+        sublabel={`${formatCount(summary?.cacheReadTokens)} cached · ${formatCount(summary?.matchedTokens)} matched`}
       />
       <MetricWidget
         label="Requests"

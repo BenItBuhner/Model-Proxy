@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyRow, Table, Td, Th, Thead, Tr } from "@/components/ui/table";
 import type { RequestLogRecord } from "@/lib/endpoints";
 import { formatRelativeTime, truncate } from "@/lib/utils";
-import { formatCount, formatDurationMs, formatUsd } from "./metric-widget";
+import { formatCount, formatDurationMs, formatUsd } from "@/lib/format";
 
 export function RequestLogTable({
   records,
@@ -37,12 +37,15 @@ export function RequestLogTable({
             <Tr
               key={record.requestId}
               onClick={() => onSelect(record.requestId)}
+              title={record.errorMessage !== undefined ? record.errorMessage : undefined}
               className={[
                 record.state === "running" ? "bg-phosphor-50/40" : "",
                 selectedId === record.requestId ? "bg-ink-700/80" : "",
               ].join(" ")}
             >
-              <Td className="text-bone-300">{formatRelativeTime(record.timestamp)}</Td>
+              <Td className="text-bone-300" title={new Date(record.timestamp).toLocaleString()}>
+                {formatRelativeTime(record.timestamp)}
+              </Td>
               <Td>
                 <div className="text-bone-900">{truncate(record.requestedModel, 34)}</div>
                 <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-bone-300">
