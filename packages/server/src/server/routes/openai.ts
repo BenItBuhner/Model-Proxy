@@ -677,6 +677,15 @@ async function handleResponsesFusion(
           // stream already errored/cancelled
         }
       } finally {
+        if (clientGone) {
+          // Stop the upstream fusion pipeline instead of leaving the
+          // connection generating into a stream nobody reads.
+          try {
+            await reader.cancel();
+          } catch {
+            // upstream already terminated
+          }
+        }
         reader.releaseLock();
       }
     },
