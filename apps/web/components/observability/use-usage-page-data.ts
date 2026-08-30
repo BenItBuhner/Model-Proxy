@@ -91,12 +91,17 @@ export function useUsagePageData({
 
   const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
   useEffect(() => {
-    sequenceRef.current += 1; // discard any in-flight result for the old filters
     void reload();
     const id = setInterval(() => {
       void reload();
     }, pollMs);
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(id);
+      // Discard any in-flight result for the old filters (or after unmount)
+      // and drop queued refreshes so no new fetch chains after cleanup.
+      sequenceRef.current += 1;
+      pendingRef.current = false;
+    };
   }, [bucket, filtersKey, offset, pollMs, reload]);
 
   const points = useMemo(

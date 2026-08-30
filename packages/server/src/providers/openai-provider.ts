@@ -40,6 +40,15 @@ interface ProviderQuirks {
   isCerebras: boolean;
 }
 
+/** Upstream rejected the request specifically because of `stream_options`. */
+function isStreamOptionsRejection(err: unknown): boolean {
+  return (
+    err instanceof ProviderAPIError &&
+    err.status === 400 &&
+    /stream_options/i.test(`${err.message} ${err.body ?? ""}`)
+  );
+}
+
 /**
  * OpenAI Chat Completions-compatible provider. Covers OpenAI itself plus
  * groq/cerebras/nvidia/chutes/longcat/zai/nahcrof/llama/mistral/cloudflare/openrouter.
@@ -191,7 +200,28 @@ export class OpenAIProvider extends AbstractProvider {
       else ctx.signal.addEventListener("abort", onCallerAbort, { once: true });
     }
     try {
-      yield* this.streamOpenAIInner(args, ctx, { payload, url, timeoutMs, signal: connController.signal });
+      let yieldedAny = false;
+      try {
+        for await (const chunk of this.streamOpenAIInner(args, ctx, { payload, url, timeoutMs, signal: connController.signal })) {
+          yieldedAny = true;
+          yield chunk;
+        }
+      } catch (err) {
+        // The proxy injects stream_options by default so usage chunks are
+        // emitted, but some openai-compatible upstreams reject the field
+        // outright. Retry once without it (safe: the 400 fires before any
+        // chunk is yielded).
+        if (yieldedAny || !isStreamOptionsRejection(err) || payload["stream_options"] === undefined) {
+          throw err;
+        }
+        const { stream_options: _dropped, ...retryPayload } = payload;
+        yield* this.streamOpenAIInner(args, ctx, {
+          payload: retryPayload,
+          url,
+          timeoutMs,
+          signal: connController.signal,
+        });
+      }
     } finally {
       ctx.signal?.removeEventListener("abort", onCallerAbort);
       // Hard-release the connection. No-op if the response completed and the

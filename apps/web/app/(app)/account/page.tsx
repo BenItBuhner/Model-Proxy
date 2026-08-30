@@ -41,30 +41,43 @@ function AccountBody(): React.ReactElement {
   const [limits, setLimits] = useState<UserLimits | undefined>();
   const [models, setModels] = useState<string[]>([]);
   const [keys, setKeys] = useState<UserApiKeySummary[] | undefined>(undefined);
+  const [keysError, setKeysError] = useState<string | undefined>(undefined);
   const [label, setLabel] = useState("Default key");
   const [freshKey, setFreshKey] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
 
   const reloadKeys = (): void => {
     listUserApiKeys()
-      .then((result) => setKeys(result.keys))
-      .catch(() => setKeys([]));
+      .then((result) => {
+        setKeys(result.keys);
+        setKeysError(undefined);
+      })
+      .catch((err) => {
+        setKeys(undefined);
+        setKeysError((err as Error).message);
+      });
   };
 
   useEffect(() => {
-    Promise.all([
+    // Settle each fetch independently: legacy owner sessions legitimately get
+    // 400s from the per-user endpoints, and that must not discard the profile
+    // or model list.
+    void Promise.allSettled([
       getMe(),
       getCurrentUserAnalytics(),
       getCurrentUserLimits(),
       listAvailableModels(),
-    ])
-      .then(([me, analyticsResult, limitsResult, modelsResult]) => {
-        setPrincipal(me.principal);
-        setAnalytics(analyticsResult.summary);
-        setLimits(limitsResult.limits);
-        setModels(modelsResult.data.map((model) => model.id).sort((a, b) => a.localeCompare(b)));
-      })
-      .catch((err) => setError((err as Error).message));
+    ]).then(([me, analyticsResult, limitsResult, modelsResult]) => {
+      if (me.status === "fulfilled") setPrincipal(me.value.principal);
+      if (analyticsResult.status === "fulfilled") setAnalytics(analyticsResult.value.summary);
+      if (limitsResult.status === "fulfilled") setLimits(limitsResult.value.limits);
+      if (modelsResult.status === "fulfilled") {
+        setModels(modelsResult.value.data.map((model) => model.id).sort((a, b) => a.localeCompare(b)));
+      }
+      if (me.status === "rejected") {
+        setError((me.reason as Error).message);
+      }
+    });
     reloadKeys();
   }, []);
 
@@ -144,7 +157,9 @@ function AccountBody(): React.ReactElement {
               </div>
             ) : null}
             <div className="border-t border-ink-500 pt-3">
-              {keys === undefined ? (
+              {keysError !== undefined ? (
+                <div className="font-mono text-[11px] text-alert-500">failed to load keys: {keysError}</div>
+              ) : keys === undefined ? (
                 <div className="font-mono text-[11px] text-bone-300">loading keys…</div>
               ) : keys.length === 0 ? (
                 <div className="font-mono text-[11px] text-bone-300">no keys yet - generate one above</div>

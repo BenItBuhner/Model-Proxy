@@ -31,6 +31,7 @@ import {
   RouteExecutionError,
 } from "../providers/errors.ts";
 import { providerRegistry } from "../providers/registry.ts";
+import { isObject } from "../shared/utils.ts";
 import { asReasoningEffort } from "@model-proxy/contracts/schemas/reasoning.ts";
 import type { ResolvedRoute } from "@model-proxy/contracts/schemas/routing.ts";
 
@@ -194,10 +195,19 @@ function openaiToResponsesRequest(request: Record<string, unknown>): Record<stri
   if (request["tool_choice"] !== undefined) responses["tool_choice"] = request["tool_choice"];
   if (request["parallel_tool_calls"] !== undefined) responses["parallel_tool_calls"] = request["parallel_tool_calls"];
   if (request["response_format"] !== undefined) responses["text"] = { format: request["response_format"] };
-  if (request["reasoning"] !== undefined) {
-    responses["reasoning"] = request["reasoning"];
-  } else if (asReasoningEffort(request["reasoning_effort"]) !== undefined) {
-    responses["reasoning"] = { effort: request["reasoning_effort"] };
+  // The Responses API only understands `effort`/`summary` inside `reasoning`;
+  // forwarding chat-style objects verbatim (e.g. OpenRouter's `max_tokens`)
+  // would 400 upstream, so whitelist the known keys.
+  const reasoningObject = isObject(request["reasoning"]) ? request["reasoning"] : undefined;
+  const reasoningEffort =
+    asReasoningEffort(reasoningObject?.["effort"]) ?? asReasoningEffort(request["reasoning_effort"]);
+  const reasoningSummary =
+    typeof reasoningObject?.["summary"] === "string" ? reasoningObject["summary"] : undefined;
+  if (reasoningEffort !== undefined || reasoningSummary !== undefined) {
+    responses["reasoning"] = {
+      ...(reasoningEffort !== undefined ? { effort: reasoningEffort } : {}),
+      ...(reasoningSummary !== undefined ? { summary: reasoningSummary } : {}),
+    };
   }
 
   const maxTokens = request["max_tokens"] ?? request["max_completion_tokens"];

@@ -47,6 +47,20 @@ describe("test payload reasoning effort", () => {
     expect("thinking" in body).toBe(false);
   });
 
+  it("never exceeds the defaulted max_tokens when max_tokens is unset", () => {
+    // max_tokens defaults to 1024; a thinking budget must stay below it, so
+    // no effort level can produce a valid budget and thinking is dropped.
+    const body = buildRequestBody(
+      "anthropic",
+      baseParams({ reasoning_effort: "high" }),
+      messages,
+      [],
+      "claude-test",
+    );
+    expect(body["max_tokens"]).toBe(1024);
+    expect("thinking" in body).toBe(false);
+  });
+
   it("omits thinking from Anthropic bodies when unset", () => {
     const body = buildRequestBody(
       "anthropic",

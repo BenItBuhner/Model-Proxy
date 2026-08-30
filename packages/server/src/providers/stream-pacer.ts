@@ -89,12 +89,16 @@ export class StreamPacer {
  * Returns the text to buffer, or undefined when the chunk must pass through.
  */
 export function pureContentDelta(chunk: Record<string, unknown>): string | undefined {
+  // Chunks carrying usage must pass through untouched: re-chunking would
+  // duplicate the usage object onto every emitted piece.
+  if (chunk["usage"] !== undefined && chunk["usage"] !== null) return undefined;
   const choices = chunk["choices"];
   if (!Array.isArray(choices) || choices.length !== 1) return undefined;
   const first = choices[0];
   if (typeof first !== "object" || first === null) return undefined;
   const f = first as Record<string, unknown>;
   if (f["finish_reason"] !== null && f["finish_reason"] !== undefined) return undefined;
+  if (f["logprobs"] !== undefined && f["logprobs"] !== null) return undefined;
   const delta = f["delta"];
   if (typeof delta !== "object" || delta === null) return undefined;
   const d = delta as Record<string, unknown>;

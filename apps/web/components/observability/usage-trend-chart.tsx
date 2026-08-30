@@ -192,7 +192,9 @@ function formatBucketLabel(bucket: string, mode: UsageBucket): string {
   if (mode === "day") {
     const date = new Date(`${bucket}T00:00:00.000Z`);
     if (Number.isNaN(date.getTime())) return bucket.slice(5);
-    return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    // Day buckets are UTC dates; render them in UTC so users west of UTC
+    // don't see every label shifted a day earlier.
+    return date.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
   }
   const date = new Date(bucket);
   if (Number.isNaN(date.getTime())) return bucket.slice(11, 16);
@@ -208,6 +210,7 @@ function formatBucketFull(bucket: string, mode: UsageBucket): string {
       year: "numeric",
       month: "short",
       day: "numeric",
+      timeZone: "UTC",
     });
   }
   const date = new Date(bucket);

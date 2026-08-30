@@ -120,13 +120,15 @@ export function resetConfigCacheForTests(): void {
   cachedConfigDir = undefined;
 }
 
-/** Merged view of every stored value (secrets decrypted). */
+/** Merged view of every stored value (secrets decrypted). Returns a copy so
+ * callers can never mutate the cache in place. */
 export function readConfigValues(): Record<string, string> {
   const dir = getWritableConfigDir();
-  if (cachedValues !== undefined && cachedConfigDir === dir) return cachedValues;
-  cachedConfigDir = dir;
-  cachedValues = { ...readSettingsFile(), ...readSecretsFile() };
-  return cachedValues;
+  if (cachedValues === undefined || cachedConfigDir !== dir) {
+    cachedConfigDir = dir;
+    cachedValues = { ...readSettingsFile(), ...readSecretsFile() };
+  }
+  return { ...cachedValues };
 }
 
 export interface ConfigEntry {

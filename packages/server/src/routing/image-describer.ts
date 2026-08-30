@@ -214,7 +214,9 @@ async function describeImage(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.error("image description call failed", { model: options.visionModel, error: message });
-    return { text: `[Image description unavailable - vision model call failed: ${message}]`, cacheable: false };
+    // Keep the placeholder generic: provider error bodies can carry URLs, key
+    // hints, or internal model names that must not leak into the conversation.
+    return { text: "[Image description unavailable - the vision model call failed]", cacheable: false };
   }
 }
 function wrapDescription(detail: string | undefined, description: string): string {

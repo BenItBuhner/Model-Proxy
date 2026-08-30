@@ -18,7 +18,13 @@ export interface FilterableLogRow {
 }
 
 /** Single filter predicate shared by the admin log endpoint and the storage
- * layers, so every surface applies identical filtering semantics. */
+ * layers, so every surface applies identical filtering semantics.
+ *
+ * Identity filters (`userId`, `apiKeyId`) fail closed: rows that do not carry
+ * the field are excluded. RequestIndexRow (the completion index) never
+ * populates them, so passing an identity filter to that store returns nothing
+ * by design — do not wire per-user views to the completion index without
+ * adding those fields to the row type first. */
 export function matchesLogFilters(row: FilterableLogRow, filters: RequestLogFilters): boolean {
   if (filters.provider !== undefined && row.resolvedProvider !== filters.provider) return false;
   if (filters.model !== undefined && row.resolvedModel !== filters.model && row.requestedModel !== filters.model) return false;

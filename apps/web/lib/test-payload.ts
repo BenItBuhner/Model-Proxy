@@ -90,7 +90,10 @@ function buildAnthropic(
   if (params.temperature !== undefined) body["temperature"] = params.temperature;
   if (params.top_p !== undefined) body["top_p"] = params.top_p;
   if (params.reasoning_effort !== undefined) {
-    const thinking = thinkingFromReasoningEffort(params.reasoning_effort, params.max_tokens);
+    // Budget against the max_tokens actually sent (including the 1024
+    // default), otherwise budget_tokens could exceed max_tokens and Anthropic
+    // rejects the request.
+    const thinking = thinkingFromReasoningEffort(params.reasoning_effort, params.max_tokens ?? 1024);
     if (thinking !== undefined) body["thinking"] = thinking;
   }
   if (params.stop !== undefined && params.stop.length > 0)

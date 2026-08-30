@@ -83,7 +83,7 @@ describe("reasoning effort helpers", () => {
   });
 
   test("budgetToReasoningEffort buckets budgets", () => {
-    expect(budgetToReasoningEffort(1024)).toBe("low");
+    expect(budgetToReasoningEffort(1024)).toBe("minimal");
     expect(budgetToReasoningEffort(2048)).toBe("low");
     expect(budgetToReasoningEffort(4096)).toBe("medium");
     expect(budgetToReasoningEffort(8192)).toBe("medium");

@@ -93,6 +93,63 @@ describe("OpenAIProvider streaming termination", () => {
     }
   });
 
+  test("retries once without stream_options when the upstream rejects it", async () => {
+    const encoder = new TextEncoder();
+    const requestBodies: Array<Record<string, unknown>> = [];
+    server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const body = (await req.json()) as Record<string, unknown>;
+        requestBodies.push(body);
+        if (body["stream_options"] !== undefined) {
+          return new Response(
+            JSON.stringify({ error: { message: "Unknown parameter: stream_options" } }),
+            { status: 400, headers: { "content-type": "application/json" } },
+          );
+        }
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                'data: {"id":"retry-ok","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"hi"}}]}\n\n',
+              ),
+            );
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          },
+        });
+        return new Response(stream, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+    });
+
+    writeProviderConfig(server.url.origin);
+
+    const provider = new OpenAIProvider("stream-test");
+    const chunks = await collect(
+      provider.streamOpenAI(
+        {
+          model: "stream-model",
+          messages: [{ role: "user", content: "hi" }],
+          stream: true,
+        },
+        {
+          apiKey: "test-key",
+          baseUrlOverride: undefined,
+          timeoutSeconds: 30,
+          signal: undefined,
+        },
+      ),
+    );
+
+    expect(requestBodies).toHaveLength(2);
+    expect(requestBodies[0]?.["stream_options"]).toEqual({ include_usage: true });
+    expect("stream_options" in (requestBodies[1] ?? {})).toBe(false);
+    expect(chunks.join("")).toContain("retry-ok");
+    expect(chunks.at(-1)).toBe("data: [DONE]\n\n");
+  });
+
   test("normalizes malformed reasoning stream chunks", async () => {
     const encoder = new TextEncoder();
     server = Bun.serve({

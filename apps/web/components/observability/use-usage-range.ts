@@ -34,6 +34,17 @@ export function useUsageRange(scope?: string): UsageRangeState {
   const [customUntil, setCustomUntil] = useState<string | undefined>(undefined);
   const [counterStart, setCounterStartState] = useState<string | undefined>(undefined);
   const [bucketOverride, setBucketOverride] = useState<UsageBucket | undefined>(undefined);
+  const [nowTick, setNowTick] = useState(0);
+
+  // Relative presets anchor `since` to "now at memo time". Re-anchor once a
+  // minute so a dashboard left open keeps showing the selected window instead
+  // of an ever-growing one.
+  const relativePreset = preset !== "custom" && preset !== "all";
+  useEffect(() => {
+    if (!relativePreset) return;
+    const timer = setInterval(() => setNowTick((tick) => tick + 1), 60_000);
+    return () => clearInterval(timer);
+  }, [relativePreset]);
 
   useEffect(() => {
     setCounterStartState(readCounterStart(scope));
@@ -69,7 +80,9 @@ export function useUsageRange(scope?: string): UsageRangeState {
       since: latestIso(presetBound, counterStart),
       until: preset === "custom" ? customUntil : undefined,
     };
-  }, [preset, customSince, customUntil, counterStart]);
+    // nowTick re-anchors relative presets to the current time once a minute.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset, customSince, customUntil, counterStart, nowTick]);
 
   const bucket = bucketOverride ?? suggestedBucket(since, until);
 

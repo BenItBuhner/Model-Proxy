@@ -59,6 +59,15 @@ function UsageBody(): React.ReactElement {
       .catch((err) => setError((err as Error).message));
   }, []);
 
+  // Do not pick an audience until identity resolves; rendering the user
+  // dashboard for an admin (or vice versa) fires wrong-audience requests and
+  // flashes the wrong view.
+  if (principal === undefined && error === undefined) {
+    return (
+      <div className="font-mono text-[11px] uppercase tracking-[0.16em] text-bone-300">loading…</div>
+    );
+  }
+
   if (!admin) {
     return (
       <>
@@ -68,7 +77,7 @@ function UsageBody(): React.ReactElement {
           description="Track tokens, dollar spend, and historical trends. Hover the chart for any point in time, pick a window, or set your own counter start."
         />
         {error !== undefined ? <div className="mb-5 text-alert-500">{error}</div> : null}
-        <UsageDashboard audience="user" scope={principal?.userId ?? "user"} />
+        {error === undefined ? <UsageDashboard audience="user" scope={principal?.userId ?? "user"} /> : null}
       </>
     );
   }

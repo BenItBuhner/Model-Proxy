@@ -22,6 +22,7 @@ export function reasoningEffortToBudget(effort: ReasoningEffort): number {
   }
 }
 export function budgetToReasoningEffort(budgetTokens: number): ReasoningEffort {
+  if (budgetTokens <= 1024) return "minimal";
   if (budgetTokens <= 2048) return "low";
   if (budgetTokens <= 8192) return "medium";
   return "high";

@@ -24,6 +24,7 @@ export function AnalyticsFilters({
   });
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const committedRef = useRef(filters);
+  const draftRef = useRef(draft);
 
   useEffect(() => {
     committedRef.current = filters;
@@ -33,29 +34,46 @@ export function AnalyticsFilters({
     return () => clearTimeout(debounceRef.current);
   }, []);
 
-  const commit = (next: ObservabilityFilters): void => {
-    committedRef.current = next;
+  // Every commit folds in the whole current draft, so a pending debounce for
+  // one field can never be dropped by an edit to another field or by an
+  // immediate commit (switch toggle / preset chip).
+  const commit = (overrides: Partial<ObservabilityFilters> = {}): void => {
     clearTimeout(debounceRef.current);
+    const d = draftRef.current;
+    const next: ObservabilityFilters = {
+      ...committedRef.current,
+      provider: emptyToUndefined(d.provider),
+      model: emptyToUndefined(d.model),
+      apiKeyEnvVar: emptyToUndefined(d.apiKeyEnvVar),
+      search: emptyToUndefined(d.search),
+      ...overrides,
+    };
+    committedRef.current = next;
     onChange(next);
   };
 
   const setField = (field: keyof typeof draft, value: string): void => {
-    const nextDraft = { ...draft, [field]: value };
+    const nextDraft = { ...draftRef.current, [field]: value };
+    draftRef.current = nextDraft;
     setDraft(nextDraft);
     clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      commit({ ...committedRef.current, [field]: emptyToUndefined(value) });
-    }, DEBOUNCE_MS);
+    debounceRef.current = setTimeout(() => commit(), DEBOUNCE_MS);
   };
 
   const clearAll = (): void => {
-    setDraft({ provider: "", model: "", apiKeyEnvVar: "", search: "" });
-    commit({});
+    const empty = { provider: "", model: "", apiKeyEnvVar: "", search: "" };
+    draftRef.current = empty;
+    setDraft(empty);
+    clearTimeout(debounceRef.current);
+    committedRef.current = {};
+    onChange({});
   };
 
   const modelPreset = (model: string | undefined): void => {
-    setDraft((current) => ({ ...current, model: model ?? "" }));
-    commit({ ...committedRef.current, model });
+    const nextDraft = { ...draftRef.current, model: model ?? "" };
+    draftRef.current = nextDraft;
+    setDraft(nextDraft);
+    commit({ model });
   };
 
   return (

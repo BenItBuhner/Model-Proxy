@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { PricingConfig } from "@model-proxy/contracts/schemas/pricing.ts";
@@ -22,12 +22,28 @@ export const BUILTIN_DEFAULT_PRICING: PricingConfig = {
 
 let cachedSettings: AnalyticsPricingSettings | undefined;
 let cachedSettingsPath: string | undefined;
+let cachedSignature: string | undefined;
+
+/** mtime+size stamp so hand-edits (or fixes to an invalid file) are picked up
+ * without a restart. Undefined when the file is missing. */
+function fileSignature(path: string): string | undefined {
+  try {
+    const stat = statSync(path);
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return undefined;
+  }
+}
 
 export function readAnalyticsPricingSettings(): AnalyticsPricingSettings {
   const path = pricingPath();
-  if (cachedSettings !== undefined && cachedSettingsPath === path) return cachedSettings;
+  const signature = fileSignature(path);
+  if (cachedSettings !== undefined && cachedSettingsPath === path && cachedSignature === signature) {
+    return cachedSettings;
+  }
   cachedSettingsPath = path;
-  if (!existsSync(path)) {
+  cachedSignature = signature;
+  if (signature === undefined) {
     cachedSettings = { default_pricing: BUILTIN_DEFAULT_PRICING };
     return cachedSettings;
   }
@@ -58,6 +74,7 @@ export function writeAnalyticsPricingSettings(settings: AnalyticsPricingSettings
   writeFileSync(path, JSON.stringify(normalized, null, 2) + "\n", "utf8");
   cachedSettings = normalized;
   cachedSettingsPath = path;
+  cachedSignature = fileSignature(path);
   return normalized;
 }
 
