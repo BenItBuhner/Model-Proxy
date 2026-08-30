@@ -1,3 +1,4 @@
+import { envInt as envNumber } from "../shared/utils.ts";
 import { createLogger } from "../observability/logger.ts";
 import { providerConfigLoader } from "../config/provider-loader.ts";
 import {
@@ -10,12 +11,6 @@ import { matchEnvKeys, providerNameToEnvToken } from "./env-matcher.ts";
 
 const log = createLogger("api-keys");
 
-function envNumber(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined) return fallback;
-  const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) ? n : fallback;
-}
 
 const KEY_COOLDOWN_SECONDS = envNumber("KEY_COOLDOWN_SECONDS", 180);
 const MAX_KEY_RETRY_CYCLES = envNumber("MAX_KEY_RETRY_CYCLES", 1);

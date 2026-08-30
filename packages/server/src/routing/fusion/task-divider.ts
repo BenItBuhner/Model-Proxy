@@ -1,3 +1,4 @@
+import { estimateTokens, mergeAbortSignals } from "../../shared/utils.ts";
 import { createLogger } from "../../observability/logger.ts";
 import { FallbackRouter } from "../fallback.ts";
 import type { FusionRequestContext, SubTask } from "./types.ts";
@@ -11,26 +12,8 @@ const DIVIDER_MAX_TOKENS = 131072;
 /** Fallback division budget when task_divider.timeout_seconds is absent. */
 const DEFAULT_DIVIDER_BUDGET_SECONDS = 180;
 
-function mergeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
-  const real = signals.filter((s): s is AbortSignal => s !== undefined);
-  if (real.length === 0) return undefined;
-  if (real.length === 1) return real[0];
-  const controller = new AbortController();
-  const onAbort = () => controller.abort();
-  for (const signal of real) {
-    if (signal.aborted) {
-      controller.abort();
-      break;
-    }
-    signal.addEventListener("abort", onAbort, { once: true });
-  }
-  return controller.signal;
-}
 
 /** Rough token estimate. */
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
 
 // ── Tool schemas for the task divider agent ──────────────────────────
 

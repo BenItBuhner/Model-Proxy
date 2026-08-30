@@ -1,12 +1,10 @@
+import { isObject } from "../shared/utils.ts";
 /**
  * Helpers to auto-inject empty tool responses when providers reject requests
  * because tool_calls have no matching tool messages. Port of
  * `_fix_missing_tool_responses` / `_fix_missing_tool_results_anthropic`.
  */
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 export function fixMissingToolResponsesOpenAI(
   request: Record<string, unknown>,

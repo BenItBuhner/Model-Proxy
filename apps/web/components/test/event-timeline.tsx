@@ -7,7 +7,7 @@ import type { RequestEvent, RequestEventType } from "@model-proxy/contracts/api/
 interface EventTimelineProps {
   events: RequestEvent[];
   live: boolean;
-  onClear: () => void;
+  onClear?: () => void;
   /** Tighter chrome for embedding under composer/tools */
   compact?: boolean;
 }
@@ -45,12 +45,14 @@ export function EventTimeline(props: EventTimelineProps): React.ReactElement {
           >
             {autoScroll ? "pause scroll" : "auto-scroll"}
           </button>
-          <button
-            onClick={props.onClear}
-            className="font-mono text-[10px] uppercase tracking-[0.14em] text-bone-300 hover:text-alert-500"
-          >
-            clear
-          </button>
+          {props.onClear !== undefined ? (
+            <button
+              onClick={props.onClear}
+              className="font-mono text-[10px] uppercase tracking-[0.14em] text-bone-300 hover:text-alert-500"
+            >
+              clear
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -137,6 +139,8 @@ function classify(type: RequestEventType): {
       return { label: "fail", tone: "danger" };
     case "route.skipped":
       return { label: "skip", tone: "warning" };
+    case "route.images_described":
+      return { label: "vision", tone: "phosphor" };
     case "route.hedge.started":
       return { label: "hedge", tone: "warning" };
     case "route.hedge.candidate_started":
@@ -205,6 +209,8 @@ function summarize(event: RequestEvent): string {
           : "";
       return `${event.provider}/${event.model} skipped · ${event.reason}${event.isFallback ? " [fallback]" : ""}${context}`;
     }
+    case "route.images_described":
+      return `described ${event.imageCount} image(s) via ${event.visionModel}${event.cacheHits > 0 ? ` · ${event.cacheHits} cached` : ""} → ${event.sourceLogicalModel}`;
     case "route.hedge.started":
       return `hedged ${event.stream ? "stream" : "call"} with ${event.candidates} candidate(s), max ${event.maxParallel}`;
     case "route.hedge.candidate_started":
@@ -250,6 +256,6 @@ function summarize(event: RequestEvent): string {
     case "fusion.summary":
       return `[${event.label}] ${event.text.slice(0, 100)}`;
     default:
-      return "—";
+      return "-";
   }
 }

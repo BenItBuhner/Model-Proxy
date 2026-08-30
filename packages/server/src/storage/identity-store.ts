@@ -241,8 +241,26 @@ export function createSession(userId: string): { sessionId: string; token: strin
   return { sessionId, token, expiresAt };
 }
 
+const LAST_SEEN_UPDATE_INTERVAL_MS = 60_000;
+const lastSeenUpdateAt = new Map<string, number>();
+
+function shouldThrottleLastSeen(key: string): boolean {
+  const now = Date.now();
+  const previous = lastSeenUpdateAt.get(key);
+  if (previous !== undefined && now - previous < LAST_SEEN_UPDATE_INTERVAL_MS) return true;
+  lastSeenUpdateAt.set(key, now);
+  if (lastSeenUpdateAt.size > 10_000) {
+    const cutoff = now - LAST_SEEN_UPDATE_INTERVAL_MS;
+    for (const [k, at] of lastSeenUpdateAt) {
+      if (at < cutoff) lastSeenUpdateAt.delete(k);
+    }
+  }
+  return false;
+}
+
 export function authenticateSessionToken(token: string | undefined): Principal | undefined {
   if (token === undefined || token.trim() === "") return undefined;
+  const tokenHash = hashSecret(token);
   const row = getOperationalDb()
     .query(
       `SELECT sessions.user_id, users.email, users.role, users.status, users.completion_logging_enabled
@@ -252,11 +270,13 @@ export function authenticateSessionToken(token: string | undefined): Principal |
          AND sessions.revoked_at IS NULL
          AND sessions.expires_at > $now`,
     )
-    .get({ $token_hash: hashSecret(token), $now: new Date().toISOString() }) as SessionRow | null;
+    .get({ $token_hash: tokenHash, $now: new Date().toISOString() }) as SessionRow | null;
   if (row === null || row.status !== "active") return undefined;
-  getOperationalDb()
-    .query("UPDATE sessions SET last_seen_at = $now WHERE token_hash = $token_hash")
-    .run({ $now: new Date().toISOString(), $token_hash: hashSecret(token) });
+  if (!shouldThrottleLastSeen(`s:${tokenHash}`)) {
+    getOperationalDb()
+      .query("UPDATE sessions SET last_seen_at = $now WHERE token_hash = $token_hash")
+      .run({ $now: new Date().toISOString(), $token_hash: tokenHash });
+  }
   return principalFromUserRow(row, { authMethod: "session" });
 }
 
@@ -423,9 +443,11 @@ export function authenticateApiKey(key: string | undefined): Principal | undefin
     )
     .get({ $key_hash: hashSecret(key.trim()) }) as ApiKeyRow | null;
   if (row === null || row.status !== "active") return undefined;
-  getOperationalDb()
-    .query("UPDATE api_keys SET last_used_at = $now WHERE id = $id")
-    .run({ $now: new Date().toISOString(), $id: row.id });
+  if (!shouldThrottleLastSeen(`k:${row.id}`)) {
+    getOperationalDb()
+      .query("UPDATE api_keys SET last_used_at = $now WHERE id = $id")
+      .run({ $now: new Date().toISOString(), $id: row.id });
+  }
   return principalFromUserRow(row, {
     authMethod: "api-key",
     apiKeyId: row.id,

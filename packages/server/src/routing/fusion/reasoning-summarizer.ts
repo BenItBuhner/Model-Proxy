@@ -1,3 +1,4 @@
+import { sleep } from "../../shared/utils.ts";
 import { createLogger } from "../../observability/logger.ts";
 import { FallbackRouter } from "../fallback.ts";
 import type { FusionRequestContext } from "./types.ts";
@@ -241,9 +242,6 @@ const SMOOTH_MAX_CHARS = 56;
 /** Delay between emitted pieces (ms) — makes summaries read as a natural stream. */
 const SMOOTH_DELAY_MS = 24;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
 
 /**
  * Re-chunks text into small word-boundary pieces emitted with short delays,
@@ -649,6 +647,9 @@ export class SummaryPump {
     } = {},
   ) {
     this.worker = this.run();
+    // Pre-attach a no-op handler so a worker crash before finish() is never an
+    // unhandled rejection; finish() attaches the logging handler.
+    this.worker.catch(() => {});
   }
 
   enqueue(segment: SummarySegment): void {

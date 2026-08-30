@@ -1,4 +1,5 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { rmWithRetry } from "./support.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +21,7 @@ import { resetKeyState } from "../src/providers/api-key-manager.ts";
 import { resetProxyState } from "../src/providers/egress-proxy-manager.ts";
 import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { FallbackRouter } from "../src/routing/fallback.ts";
+import { clearImageDescriptionCache } from "../src/routing/image-describer.ts";
 import type { Principal } from "../src/storage/identity-store.ts";
 
 const tmpRoot = join(tmpdir(), `mp-v2-routing-${process.pid}-${Date.now()}`);
@@ -328,6 +330,19 @@ beforeAll(() => {
   );
 
   writeFileSync(
+    join(tmpRoot, "models", "fake-smooth-model.json"),
+    JSON.stringify({
+      logical_name: "fake-smooth-model",
+      timeout_seconds: 5,
+      default_cooldown_seconds: 0,
+      smooth_streaming: true,
+      model_routings: [
+        { provider: "fake", model: "fake-backend", wire_protocol: "openai" },
+      ],
+    }),
+  );
+
+  writeFileSync(
     join(tmpRoot, "models", "fake-openai-defaults-model.json"),
     JSON.stringify({
       logical_name: "fake-openai-defaults-model",
@@ -565,7 +580,7 @@ afterAll(() => {
   delete process.env.FAKE_HEDGE_KEY_7;
   delete process.env.FAKE_HEDGE_KEY_8;
   delete process.env.FAKE_HEDGE_LAST_KEY;
-  rmSync(tmpRoot, { recursive: true, force: true });
+  rmWithRetry(tmpRoot, { recursive: true, force: true });
 });
 
 describe("FallbackRouter", () => {
@@ -650,6 +665,100 @@ describe("FallbackRouter", () => {
     expect((toolCall["function"] as Record<string, unknown>)["arguments"]).toBe('{"q":"demo"}');
   });
 
+  test("forwards reasoning_effort from request data to provider args", async () => {
+    FakeProvider.calls = [];
+    FakeProvider.responses = [
+      {
+        id: "chatcmpl-x",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "hello" },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ];
+
+    const router = makeRouter();
+    await router.callWithFallback({
+      logicalModel: "fake-model",
+      requestData: {
+        model: "fake-model",
+        messages: [{ role: "user", content: "hi" }],
+        reasoning_effort: "high",
+      },
+      targetProtocol: "openai",
+    });
+
+    expect(FakeProvider.calls.length).toBe(1);
+    expect(FakeProvider.calls[0]?.args["reasoning_effort"]).toBe("high");
+  });
+
+  test("plumbs smooth_streaming model config into the provider context", async () => {
+    FakeProvider.calls = [];
+    FakeProvider.responses = [
+      {
+        id: "chatcmpl-x",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "hello" },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ];
+
+    const router = makeRouter();
+    await router.callWithFallback({
+      logicalModel: "fake-smooth-model",
+      requestData: {
+        model: "fake-smooth-model",
+        messages: [{ role: "user", content: "hi" }],
+      },
+      targetProtocol: "openai",
+    });
+
+    expect(FakeProvider.calls.length).toBe(1);
+    expect(FakeProvider.calls[0]?.ctx.smoothStreaming).toBe(true);
+  });
+
+  test("omits reasoning_effort from provider args when not requested", async () => {
+    FakeProvider.calls = [];
+    FakeProvider.responses = [
+      {
+        id: "chatcmpl-x",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "hello" },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ];
+
+    const router = makeRouter();
+    await router.callWithFallback({
+      logicalModel: "fake-model",
+      requestData: {
+        model: "fake-model",
+        messages: [{ role: "user", content: "hi" }],
+      },
+      targetProtocol: "openai",
+    });
+
+    expect(FakeProvider.calls.length).toBe(1);
+    expect(FakeProvider.calls[0]?.args["reasoning_effort"]).toBeUndefined();
+  });
+
   test("skips non-multimodal routes for image requests", async () => {
     FakeProvider.calls = [];
     FakeProvider.responses = [
@@ -722,37 +831,222 @@ describe("FallbackRouter", () => {
     ]);
   });
 
-  test("throws RoutingError when every route is ineligible", async () => {
+  test("describes images via a vision-capable model when no route supports them", async () => {
+    clearImageDescriptionCache();
     FakeProvider.calls = [];
-    FakeProvider.responses = [];
+    FakeProvider.responses = [
+      {
+        id: "vision-desc",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "a red square on a blue background" },
+            finish_reason: "stop",
+          },
+        ],
+      },
+      {
+        id: "text-answer",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "it is a red square" },
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ];
 
     const router = makeRouter();
-    await expect(
-      router.callWithFallback({
-        logicalModel: "fake-all-ineligible-model",
-        requestData: {
-          model: "fake-all-ineligible-model",
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "image_url", image_url: { url: "data:image/png;base64,abc" } },
-              ],
-            },
-          ],
-        },
-        targetProtocol: "openai",
-      }),
-    ).rejects.toMatchObject({
-      name: "RoutingError",
-      errors: [
+    const result = await router.callWithFallback({
+      logicalModel: "fake-all-ineligible-model",
+      requestData: {
+        model: "fake-all-ineligible-model",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "what is this?" },
+              { type: "image_url", image_url: { url: "data:image/png;base64,abc" } },
+            ],
+          },
+        ],
+      },
+      targetProtocol: "openai",
+    });
+
+    expect(result["id"]).toBe("text-answer");
+    expect(FakeProvider.calls.map((call) => call.args.model)).toEqual([
+      "fake-vision-backend",
+      "fake-text-only-backend",
+    ]);
+    const visionMessages = FakeProvider.calls[0]?.args.messages ?? [];
+    expect(JSON.stringify(visionMessages)).toContain("data:image/png;base64,abc");
+    const textMessages = FakeProvider.calls[1]?.args.messages ?? [];
+    const textContent = JSON.stringify(textMessages);
+    expect(textContent).not.toContain("image_url");
+    expect(textContent).toContain("a red square on a blue background");
+  });
+
+  test("reuses cached image descriptions across requests", async () => {
+    clearImageDescriptionCache();
+    FakeProvider.calls = [];
+    FakeProvider.responses = [
+      {
+        id: "vision-desc",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "a red square on a blue background" },
+            finish_reason: "stop",
+          },
+        ],
+      },
+      {
+        id: "text-answer-1",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "first" },
+            finish_reason: "stop",
+          },
+        ],
+      },
+      {
+        id: "text-answer-2",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "second" },
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ];
+
+    const imageData = () => ({
+      model: "fake-all-ineligible-model",
+      messages: [
         {
-          error: "multimodal_unsupported",
-          error_type: "RouteEligibilityError",
+          role: "user",
+          content: [{ type: "image_url", image_url: { url: "data:image/png;base64,cache-me" } }],
         },
       ],
     });
-    expect(FakeProvider.calls).toEqual([]);
+    const router = makeRouter();
+    await router.callWithFallback({
+      logicalModel: "fake-all-ineligible-model",
+      requestData: imageData(),
+      targetProtocol: "openai",
+    });
+    expect(FakeProvider.calls.map((call) => call.args.model)).toEqual([
+      "fake-vision-backend",
+      "fake-text-only-backend",
+    ]);
+    await router.callWithFallback({
+      logicalModel: "fake-all-ineligible-model",
+      requestData: imageData(),
+      targetProtocol: "openai",
+    });
+    expect(FakeProvider.calls.map((call) => call.args.model)).toEqual([
+      "fake-vision-backend",
+      "fake-text-only-backend",
+      "fake-text-only-backend",
+    ]);
+  });
+
+  test("still rejects image requests when no vision model is available", async () => {
+    clearImageDescriptionCache();
+    process.env.MODEL_PROXY_IMAGE_DESCRIPTION_MODEL = "missing-vision-model";
+    FakeProvider.calls = [];
+    FakeProvider.responses = [];
+    try {
+      const router = makeRouter();
+      await expect(
+        router.callWithFallback({
+          logicalModel: "fake-all-ineligible-model",
+          requestData: {
+            model: "fake-all-ineligible-model",
+            messages: [
+              {
+                role: "user",
+                content: [
+                  { type: "image_url", image_url: { url: "data:image/png;base64,abc" } },
+                ],
+              },
+            ],
+          },
+          targetProtocol: "openai",
+        }),
+      ).rejects.toMatchObject({
+        name: "RoutingError",
+        errors: [
+          {
+            error: "multimodal_unsupported",
+            error_type: "RouteEligibilityError",
+          },
+        ],
+      });
+      expect(FakeProvider.calls).toEqual([]);
+    } finally {
+      delete process.env.MODEL_PROXY_IMAGE_DESCRIPTION_MODEL;
+    }
+  });
+
+  test("describes images for streaming requests to non-multimodal models", async () => {
+    clearImageDescriptionCache();
+    FakeProvider.calls = [];
+    FakeProvider.responses = [
+      {
+        id: "vision-desc",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "a red square on a blue background" },
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ];
+    FakeProvider.streamResponses = [
+      [
+        'data: {"id":"text-answer","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"it is red"}}]}\n\n',
+        "data: [DONE]\n\n",
+      ],
+    ];
+
+    const router = makeRouter();
+    const chunks: string[] = [];
+    for await (const chunk of router.streamWithFallback({
+      logicalModel: "fake-all-ineligible-model",
+      requestData: {
+        model: "fake-all-ineligible-model",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "image_url", image_url: { url: "data:image/png;base64,abc" } },
+            ],
+          },
+        ],
+        stream: true,
+      },
+      targetProtocol: "openai",
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.join("")).toContain("it is red");
+    expect(FakeProvider.calls.map((call) => call.args.model)).toEqual([
+      "fake-vision-backend",
+      "fake-text-only-backend",
+    ]);
   });
 
   test("hedged non-streaming routing returns the first valid response and aborts losers", async () => {
@@ -944,6 +1238,46 @@ describe("FallbackRouter", () => {
       "fake-key-heavy",
       "fake-late-route",
     ]);
+  });
+
+  test("hedged streaming survives a candidate dropped for oversized buffering", async () => {
+    FakeProvider.calls = [];
+    // Primary floods >1MB of non-meaningful chunks (role-only deltas padded
+    // with filler) so the hedge buffer cap drops it. Secondary delivers real
+    // content slightly later. The drop must count as exactly one terminal
+    // event; double accounting would end the hedge loop before the secondary
+    // can win and fail the whole request.
+    const pad = "x".repeat(300_000);
+    const paddedChunk = `data: {"id":"primary","object":"chat.completion.chunk","pad":"${pad}","choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}\n\n`;
+    FakeProvider.streamResponses = [
+      [paddedChunk, paddedChunk, paddedChunk, paddedChunk],
+      [
+        {
+          delayMs: 40,
+          chunk:
+            'data: {"id":"secondary","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"survivor"}}]}\n\n',
+        },
+        "data: [DONE]\n\n",
+      ],
+    ];
+
+    const router = makeRouter({ random: () => 0.5 });
+    const chunks: string[] = [];
+    for await (const chunk of router.streamWithFallback({
+      logicalModel: "fake-hedged-stream-model",
+      requestData: {
+        model: "fake-hedged-stream-model",
+        messages: [{ role: "user", content: "hi" }],
+        stream: true,
+      },
+      targetProtocol: "openai",
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.join("")).toContain("survivor");
+    expect(chunks.join("")).not.toContain('"id":"primary"');
+    expect(FakeProvider.calls[0]?.ctx.signal?.aborted).toBe(true);
   });
 
   test("hedged streaming replays only the winning stream buffer", async () => {

@@ -37,13 +37,22 @@ export function openCredential(value: string | undefined): string | undefined {
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
 }
 
+let cachedFileKey: Buffer | undefined;
+let cachedFileKeyPath: string | undefined;
+let cachedEnvKey: Buffer | undefined;
+let cachedEnvKeySource: string | undefined;
+
 function credentialKey(): Buffer {
   const configured = process.env["MODEL_PROXY_CREDENTIAL_ENCRYPTION_KEY"]?.trim();
   if (configured !== undefined && configured.length > 0) {
-    return normalizeKey(configured);
+    if (cachedEnvKeySource !== configured) {
+      cachedEnvKey = normalizeKey(configured);
+      cachedEnvKeySource = configured;
+    }
+    return cachedEnvKey!;
   }
-
   const path = join(getStorageDir("operational"), ".credential-key");
+  if (cachedFileKey !== undefined && cachedFileKeyPath === path) return cachedFileKey;
   if (!existsSync(path)) {
     writeFileSync(path, randomBytes(32).toString("base64url"), {
       encoding: "utf8",
@@ -56,7 +65,9 @@ function credentialKey(): Buffer {
   } catch {
     // Best effort on filesystems that do not support POSIX modes.
   }
-  return normalizeKey(readFileSync(path, "utf8").trim());
+  cachedFileKey = normalizeKey(readFileSync(path, "utf8").trim());
+  cachedFileKeyPath = path;
+  return cachedFileKey;
 }
 
 function normalizeKey(value: string): Buffer {

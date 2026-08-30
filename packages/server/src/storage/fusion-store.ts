@@ -1,4 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
+import { stableHash, stableStringify } from "../shared/utils.ts";
+import { randomUUID } from "node:crypto";
 
 import { getOperationalDb } from "./operational-db.ts";
 
@@ -318,18 +319,7 @@ function hashLargeValue(value: unknown): unknown {
   return { sha256: stableHash(value), originalLength: text.length };
 }
 
-function stableHash(value: unknown): string {
-  return createHash("sha256").update(stableStringify(value)).digest("hex");
-}
 
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, nested]) => nested !== undefined)
-    .sort(([a], [b]) => a.localeCompare(b));
-  return `{${entries.map(([key, nested]) => `${JSON.stringify(key)}:${stableStringify(nested)}`).join(",")}}`;
-}
 
 function stringifyMetadata(metadata: Record<string, unknown> | undefined): string {
   return JSON.stringify(metadata ?? {});

@@ -1,20 +1,22 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { stableStringify } from "../../shared/utils.ts";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { createLogger } from "../../observability/logger.ts";
+import { getStorageDir } from "../../storage/storage-paths.ts";
 import type { FusionCacheEntry, FusionRequestContext, SubTask, SubagentResult, ComplexityScore } from "./types.ts";
 
 const log = createLogger("routing.fusion.cache");
 const CACHE_SCHEMA_VERSION = 2;
 
 /**
- * Default cache directory.
+ * Default cache directory: `<dataDir>/storage/fusion-cache` so the cache
+ * follows the app's data-dir layout on every platform. The
+ * MODEL_PROXY_FUSION_CACHE_DIR env var overrides it.
  */
-const DEFAULT_CACHE_DIR = join(
-  process.env.XDG_DATA_HOME ?? join(process.env.HOME ?? "/tmp", ".local", "share"),
-  "model-proxy",
-  "fusion-cache",
-);
+function defaultCacheDir(): string {
+  return process.env.MODEL_PROXY_FUSION_CACHE_DIR ?? getStorageDir("fusion-cache");
+}
 
 // ── ReasoningCache ────────────────────────────────────────────────────
 
@@ -32,7 +34,7 @@ export class ReasoningCache {
   private readonly cacheDir: string;
 
   constructor(cacheDir?: string) {
-    this.cacheDir = cacheDir ?? DEFAULT_CACHE_DIR;
+    this.cacheDir = cacheDir ?? defaultCacheDir();
     if (!existsSync(this.cacheDir)) {
       try {
         mkdirSync(this.cacheDir, { recursive: true });
@@ -247,9 +249,7 @@ export class ReasoningCache {
     try {
       const cachePath = join(this.cacheDir, `${key}.json`);
       if (existsSync(cachePath)) {
-        // Use unlinkSync via dynamic import to avoid type issues
-        const fs = require("node:fs");
-        fs.unlinkSync(cachePath);
+        unlinkSync(cachePath);
         log.debug("fusion cache deleted", { key });
       }
     } catch (err) {
@@ -295,9 +295,8 @@ export class ReasoningCache {
     try {
       if (!existsSync(this.cacheDir)) return;
       const files = readdirSync(this.cacheDir).filter((f) => f.endsWith(".json"));
-      const fs = require("node:fs");
       for (const file of files) {
-        fs.unlinkSync(join(this.cacheDir, file));
+        unlinkSync(join(this.cacheDir, file));
       }
       log.info("fusion cache cleared", { count: files.length });
     } catch (err) {
@@ -539,11 +538,3 @@ function stableHash(value: unknown): string {
   return createHash("sha256").update(stableStringify(value)).digest("hex");
 }
 
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, nested]) => nested !== undefined)
-    .sort(([a], [b]) => a.localeCompare(b));
-  return `{${entries.map(([key, nested]) => `${JSON.stringify(key)}:${stableStringify(nested)}`).join(",")}}`;
-}

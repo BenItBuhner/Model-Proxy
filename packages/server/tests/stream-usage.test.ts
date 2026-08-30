@@ -56,9 +56,10 @@ describe("StreamUsageTracker (anthropic)", () => {
       'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":42}}\n\n',
     );
     const result = tracker.finish();
-    expect(result.usage?.promptTokens).toBe(10);
+    expect(result.usage?.promptTokens).toBe(1010);
     expect(result.usage?.cacheReadTokens).toBe(900);
     expect(result.usage?.cacheCreationTokens).toBe(100);
+    expect(result.usage?.totalTokens).toBe(1052);
     expect(result.completionTokens).toBe(42);
     expect(result.completionTokensEstimated).toBe(false);
   });
@@ -73,7 +74,29 @@ describe("StreamUsageTracker (anthropic)", () => {
     );
     const result = tracker.finish();
     expect(result.usage?.cacheReadTokens).toBe(300);
-    expect(result.usage?.promptTokens).toBe(5);
+    expect(result.usage?.promptTokens).toBe(305);
     expect(result.usage?.completionTokens).toBe(7);
+  });
+});
+
+describe("StreamUsageTracker estimation", () => {
+  test("estimates completion tokens from content chars, not framing", () => {
+    const tracker = makeTracker("openai");
+    tracker.ingest('data: {"choices":[{"index":0,"delta":{"content":"12345678"}}]}\n\n');
+    tracker.ingest("data: [DONE]\n\n");
+    const result = tracker.finish();
+    expect(result.usage).toBeUndefined();
+    expect(result.completionTokens).toBe(2);
+    expect(result.completionTokensEstimated).toBe(true);
+  });
+
+  test("counts anthropic text deltas toward the estimate", () => {
+    const tracker = makeTracker("anthropic");
+    tracker.ingest(
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"12345678"}}\n\n',
+    );
+    const result = tracker.finish();
+    expect(result.completionTokens).toBe(2);
+    expect(result.completionTokensEstimated).toBe(true);
   });
 });

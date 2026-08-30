@@ -5,13 +5,16 @@
  * collapsed content arrays) is covered by dedicated test vectors.
  */
 
+import { isObject } from "../shared/utils.ts";
+import {
+  asReasoningEffort,
+  reasoningEffortFromThinking,
+  thinkingFromReasoningEffort,
+} from "@model-proxy/contracts/schemas/reasoning.ts";
+
 const TEXT_BLOCK = "text" as const;
 const TOOL_USE_BLOCK = "tool_use" as const;
 const TOOL_RESULT_BLOCK = "tool_result" as const;
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function jsonDumpsCompact(value: unknown): string {
   try {
@@ -274,6 +277,9 @@ export function anthropicToOpenaiRequest(
     openaiRequest["stop"] = stops.length === 1 ? stops[0] : stops;
   }
 
+  const effort = reasoningEffortFromThinking(anthropicRequest["thinking"]);
+  if (effort !== undefined) openaiRequest["reasoning_effort"] = effort;
+
   return openaiRequest;
 }
 
@@ -388,6 +394,15 @@ export function openaiToAnthropicRequest(
     delete out["tools"];
   } else if (isObject(toolChoice)) {
     out["tool_choice"] = toolChoice;
+  }
+
+  const effort = asReasoningEffort(openaiRequest["reasoning_effort"]);
+  if (effort !== undefined) {
+    const thinking = thinkingFromReasoningEffort(
+      effort,
+      typeof openaiRequest["max_tokens"] === "number" ? openaiRequest["max_tokens"] : undefined,
+    );
+    if (thinking !== undefined) out["thinking"] = thinking;
   }
 
   return out;

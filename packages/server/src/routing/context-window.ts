@@ -6,6 +6,19 @@ import { getUpstreamContextWindow } from "../config/upstream-model-catalog.ts";
 /** System fallback when no upstream, route, or env value is available. */
 export const SYSTEM_DEFAULT_CONTEXT_WINDOW = 128_000;
 
+/** Context window declared by a logical model's own config (primary route
+ * override first, then the model-level value). Used by the fusion pipeline
+ * to budget subagent and synthesis contexts. */
+export function resolveDeclaredContextWindow(modelRouting: string): number {
+  try {
+    const cfg = modelConfigLoader.loadConfig(modelRouting);
+    const primary = cfg.model_routings[0];
+    return primary?.context_window ?? cfg.context_window ?? SYSTEM_DEFAULT_CONTEXT_WINDOW;
+  } catch {
+    return SYSTEM_DEFAULT_CONTEXT_WINDOW;
+  }
+}
+
 function envContextWindow(): number | undefined {
   const raw = process.env["DEFAULT_CONTEXT_WINDOW"];
   if (raw === undefined) return undefined;

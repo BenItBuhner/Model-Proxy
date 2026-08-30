@@ -1,3 +1,4 @@
+import { isObject } from "../../shared/utils.ts";
 import { createLogger } from "../../observability/logger.ts";
 import { emit, nowIso } from "../../observability/request-context.ts";
 import type { Principal } from "../../storage/identity-store.ts";
@@ -18,9 +19,6 @@ import {
 import type { EnforceToolCallConfig } from "@model-proxy/contracts/schemas/enforce.ts";
 import { modelConfigLoader } from "../../config/model-loader.ts";
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function contentBecameNull(
   response: Record<string, unknown>,

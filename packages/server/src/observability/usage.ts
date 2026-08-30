@@ -39,11 +39,18 @@ export function normalizeUsageObject(
 ): UsageSnapshot {
   const out = emptyUsageSnapshot();
   if (protocol === "anthropic") {
-    out.promptTokens = numberField(usage, "input_tokens");
-    out.completionTokens = numberField(usage, "output_tokens");
+    // Anthropic reports uncached input separately from cache reads/writes;
+    // promptTokens is normalized to the full prompt (OpenAI semantics) so
+    // totals and cost math stay comparable across providers.
+    const inputTokens = numberField(usage, "input_tokens");
     out.cacheReadTokens = numberField(usage, "cache_read_input_tokens");
     out.cacheCreationTokens = numberField(usage, "cache_creation_input_tokens");
     out.cachedTokens = out.cacheReadTokens;
+    out.promptTokens =
+      inputTokens === undefined
+        ? undefined
+        : inputTokens + (out.cacheReadTokens ?? 0) + (out.cacheCreationTokens ?? 0);
+    out.completionTokens = numberField(usage, "output_tokens");
   } else if (protocol === "responses") {
     out.promptTokens = numberField(usage, "input_tokens");
     out.completionTokens = numberField(usage, "output_tokens");

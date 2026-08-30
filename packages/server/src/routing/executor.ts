@@ -31,6 +31,8 @@ import {
   RouteExecutionError,
 } from "../providers/errors.ts";
 import { providerRegistry } from "../providers/registry.ts";
+import { isObject } from "../shared/utils.ts";
+import { asReasoningEffort } from "@model-proxy/contracts/schemas/reasoning.ts";
 import type { ResolvedRoute } from "@model-proxy/contracts/schemas/routing.ts";
 
 const log = createLogger("routing.executor");
@@ -57,6 +59,9 @@ function buildContext(
   if (route.extraHeaders !== undefined) ctx.extraHeaders = route.extraHeaders;
   if (route.bufferPartialToolCalls !== undefined) {
     ctx.bufferPartialToolCalls = route.bufferPartialToolCalls;
+  }
+  if (route.smoothStreaming === true) {
+    ctx.smoothStreaming = true;
   }
   return ctx;
 }
@@ -87,6 +92,7 @@ function openaiArgsFromRequest(
     parallel_tool_calls: request["parallel_tool_calls"] as boolean | undefined,
     response_format: request["response_format"],
     reasoning: request["reasoning"],
+    reasoning_effort: request["reasoning_effort"] as string | undefined,
     chat_template_kwargs: request["chat_template_kwargs"] as
       | Record<string, unknown>
       | undefined,
@@ -111,6 +117,7 @@ function anthropicArgsFromRequest(
     stop_sequences: request["stop_sequences"] as string[] | undefined,
     tools: request["tools"] as unknown[] | undefined,
     tool_choice: request["tool_choice"],
+    thinking: request["thinking"],
   };
 }
 
@@ -188,6 +195,20 @@ function openaiToResponsesRequest(request: Record<string, unknown>): Record<stri
   if (request["tool_choice"] !== undefined) responses["tool_choice"] = request["tool_choice"];
   if (request["parallel_tool_calls"] !== undefined) responses["parallel_tool_calls"] = request["parallel_tool_calls"];
   if (request["response_format"] !== undefined) responses["text"] = { format: request["response_format"] };
+  // The Responses API only understands `effort`/`summary` inside `reasoning`;
+  // forwarding chat-style objects verbatim (e.g. OpenRouter's `max_tokens`)
+  // would 400 upstream, so whitelist the known keys.
+  const reasoningObject = isObject(request["reasoning"]) ? request["reasoning"] : undefined;
+  const reasoningEffort =
+    asReasoningEffort(reasoningObject?.["effort"]) ?? asReasoningEffort(request["reasoning_effort"]);
+  const reasoningSummary =
+    typeof reasoningObject?.["summary"] === "string" ? reasoningObject["summary"] : undefined;
+  if (reasoningEffort !== undefined || reasoningSummary !== undefined) {
+    responses["reasoning"] = {
+      ...(reasoningEffort !== undefined ? { effort: reasoningEffort } : {}),
+      ...(reasoningSummary !== undefined ? { summary: reasoningSummary } : {}),
+    };
+  }
 
   const maxTokens = request["max_tokens"] ?? request["max_completion_tokens"];
   if (typeof maxTokens === "number") responses["max_output_tokens"] = maxTokens;
@@ -315,8 +336,18 @@ function responsesToOpenaiResponse(response: Record<string, unknown>, modelName:
       prompt_tokens: usage?.["input_tokens"] ?? 0,
       completion_tokens: usage?.["output_tokens"] ?? 0,
       total_tokens: usage?.["total_tokens"] ?? 0,
+      ...(cachedTokensFromResponsesUsage(usage) !== undefined
+        ? { prompt_tokens_details: { cached_tokens: cachedTokensFromResponsesUsage(usage) } }
+        : {}),
     },
   };
+}
+
+function cachedTokensFromResponsesUsage(usage: Record<string, unknown> | undefined): number | undefined {
+  const details = usage?.["input_tokens_details"];
+  if (typeof details !== "object" || details === null) return undefined;
+  const cached = (details as Record<string, unknown>)["cached_tokens"];
+  return typeof cached === "number" && Number.isFinite(cached) ? cached : undefined;
 }
 
 function normalizeConvertedResponse(

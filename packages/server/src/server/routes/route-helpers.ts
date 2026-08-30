@@ -43,3 +43,24 @@ export function completionPersistenceForRequest(
   if (p === undefined || p.isOwner) return modelOverride;
   return p.completionLoggingEnabled === true;
 }
+
+export function fusionUsageFromTrace(trace: Record<string, unknown> | undefined): {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+} | undefined {
+  const costs = trace?.["costs"];
+  if (!Array.isArray(costs) || costs.length === 0) return undefined;
+  let promptTokens = 0;
+  let completionTokens = 0;
+  let totalTokens = 0;
+  for (const entry of costs) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const cost = entry as Record<string, unknown>;
+    promptTokens += typeof cost["promptTokens"] === "number" ? cost["promptTokens"] : 0;
+    completionTokens += typeof cost["completionTokens"] === "number" ? cost["completionTokens"] : 0;
+    totalTokens += typeof cost["totalTokens"] === "number" ? cost["totalTokens"] : 0;
+  }
+  if (promptTokens <= 0 && completionTokens <= 0 && totalTokens <= 0) return undefined;
+  return { promptTokens, completionTokens, totalTokens };
+}

@@ -66,29 +66,32 @@ export function setUserLimits(userId: string, limits: UserLimits): UserLimits {
 
 export function reserveRequest(p: Principal | undefined, estimatedTokens = 0): LimitDecision {
   if (p === undefined || p.ownerBypass || p.isOwner || p.userId === undefined) return { allowed: true };
-  const limits = getUserLimits(p.userId);
+  const userId = p.userId;
+  const limits = getUserLimits(userId);
   const now = new Date();
   const minute = bucketStart(now, "minute");
   const day = bucketStart(now, "day");
   const db = getOperationalDb();
-  const minuteCount = getBucketCount(p.userId, "minute", minute, "request_count");
-  if (limits.requestsPerMinute !== undefined && minuteCount >= limits.requestsPerMinute) {
-    return { allowed: false, reason: "Request-per-minute limit exceeded.", limitType: "requests_per_minute" };
-  }
-  const dayCount = getBucketCount(p.userId, "day", day, "request_count");
-  if (limits.requestsPerDay !== undefined && dayCount >= limits.requestsPerDay) {
-    return { allowed: false, reason: "Request-per-day limit exceeded.", limitType: "requests_per_day" };
-  }
-  const dayTokens = getBucketCount(p.userId, "day", day, "token_count");
-  if (limits.tokensPerDay !== undefined && dayTokens + estimatedTokens > limits.tokensPerDay) {
-    return { allowed: false, reason: "Token-per-day limit exceeded.", limitType: "tokens_per_day" };
-  }
-  const tx = db.transaction(() => {
-    incrementBucket(p.userId!, "minute", minute, { requests: 1 });
-    incrementBucket(p.userId!, "day", day, { requests: 1 });
+  // Check-and-increment runs inside one transaction so concurrent requests
+  // cannot race past the configured limits.
+  const decision = db.transaction((): LimitDecision => {
+    const minuteCount = getBucketCount(userId, "minute", minute, "request_count");
+    if (limits.requestsPerMinute !== undefined && minuteCount >= limits.requestsPerMinute) {
+      return { allowed: false, reason: "Request-per-minute limit exceeded.", limitType: "requests_per_minute" };
+    }
+    const dayCount = getBucketCount(userId, "day", day, "request_count");
+    if (limits.requestsPerDay !== undefined && dayCount >= limits.requestsPerDay) {
+      return { allowed: false, reason: "Request-per-day limit exceeded.", limitType: "requests_per_day" };
+    }
+    const dayTokens = getBucketCount(userId, "day", day, "token_count");
+    if (limits.tokensPerDay !== undefined && dayTokens + estimatedTokens > limits.tokensPerDay) {
+      return { allowed: false, reason: "Token-per-day limit exceeded.", limitType: "tokens_per_day" };
+    }
+    incrementBucket(userId, "minute", minute, { requests: 1 });
+    incrementBucket(userId, "day", day, { requests: 1 });
+    return { allowed: true };
   });
-  tx();
-  return { allowed: true };
+  return decision();
 }
 
 export function commitRequestUsage(record: RequestLogRecord): void {

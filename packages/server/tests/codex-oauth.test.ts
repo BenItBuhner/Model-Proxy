@@ -1,4 +1,5 @@
-import { rmSync } from "node:fs";
+import { rmWithRetry } from "./support.ts";
+
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,7 +23,7 @@ let server: ReturnType<typeof Bun.serve> | undefined;
 beforeEach(() => {
   setStorageRootForTests(root);
   closeOperationalDbForTests();
-  rmSync(root, { recursive: true, force: true });
+  rmWithRetry(root, { recursive: true, force: true });
 });
 
 afterEach(() => {
@@ -32,7 +33,7 @@ afterEach(() => {
   delete process.env.CODEX_OAUTH_ISSUER;
   closeOperationalDbForTests();
   setStorageRootForTests(undefined);
-  rmSync(root, { recursive: true, force: true });
+  rmWithRetry(root, { recursive: true, force: true });
 });
 
 describe("Codex OAuth", () => {

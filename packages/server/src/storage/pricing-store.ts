@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { PricingConfig } from "@model-proxy/contracts/schemas/pricing.ts";
@@ -20,19 +20,48 @@ export const BUILTIN_DEFAULT_PRICING: PricingConfig = {
   },
 };
 
+let cachedSettings: AnalyticsPricingSettings | undefined;
+let cachedSettingsPath: string | undefined;
+let cachedSignature: string | undefined;
+
+/** mtime+size stamp so hand-edits (or fixes to an invalid file) are picked up
+ * without a restart. Undefined when the file is missing. */
+function fileSignature(path: string): string | undefined {
+  try {
+    const stat = statSync(path);
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return undefined;
+  }
+}
+
 export function readAnalyticsPricingSettings(): AnalyticsPricingSettings {
   const path = pricingPath();
-  if (!existsSync(path)) return { default_pricing: BUILTIN_DEFAULT_PRICING };
+  const signature = fileSignature(path);
+  if (cachedSettings !== undefined && cachedSettingsPath === path && cachedSignature === signature) {
+    return cachedSettings;
+  }
+  cachedSettingsPath = path;
+  cachedSignature = signature;
+  if (signature === undefined) {
+    cachedSettings = { default_pricing: BUILTIN_DEFAULT_PRICING };
+    return cachedSettings;
+  }
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
     const defaultPricing = parsed["default_pricing"];
     if (defaultPricing !== undefined) {
       const result = PricingConfigSchema.safeParse(defaultPricing);
-      if (result.success) return { default_pricing: result.data };
+      if (result.success) {
+        cachedSettings = { default_pricing: result.data };
+        return cachedSettings;
+      }
     }
-    return { default_pricing: BUILTIN_DEFAULT_PRICING };
+    cachedSettings = { default_pricing: BUILTIN_DEFAULT_PRICING };
+    return cachedSettings;
   } catch {
-    return { default_pricing: BUILTIN_DEFAULT_PRICING };
+    cachedSettings = { default_pricing: BUILTIN_DEFAULT_PRICING };
+    return cachedSettings;
   }
 }
 
@@ -41,7 +70,11 @@ export function writeAnalyticsPricingSettings(settings: AnalyticsPricingSettings
   if (settings.default_pricing !== undefined) {
     normalized.default_pricing = PricingConfigSchema.parse(settings.default_pricing);
   }
-  writeFileSync(pricingPath(), JSON.stringify(normalized, null, 2) + "\n", "utf8");
+  const path = pricingPath();
+  writeFileSync(path, JSON.stringify(normalized, null, 2) + "\n", "utf8");
+  cachedSettings = normalized;
+  cachedSettingsPath = path;
+  cachedSignature = fileSignature(path);
   return normalized;
 }
 

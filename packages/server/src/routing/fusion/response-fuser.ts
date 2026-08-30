@@ -1,8 +1,10 @@
+import { usageSnapshotFromCounts } from "../../shared/usage-snapshot.ts";
 import { createLogger } from "../../observability/logger.ts";
-import { modelConfigLoader } from "../../config/model-loader.ts";
 import { FallbackRouter } from "../fallback.ts";
 import { SYSTEM_DEFAULT_CONTEXT_WINDOW } from "../context-window.ts";
 import { resolvePricing, calculateCosts } from "../../observability/pricing.ts";
+import { resolveDeclaredContextWindow } from "../context-window.ts";
+import { modelConfigLoader } from "../../config/model-loader.ts";
 import type { FusionCostEntry, FusionRequestContext, FusionStep, SubagentResult, FusionResult } from "./types.ts";
 import {
   ReasoningSummarizer,
@@ -59,20 +61,6 @@ function estimateMessageTokens(messages: unknown[]): number {
   return total;
 }
 
-function usageSnapshotFromCounts(counts: {
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-}) {
-  return {
-    ...counts,
-    promptTokensEstimated: true,
-    completionTokensEstimated: true,
-    cacheReadTokens: undefined,
-    cacheCreationTokens: undefined,
-    cachedTokens: undefined,
-  };
-}
 
 /**
  * ResponseFuser (Layer 5)
@@ -820,7 +808,7 @@ Your job:
   private synthesisContextBudget(ctx: FusionRequestContext, modelRouting: string): SynthesisContextBudget {
     const contextWindow = Math.max(
       4096,
-      Math.min(ctx.fusionConfig.context_window, this.resolveDeclaredContextWindow(modelRouting)),
+      Math.min(ctx.fusionConfig.context_window, resolveDeclaredContextWindow(modelRouting)),
     );
     const outputBudgetTokens = Math.min(
       FUSER_MAX_TOKENS,
@@ -833,15 +821,6 @@ Your job:
     };
   }
 
-  private resolveDeclaredContextWindow(modelRouting: string): number {
-    try {
-      const cfg = modelConfigLoader.loadConfig(modelRouting);
-      const primary = cfg.model_routings[0];
-      return primary?.context_window ?? cfg.context_window ?? SYSTEM_DEFAULT_CONTEXT_WINDOW;
-    } catch {
-      return SYSTEM_DEFAULT_CONTEXT_WINDOW;
-    }
-  }
 
   private buildSynthesisContextPack(
     originalMessages: unknown[],

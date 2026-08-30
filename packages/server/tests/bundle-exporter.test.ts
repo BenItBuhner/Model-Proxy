@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { rmWithRetry } from "./support.ts";
+import { mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -29,7 +30,7 @@ afterAll(() => {
   setStorageRootForTests(undefined);
   setPrimaryConfigDirForTests(undefined);
   try {
-    rmSync(tmpRoot, { recursive: true, force: true });
+    rmWithRetry(tmpRoot, { recursive: true, force: true });
   } catch {
     // Windows tolerance.
   }

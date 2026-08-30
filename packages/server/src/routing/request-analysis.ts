@@ -1,3 +1,4 @@
+import { isObject } from "../shared/utils.ts";
 import { estimateRequestTokens } from "../server/request-log.ts";
 
 export interface RoutingRequestAnalysis {
@@ -5,9 +6,6 @@ export interface RoutingRequestAnalysis {
   estimatedPromptTokens: number | undefined;
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isImageLikeBlock(value: Record<string, unknown>): boolean {
   const type = value["type"];

@@ -1,4 +1,6 @@
-import type { Context } from "hono";
+import { readJsonObject } from "../read-json-object.ts";
+import { isSameOriginMutation } from "../same-origin.ts";
+import { matchesLogFilters } from "../../shared/log-filters.ts";
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 
@@ -71,7 +73,7 @@ import {
   setUserEntitlements,
   type EntitlementResourceType,
 } from "../../storage/policy-store.ts";
-import { activeRequestCount, recentRequestLogs } from "../request-log.ts";
+import { activeRequestCount, activeRequestCountForUser, recentRequestLogs } from "../request-log.ts";
 import {
   authenticateRequest,
   isAuthConfigured,
@@ -111,33 +113,6 @@ function filtersFromQuery(query: (name: string) => string | undefined): RequestL
   return filters;
 }
 
-function runtimeLogMatchesFilters(
-  row: ReturnType<typeof recentRequestLogs>[number],
-  filters: RequestLogFilters,
-): boolean {
-  if (filters.provider !== undefined && row.resolvedProvider !== filters.provider) return false;
-  if (filters.model !== undefined && row.resolvedModel !== filters.model && row.requestedModel !== filters.model) return false;
-  if (filters.apiKeyEnvVar !== undefined && row.apiKeyEnvVar !== filters.apiKeyEnvVar) return false;
-  if (filters.state !== undefined && row.state !== filters.state) return false;
-  if (filters.cacheHit !== undefined && row.isCacheHit !== filters.cacheHit) return false;
-  if (filters.status === "ok" && (row.responseStatus === undefined || row.responseStatus >= 400)) return false;
-  if (filters.status === "error" && (row.responseStatus !== undefined && row.responseStatus < 400)) return false;
-  if (filters.status === "running" && row.state !== "running") return false;
-  if (filters.since !== undefined && Date.parse(row.timestamp) < Date.parse(filters.since)) return false;
-  if (filters.until !== undefined && Date.parse(row.timestamp) > Date.parse(filters.until)) return false;
-  if (filters.search !== undefined && filters.search.trim() !== "") {
-    const haystack = [
-      row.requestId,
-      row.requestedModel,
-      row.resolvedProvider,
-      row.resolvedModel,
-      row.apiKeyEnvVar,
-      row.errorType,
-    ].join(" ").toLowerCase();
-    if (!haystack.includes(filters.search.toLowerCase())) return false;
-  }
-  return true;
-}
 
 function logWithDerivedCosts(
   row: ReturnType<typeof recentRequestLogs>[number],
@@ -265,7 +240,7 @@ export function createAdminRoutes(): Hono {
         if (inviteLimits && Object.keys(inviteLimits).length > 0) {
           setUserLimits(user.id, limitsFromBody(inviteLimits));
         }
-        const modelAccess = ["glm-5.2", "glm-5.2-alt", "gemma-4-31b", "minimax-m3-free", "kimi-k2.7-code"];
+        const modelAccess = listModelConfigs().map((model) => model.logical_name);
         const entitlements = modelAccess.flatMap((model) => [
           { resourceType: "model" as EntitlementResourceType, resourceId: model, allowed: true },
           { resourceType: "fusion_model" as EntitlementResourceType, resourceId: model, allowed: true },
@@ -495,7 +470,7 @@ export function createAdminRoutes(): Hono {
     const filters: RequestLogFilters = { ...filtersFromQuery((name) => c.req.query(name)), userId: p.userId };
     return c.json({
       filters_applied: filters,
-      summary: getAnalyticsSummary(filters, 0),
+      summary: getAnalyticsSummary(filters, activeRequestCountForUser(p.userId)),
     });
   });
 
@@ -530,7 +505,7 @@ export function createAdminRoutes(): Hono {
     const effectiveOffset = Number.isFinite(offset) && offset !== undefined && offset > 0 ? offset : 0;
     const filters = filtersFromQuery((name) => c.req.query(name));
     const filtered = recentRequestLogs(Number.MAX_SAFE_INTEGER, 0)
-      .filter((record) => runtimeLogMatchesFilters(record, filters));
+      .filter((record) => matchesLogFilters(record, filters));
     const completed = filtered.filter((record) => record.state === "completed").length;
     const total = filtered.length;
     const records = filtered
@@ -977,16 +952,6 @@ function setSessionCookie(c: Parameters<typeof setCookie>[0], token: string): vo
   });
 }
 
-async function readJsonObject(c: Context): Promise<Record<string, unknown>> {
-  try {
-    const body = await c.req.json();
-    return typeof body === "object" && body !== null && !Array.isArray(body)
-      ? body as Record<string, unknown>
-      : {};
-  } catch {
-    return {};
-  }
-}
 
 function isValidSignupInput(email: string, password: string): boolean {
   return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) && password.length >= 8;
@@ -1020,69 +985,5 @@ function numberField(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-function isSameOriginMutation(c: Context): boolean {
-  if (c.req.method === "GET" || c.req.method === "HEAD" || c.req.method === "OPTIONS") return true;
-  const origin = c.req.header("origin");
-  if (origin === undefined) return true;
-  if (requestOrigins(c).has(normalizeOrigin(origin))) return true;
-  return false;
-}
 
-function requestOrigins(c: Context): Set<string> {
-  const origins = new Set<string>();
-  try {
-    origins.add(new URL(c.req.url).origin);
-  } catch {
-    // Ignore malformed request URLs; forwarded headers may still be usable.
-  }
-  for (const origin of configuredCorsOrigins()) {
-    origins.add(origin);
-  }
 
-  const hosts = headerValues(c.req.header("x-forwarded-host") ?? c.req.header("host"));
-  const protos = headerValues(c.req.header("x-forwarded-proto"));
-  const inferredProto = inferProtocol(c);
-  const protoCandidates = protos.length > 0 ? protos : inferredProto !== undefined ? [inferredProto] : [];
-  for (const host of hosts) {
-    for (const proto of protoCandidates) {
-      origins.add(normalizeOrigin(`${proto}://${host}`));
-    }
-    // TLS often terminates before the app, so the backend may see http while
-    // browser mutations carry an https Origin. Trust https for forwarded/public
-    // hosts; arbitrary hosts are still constrained by the browser Origin value.
-    origins.add(normalizeOrigin(`https://${host}`));
-  }
-  return origins;
-}
-
-function inferProtocol(c: Context): string | undefined {
-  const url = c.req.url;
-  if (url.startsWith("https://")) return "https";
-  if (url.startsWith("http://")) return "http";
-  return undefined;
-}
-
-function configuredCorsOrigins(): string[] {
-  const raw = process.env.CORS_ORIGINS?.trim();
-  if (raw === undefined || raw.length === 0 || raw === "*") return [];
-  return raw
-    .split(",")
-    .map((origin) => normalizeOrigin(origin))
-    .filter((origin) => origin.length > 0);
-}
-
-function headerValues(value: string | undefined): string[] {
-  if (value === undefined) return [];
-  return value
-    .split(",")
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
-}
-
-function normalizeOrigin(value: string): string {
-  try {
-    return new URL(value.trim()).origin;
-  } catch {
-    return value.trim().replace(/\/+$/, "");
-  }
-}

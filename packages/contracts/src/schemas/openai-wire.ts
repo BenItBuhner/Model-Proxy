@@ -79,6 +79,11 @@ export const OpenAIChatCompletionRequest = z
     tools: z.array(OpenAIToolDefinition).optional(),
     tool_choice: z.unknown().optional(),
     response_format: z.record(z.unknown()).optional(),
+    // Deliberately looser than ReasoningEffortSchema: upstreams accept
+    // vocabularies beyond minimal/low/medium/high (e.g. "none", "xhigh"), so
+    // the proxy passes unknown values through verbatim. Conversion paths
+    // narrow via asReasoningEffort and ignore values they don't recognize.
+    reasoning_effort: z.string().optional(),
     n: z.number().int().positive().optional(),
   })
   .passthrough();

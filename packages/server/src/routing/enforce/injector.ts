@@ -1,8 +1,6 @@
+import { isObject } from "../../shared/utils.ts";
 import type { EnforceProtocol } from "./types.ts";
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /**
  * Appends guidance to the request's system prompt. NEVER mutates the input

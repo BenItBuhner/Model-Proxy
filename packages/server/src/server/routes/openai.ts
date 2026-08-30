@@ -1,3 +1,4 @@
+import { parsePositiveInt } from "../../shared/utils.ts";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -58,6 +59,7 @@ import type { FusionRequestContext } from "../../routing/fusion/types.ts";
 import {
   buildUpstreamExtraHeaders,
   completionPersistenceForRequest,
+  fusionUsageFromTrace,
   shouldPersistCompletion,
 } from "./route-helpers.ts";
 import { principal, requireAuth } from "../auth.ts";
@@ -87,11 +89,6 @@ function routingErrorStatus(err: RoutingError): {
   return { status: 503, type: "service_unavailable" };
 }
 
-function parsePositiveInt(value: string | undefined): number | undefined {
-  if (value === undefined || value.trim() === "") return undefined;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
 
 /**
  * Build the full chat-message array that should be stored for a response:
@@ -187,6 +184,41 @@ function completedResponseFromSseChunk(chunk: string): Record<string, unknown> |
     }
   }
   return undefined;
+}
+
+function clientRequestedUsageChunks(request: Record<string, unknown>): boolean {
+  const options = request["stream_options"];
+  if (typeof options !== "object" || options === null) return false;
+  return (options as Record<string, unknown>)["include_usage"] === true;
+}
+
+/**
+ * True only when every data event in the chunk is a usage-only chunk (usage
+ * object present, no choices) and nothing else - [DONE], content deltas, or
+ * non-JSON payloads - rides along. Skipping is all-or-nothing per enqueued
+ * chunk, so anything that must reach the client forces a forward.
+ */
+function isUsageOnlySseChunk(chunk: string): boolean {
+  let usageOnlyEvents = 0;
+  for (const line of chunk.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const payload = trimmed.slice(5).trim();
+    if (payload.length === 0) continue;
+    if (payload === "[DONE]") return false;
+    try {
+      const parsed = JSON.parse(payload) as Record<string, unknown>;
+      if (typeof parsed !== "object" || parsed === null) return false;
+      if (typeof parsed["usage"] !== "object" || parsed["usage"] === null) return false;
+      const choices = parsed["choices"];
+      if (Array.isArray(choices) && choices.length > 0) return false;
+      usageOnlyEvents += 1;
+    } catch {
+      // Not JSON - forward untouched.
+      return false;
+    }
+  }
+  return usageOnlyEvents > 0;
 }
 
 function responseOwnerId(p: ReturnType<typeof principal>): string | undefined {
@@ -391,6 +423,17 @@ async function handleResponsesNative(c: Context, endpointPath: string): Promise<
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         const encoder = new TextEncoder();
+        let clientGone = false;
+        const safeEnqueue = (text: string): boolean => {
+          if (clientGone) return false;
+          try {
+            controller.enqueue(encoder.encode(text));
+            return true;
+          } catch {
+            clientGone = true;
+            return false;
+          }
+        };
         let completed: Record<string, unknown> | undefined;
         const started = performance.now();
         try {
@@ -404,9 +447,8 @@ async function handleResponsesNative(c: Context, endpointPath: string): Promise<
           });
           for await (const chunk of generator) {
             completed = completedResponseFromSseChunk(chunk) ?? completed;
-            const bytes = encoder.encode(chunk);
-            controller.enqueue(bytes);
-            recordRequestProgress({ requestId, streamBytes: bytes.byteLength, streamChunkCount: 1 });
+            if (!safeEnqueue(chunk)) break;
+            recordRequestProgress({ requestId, streamBytes: Buffer.byteLength(chunk, "utf8"), streamChunkCount: 1 });
           }
           if (storeEnabled && completed !== undefined && typeof completed["id"] === "string") {
             const chatRequest = responsesRequestToChat(requestDict);
@@ -423,7 +465,11 @@ async function handleResponsesNative(c: Context, endpointPath: string): Promise<
               store: true,
             });
           }
-          controller.close();
+          try {
+            controller.close();
+          } catch {
+            // stream already errored/cancelled
+          }
           const totalMs = Math.round(performance.now() - started);
           // Pass the final `response.completed` payload so analytics record
           // real usage (including cached input tokens) instead of estimates.
@@ -437,8 +483,12 @@ async function handleResponsesNative(c: Context, endpointPath: string): Promise<
         } catch (err) {
           const status = err instanceof RoutingError ? routingErrorStatus(err).status : err instanceof RouteExecutionError ? (err.statusCode ?? 502) : 500;
           const message = err instanceof Error ? err.message : String(err);
-          controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ type: "error", error: { message } })}\n\n`));
-          controller.close();
+          safeEnqueue(`event: error\ndata: ${JSON.stringify({ type: "error", error: { message } })}\n\n`);
+          try {
+            controller.close();
+          } catch {
+            // stream already errored/cancelled
+          }
           const totalMs = Math.round(performance.now() - started);
           recordRequestFinish({ requestId, responseStatus: status, responseTimeMs: totalMs, errorMessage: message, errorType: err instanceof Error ? err.name : "Unknown" });
           emit({ type: "request.finished", at: nowIso(), status, totalMs, errorMessage: message, errorType: err instanceof Error ? err.name : "Unknown" });
@@ -511,9 +561,10 @@ async function handleResponsesFusion(
   isStream: boolean,
   endpointPath: string,
 ): Promise<Response> {
+  const chatRequest = responsesRequestToChat(requestData);
   const fusionResponse = await handleFusionRequest(
     c,
-    responsesRequestToChat(requestData),
+    chatRequest,
     model,
     modelConfig,
     isStream,
@@ -534,7 +585,6 @@ async function handleResponsesFusion(
       requestTools: Array.isArray(requestData["tools"]) ? requestData["tools"] : undefined,
     });
     if (requestData["store"] !== false && typeof response["id"] === "string") {
-      const chatRequest = responsesRequestToChat(requestData);
       getGlobalResponseStore().set({
         id: response["id"] as string,
         ownerId: responseOwnerId(principal(c)),
@@ -561,8 +611,19 @@ async function handleResponsesFusion(
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       let buffer = "";
+      let clientGone = false;
+      const safeEnqueue = (text: string): boolean => {
+        if (clientGone) return false;
+        try {
+          controller.enqueue(encoder.encode(text));
+          return true;
+        } catch {
+          clientGone = true;
+          return false;
+        }
+      };
       try {
-        while (true) {
+        loop: while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
@@ -570,25 +631,26 @@ async function handleResponsesFusion(
           buffer = chunks.pop() ?? "";
           for (const chunk of chunks) {
             for (const event of chatStreamChunkToResponsesEvents(chunk, state)) {
-              controller.enqueue(encoder.encode(event));
+              if (!safeEnqueue(event)) break loop;
             }
           }
         }
         buffer += decoder.decode();
-        if (buffer.length > 0) {
+        if (!clientGone && buffer.length > 0) {
           for (const event of chatStreamChunkToResponsesEvents(buffer, state)) {
-            controller.enqueue(encoder.encode(event));
+            if (!safeEnqueue(event)) break;
           }
         }
-        for (const event of finalizeResponsesStream(state)) {
-          controller.enqueue(encoder.encode(event));
+        if (!clientGone) {
+          for (const event of finalizeResponsesStream(state)) {
+            safeEnqueue(event);
+          }
         }
         const response = chatResponseToResponses(responsesStreamStateToChatResponse(state), {
           model,
           requestTools: Array.isArray(requestData["tools"]) ? requestData["tools"] : undefined,
         });
         if (requestData["store"] !== false && typeof response["id"] === "string") {
-          const chatRequest = responsesRequestToChat(requestData);
           getGlobalResponseStore().set({
             id: response["id"] as string,
             ownerId: responseOwnerId(principal(c)),
@@ -601,12 +663,29 @@ async function handleResponsesFusion(
             store: true,
           });
         }
-        controller.close();
+        try {
+          controller.close();
+        } catch {
+          // stream already errored/cancelled
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ type: "error", error: { message } })}\n\n`));
-        controller.close();
+        safeEnqueue(`event: error\ndata: ${JSON.stringify({ type: "error", error: { message } })}\n\n`);
+        try {
+          controller.close();
+        } catch {
+          // stream already errored/cancelled
+        }
       } finally {
+        if (clientGone) {
+          // Stop the upstream fusion pipeline instead of leaving the
+          // connection generating into a stream nobody reads.
+          try {
+            await reader.cancel();
+          } catch {
+            // upstream already terminated
+          }
+        }
         reader.releaseLock();
       }
     },
@@ -745,17 +824,28 @@ async function handleChatCompletions(
   }
   const extraHeaders = buildUpstreamExtraHeaders(c);
   const captureStreamPayload = shouldPersistCompletion(persistCompletions);
+  const clientWantsUsageChunks = clientRequestedUsageChunks(requestDict);
 
   if (isStream) {
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         const encoder = new TextEncoder();
-        const enqueueHeartbeat = () => {
+        // If the client disconnects, controller.enqueue throws. Every write
+        // goes through this guard so a mid-stream disconnect can never skip
+        // the request-finish accounting below.
+        let clientGone = false;
+        const safeEnqueue = (text: string): boolean => {
+          if (clientGone) return false;
           try {
-            controller.enqueue(encoder.encode(`: keep-alive ${Date.now()}\n\n`));
+            controller.enqueue(encoder.encode(text));
+            return true;
           } catch {
-            // The stream may already be closed or cancelled.
+            clientGone = true;
+            return false;
           }
+        };
+        const enqueueHeartbeat = () => {
+          safeEnqueue(`: keep-alive ${Date.now()}\n\n`);
         };
         // Flush immediately so Cloudflare sees response bytes while slow
         // upstreams are still processing the prompt or cycling fallbacks.
@@ -800,15 +890,19 @@ async function handleChatCompletions(
                   });
               for await (const chunk of generator) {
                 streamUsage.ingest(chunk);
-                const encoded = encoder.encode(chunk);
-                controller.enqueue(encoded);
+                if (!clientWantsUsageChunks && isUsageOnlySseChunk(chunk)) continue;
+                if (!safeEnqueue(chunk)) break;
                 recordRequestProgress({
                   requestId,
-                  streamBytes: encoded.byteLength,
+                  streamBytes: Buffer.byteLength(chunk, "utf8"),
                   streamChunkCount: 1,
                 });
               }
-              controller.close();
+              try {
+                controller.close();
+              } catch {
+                // stream already errored/cancelled
+              }
               const totalMs = Math.round(performance.now() - startedAt);
               emit({ type: "request.finished", at: nowIso(), status: 200, totalMs });
               const usageResult = streamUsage.finish();
@@ -828,9 +922,13 @@ async function handleChatCompletions(
               const message =
                 err instanceof Error ? err.message : `Streaming error: ${String(err)}`;
               const errorPayload = formatOpenAIError(status, message, type);
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorPayload)}\n\n`));
-              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-              controller.close();
+              safeEnqueue(`data: ${JSON.stringify(errorPayload)}\n\n`);
+              safeEnqueue("data: [DONE]\n\n");
+              try {
+                controller.close();
+              } catch {
+                // stream already errored/cancelled
+              }
               const totalMs = Math.round(performance.now() - startedAt);
               const errorType = err instanceof Error ? err.name : "Unknown";
               emit({
@@ -1037,8 +1135,8 @@ async function handleFusionRequest(
     );
   }
 
-  const { FusionRouter } = await import("../../routing/fusion/fusion-router.ts");
-  const fusionRouter = new FusionRouter();
+  const { getSharedFusionRouter } = await import("../../routing/fusion/fusion-router.ts");
+  const fusionRouter = getSharedFusionRouter();
   const messages = (requestDict["messages"] as unknown[]) ?? [];
   const extraHeaders = buildUpstreamExtraHeaders(c);
 
@@ -1147,11 +1245,19 @@ async function handleFusionRequest(
             finish_reason: result.finishReason || "stop",
           },
         ],
-        usage: result.usage ?? {
-          prompt_tokens: estimateRequestTokens(requestDict) ?? 0,
-          completion_tokens: result.content ? Math.ceil(result.content.length / 4) : (result.toolCalls ? String(result.toolCalls).length / 4 : 0),
-          total_tokens: (estimateRequestTokens(requestDict) ?? 0) + (result.content ? Math.ceil(result.content.length / 4) : (result.toolCalls ? String(result.toolCalls).length / 4 : 0)),
-        },
+        usage: result.usage ?? (() => {
+          const promptTokens = estimateRequestTokens(requestDict) ?? 0;
+          const completionTokens = result.content
+            ? Math.ceil(result.content.length / 4)
+            : result.toolCalls
+              ? Math.ceil(JSON.stringify(result.toolCalls).length / 4)
+              : 0;
+          return {
+            prompt_tokens: promptTokens,
+            completion_tokens: completionTokens,
+            total_tokens: promptTokens + completionTokens,
+          };
+        })(),
       };
 
       // Attach the full fusion trace for analytics/observability
@@ -1323,12 +1429,22 @@ async function handleFusionStream(
         latencyMs: responseTimeMs,
       });
 
+      const fusionUsage = fusionUsageFromTrace(fusionCtx.streamFusionTrace);
       recordRequestFinish({
         requestId,
         responseStatus: 200,
         responseTimeMs,
         resolvedModel: "fusion-stream",
         resolvedProvider: "fusion",
+        ...(fusionUsage !== undefined
+          ? {
+              promptTokens: fusionUsage.promptTokens,
+              completionTokens: fusionUsage.completionTokens,
+              totalTokens: fusionUsage.totalTokens,
+              promptTokensEstimated: true,
+              completionTokensEstimated: true,
+            }
+          : {}),
       });
 
       // Attach the compact fusion trace assembled by the streaming pipeline so

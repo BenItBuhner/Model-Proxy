@@ -1,3 +1,4 @@
+import { envInt } from "../shared/utils.ts";
 /**
  * Per-request event sink. Bounded LRU keyed by requestId, with fan-out
  * subscribers for SSE. Zero disk, zero completion content stored — only
@@ -37,12 +38,6 @@ interface Entry {
   lastTouchedAt: number;
 }
 
-function envInt(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined) return fallback;
-  const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
-}
 
 const MAX_TRACES = envInt("REQUEST_EVENT_MAX_TRACES", 200);
 const MAX_EVENTS_PER_TRACE = envInt("REQUEST_EVENT_MAX_PER_TRACE", 500);

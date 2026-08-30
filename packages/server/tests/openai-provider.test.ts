@@ -74,6 +74,34 @@ describe("isChatTemplateKwargsPassthroughDisabled", () => {
   });
 });
 
+describe("OpenAIProvider buildPayload: stream_options", () => {
+  test("injects include_usage for streaming when the client did not ask", () => {
+    const provider = makeProvider();
+    const payload = provider["buildPayload"](baseArgs({ stream: true }));
+    expect(payload["stream_options"]).toEqual({ include_usage: true });
+  });
+
+  test("forwards client-provided stream_options untouched", () => {
+    const provider = makeProvider();
+    const payload = provider["buildPayload"](
+      baseArgs({ stream: true, stream_options: { include_usage: false } }),
+    );
+    expect(payload["stream_options"]).toEqual({ include_usage: false });
+  });
+
+  test("omits stream_options for non-streaming requests", () => {
+    const provider = makeProvider();
+    const payload = provider["buildPayload"](baseArgs());
+    expect("stream_options" in payload).toBe(false);
+  });
+
+  test("skips injection for gemini", () => {
+    const provider = makeProvider("gemini");
+    const payload = provider["buildPayload"](baseArgs({ stream: true }));
+    expect("stream_options" in payload).toBe(false);
+  });
+});
+
 describe("OpenAIProvider buildPayload: chat_template_kwargs passthrough", () => {
   test("forwards chat_template_kwargs by default (env unset)", () => {
     const provider = makeProvider();

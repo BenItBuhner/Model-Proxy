@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { EventTimeline } from "@/components/test/event-timeline";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import { getStoredCompletion, type RequestLogRecord } from "@/lib/endpoints";
 import type { RequestEvent } from "@model-proxy/contracts/api/events.ts";
 import { truncate } from "@/lib/utils";
 import { FusionPipelineView, type FusionTraceLike } from "./fusion-pipeline-view";
-import { formatCount, formatDurationMs, formatUsd } from "./metric-widget";
+import { formatCount, formatDurationMs, formatUsd } from "@/lib/format";
 
 export interface RequestTrace {
   requestId: string;
@@ -84,6 +84,12 @@ export function RequestDetailPanel({
   const [completionPreview, setCompletionPreview] = useState<string | undefined>(undefined);
   const [completionError, setCompletionError] = useState<string | undefined>(undefined);
   const [completionBody, setCompletionBody] = useState<Record<string, unknown> | undefined>(undefined);
+  const requestId = record?.requestId;
+  useEffect(() => {
+    setCompletionBody(undefined);
+    setCompletionPreview(undefined);
+    setCompletionError(undefined);
+  }, [requestId]);
 
   // Extract fusion trace from the completion body or event trace
   const fusionTrace: FusionTrace | undefined = useMemo(() => {
@@ -96,8 +102,8 @@ export function RequestDetailPanel({
     // Option 2: From event trace (request.finished carries fusionTrace)
     if (trace?.events) {
       for (const evt of trace.events) {
-        if (evt.type === "request.finished" && (evt as any).fusionTrace) {
-          return (evt as any).fusionTrace as FusionTrace;
+        if (evt.type === "request.finished" && evt.fusionTrace) {
+          return evt.fusionTrace as unknown as FusionTrace;
         }
       }
     }
@@ -141,7 +147,15 @@ export function RequestDetailPanel({
               <KV label="Duration" value={formatDurationMs(record.elapsedMs)} />
               <KV label="Tokens" value={formatCount(record.totalTokens)} />
               <KV label="Saved" value={`${formatUsd(record.savedCostUsd)} (${formatUsd(record.typicalCostUsd)} typical)`} />
-              <KV label="Cache" value={record.isCacheHit === true ? `${formatCount(record.matchedTokens)} matched` : "miss"} />
+              <KV
+                label="Cache"
+                value={cacheSummary(
+                  record.cacheReadTokens,
+                  record.cacheCreationTokens,
+                  record.matchedTokens,
+                  record.isCacheHit,
+                )}
+              />
               {record.errorMessage !== undefined ? (
                 <div className="rounded-sm bg-[rgba(255,59,48,0.08)] p-3 font-mono text-[11px] leading-5 text-alert-500 shadow-[inset_0_0_0_1px_rgba(255,59,48,0.18)]">
                   {record.errorType ?? "Error"}: {record.errorMessage}
@@ -172,7 +186,7 @@ export function RequestDetailPanel({
       />
 
       <Panel title="verbose event trace" accent className="min-h-0 flex-1" bodyClassName="h-[520px]">
-        <EventTimeline events={trace?.events ?? []} live={trace?.finished === false} onClear={() => undefined} />
+        <EventTimeline events={trace?.events ?? []} live={trace?.finished === false} />
       </Panel>
     </div>
   );
@@ -189,4 +203,18 @@ function KV({ label, value }: { label: string; value: string }): React.ReactElem
       </span>
     </div>
   );
+}
+
+function cacheSummary(
+  cacheReadTokens: number | undefined,
+  cacheCreationTokens: number | undefined,
+  matchedTokens: number | undefined,
+  isCacheHit: boolean | undefined,
+): string {
+  const parts: string[] = [];
+  if ((cacheReadTokens ?? 0) > 0) parts.push(`${formatCount(cacheReadTokens)} cached`);
+  if ((cacheCreationTokens ?? 0) > 0) parts.push(`${formatCount(cacheCreationTokens)} written`);
+  if ((matchedTokens ?? 0) > 0) parts.push(`${formatCount(matchedTokens)} matched`);
+  if (parts.length === 0) return isCacheHit === true ? "hit" : "miss";
+  return parts.join(" · ");
 }

@@ -2,7 +2,7 @@
 
 import type { AnalyticsSummary } from "@/lib/endpoints";
 import { Table, Thead, Tr, Th, Td, EmptyRow } from "@/components/ui/table";
-import { formatCount, formatUsd } from "./metric-widget";
+import { formatCompact, formatCount, formatUsd } from "@/lib/format";
 
 export function UsageBreakdownTable({
   summary,
@@ -21,7 +21,7 @@ export function UsageBreakdownTable({
           <Th align="right" width="9ch">
             Reqs
           </Th>
-          <Th align="right" width="11ch">
+          <Th align="right" width="13ch">
             Tokens
           </Th>
           <Th align="right" width="12ch">
@@ -30,7 +30,7 @@ export function UsageBreakdownTable({
           <Th align="right" width="12ch">
             Saved
           </Th>
-          <Th align="right" width="9ch">
+          <Th align="right" width="13ch">
             Cache
           </Th>
         </Tr>
@@ -48,7 +48,10 @@ export function UsageBreakdownTable({
                 {formatCount(row.requests)}
               </Td>
               <Td align="right" className="text-bone-500">
-                {formatCount(row.totalTokens)}
+                <CellSub
+                  value={formatCompact(row.totalTokens)}
+                  sub={`${formatCompact(row.promptTokens)} in · ${formatCompact(row.completionTokens)} out`}
+                />
               </Td>
               <Td align="right" className="text-bone-700">
                 {formatUsd(row.userCostUsd)}
@@ -57,12 +60,24 @@ export function UsageBreakdownTable({
                 {formatUsd(row.savedCostUsd)}
               </Td>
               <Td align="right" className="text-bone-500">
-                {formatCount(row.cacheHits)}
+                <CellSub
+                  value={formatCount(row.cacheReadTokens)}
+                  sub={`${formatCount(row.cacheCreationTokens)} wr · ${formatCount(row.cacheHits)} hits`}
+                />
               </Td>
             </Tr>
           ))
         )}
       </tbody>
     </Table>
+  );
+}
+
+function CellSub({ value, sub }: { value: string; sub: string }): React.ReactElement {
+  return (
+    <span className="inline-flex flex-col items-end leading-tight">
+      <span>{value}</span>
+      <span className="text-[10px] text-bone-300">{sub}</span>
+    </span>
   );
 }

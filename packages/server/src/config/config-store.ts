@@ -94,6 +94,7 @@ function readSecretsFile(): Record<string, string> {
 
 function persistSettings(settings: Record<string, string>): void {
   writeJson(settingsPath(), { version: 1, settings } satisfies SettingsFileShape);
+  invalidateConfigCache();
 }
 
 function persistSecrets(secrets: Record<string, string>): void {
@@ -103,11 +104,31 @@ function persistSecrets(secrets: Record<string, string>): void {
     if (sealedValue !== undefined) sealed[name] = sealedValue;
   }
   writeJson(secretsPath(), { version: 1, secrets: sealed } satisfies SecretsFileShape, 0o600);
+  invalidateConfigCache();
 }
 
-/** Merged view of every stored value (secrets decrypted). */
+let cachedValues: Record<string, string> | undefined;
+let cachedConfigDir: string | undefined;
+
+function invalidateConfigCache(): void {
+  cachedValues = undefined;
+}
+
+/** Force the next readConfigValues to hit disk. Used by tests. */
+export function resetConfigCacheForTests(): void {
+  invalidateConfigCache();
+  cachedConfigDir = undefined;
+}
+
+/** Merged view of every stored value (secrets decrypted). Returns a copy so
+ * callers can never mutate the cache in place. */
 export function readConfigValues(): Record<string, string> {
-  return { ...readSettingsFile(), ...readSecretsFile() };
+  const dir = getWritableConfigDir();
+  if (cachedValues === undefined || cachedConfigDir !== dir) {
+    cachedConfigDir = dir;
+    cachedValues = { ...readSettingsFile(), ...readSecretsFile() };
+  }
+  return { ...cachedValues };
 }
 
 export interface ConfigEntry {

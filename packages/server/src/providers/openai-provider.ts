@@ -8,6 +8,12 @@ import {
 } from "./base.ts";
 import { ProviderAPIError, ProviderTimeoutError } from "./errors.ts";
 import {
+  isSmoothStreamingEnabled,
+  pureContentDelta,
+  StreamPacer,
+  withDeltaContent,
+} from "./stream-pacer.ts";
+import {
   parseRetryAfterFromErrorBody,
   parseRetryAfterHeader,
   readBodyWithDeadline,
@@ -32,6 +38,15 @@ export function isChatTemplateKwargsPassthroughDisabled(): boolean {
 interface ProviderQuirks {
   isGemini: boolean;
   isCerebras: boolean;
+}
+
+/** Upstream rejected the request specifically because of `stream_options`. */
+function isStreamOptionsRejection(err: unknown): boolean {
+  return (
+    err instanceof ProviderAPIError &&
+    err.status === 400 &&
+    /stream_options/i.test(`${err.message} ${err.body ?? ""}`)
+  );
 }
 
 /**
@@ -185,7 +200,28 @@ export class OpenAIProvider extends AbstractProvider {
       else ctx.signal.addEventListener("abort", onCallerAbort, { once: true });
     }
     try {
-      yield* this.streamOpenAIInner(args, ctx, { payload, url, timeoutMs, signal: connController.signal });
+      let yieldedAny = false;
+      try {
+        for await (const chunk of this.streamOpenAIInner(args, ctx, { payload, url, timeoutMs, signal: connController.signal })) {
+          yieldedAny = true;
+          yield chunk;
+        }
+      } catch (err) {
+        // The proxy injects stream_options by default so usage chunks are
+        // emitted, but some openai-compatible upstreams reject the field
+        // outright. Retry once without it (safe: the 400 fires before any
+        // chunk is yielded).
+        if (yieldedAny || !isStreamOptionsRejection(err) || payload["stream_options"] === undefined) {
+          throw err;
+        }
+        const { stream_options: _dropped, ...retryPayload } = payload;
+        yield* this.streamOpenAIInner(args, ctx, {
+          payload: retryPayload,
+          url,
+          timeoutMs,
+          signal: connController.signal,
+        });
+      }
     } finally {
       ctx.signal?.removeEventListener("abort", onCallerAbort);
       // Hard-release the connection. No-op if the response completed and the
@@ -258,11 +294,21 @@ export class OpenAIProvider extends AbstractProvider {
       for (const chunk of bufferedToolCallChunks) yield chunk;
       bufferedToolCallChunks = [];
     };
+    const pacer = isSmoothStreamingEnabled(ctx) ? new StreamPacer() : undefined;
+    let lastContentChunk: Record<string, unknown> | undefined = undefined;
+    const drainPacer = function* (): Generator<string, void, unknown> {
+      if (pacer === undefined || lastContentChunk === undefined) return;
+      const rest = pacer.drain();
+      if (rest.length > 0) {
+        yield `data: ${JSON.stringify(withDeltaContent(lastContentChunk, rest))}\n\n`;
+      }
+    };
     for await (const line of readSSELines(response.body)) {
       const trimmed = line.trim();
       if (trimmed === "" || trimmed === "data:") continue;
       if (trimmed === "data: [DONE]") {
         if (bufferPartialToolCalls) yield* flushBufferedToolCallChunks();
+        yield* drainPacer();
         yield "data: [DONE]\n\n";
         return;
       }
@@ -281,6 +327,7 @@ export class OpenAIProvider extends AbstractProvider {
       if (jsonStr.length === 0) continue;
       if (jsonStr === "[DONE]") {
         if (bufferPartialToolCalls) yield* flushBufferedToolCallChunks();
+        yield* drainPacer();
         yield "data: [DONE]\n\n";
         return;
       }
@@ -314,6 +361,17 @@ export class OpenAIProvider extends AbstractProvider {
         if (bufferPartialToolCalls && bufferedToolCallChunks.length > 0) {
           yield* flushBufferedToolCallChunks();
         }
+        if (pacer !== undefined) {
+          const content = pureContentDelta(normalized);
+          if (content !== undefined) {
+            lastContentChunk = normalized;
+            for await (const piece of pacer.feed(content)) {
+              yield `data: ${JSON.stringify(withDeltaContent(normalized, piece))}\n\n`;
+            }
+            continue;
+          }
+          yield* drainPacer();
+        }
         yield output;
       } catch (err) {
         if (err instanceof ProviderAPIError) throw err;
@@ -331,6 +389,7 @@ export class OpenAIProvider extends AbstractProvider {
         });
       }
     }
+    if (pacer !== undefined) yield* drainPacer();
     if (bufferPartialToolCalls && bufferedToolCallChunks.length > 0) {
       throw new ProviderAPIError(
         `${this.providerName} stream ended before completing a tool call`,
@@ -411,11 +470,17 @@ export class OpenAIProvider extends AbstractProvider {
     if (args.reasoning !== undefined && !isGemini) {
       payload["reasoning"] = args.reasoning;
     }
+    if (args.reasoning_effort !== undefined) {
+      payload["reasoning_effort"] = args.reasoning_effort;
+    }
     if (
       args.chat_template_kwargs !== undefined &&
       !isChatTemplateKwargsPassthroughDisabled()
     ) {
       payload["chat_template_kwargs"] = args.chat_template_kwargs;
+    }
+    if (args.stream === true && !isGemini) {
+      payload["stream_options"] = args.stream_options ?? { include_usage: true };
     }
 
     return payload;

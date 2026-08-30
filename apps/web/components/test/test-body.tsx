@@ -355,27 +355,17 @@ async function runStreaming(options: {
   onFinal: (assistantMsg: ThreadMessageOpenAI | undefined, status: number) => void;
 }): Promise<void> {
   let accumulated: ThreadMessageOpenAI = { role: "assistant", content: "" };
-  let status = 0;
 
-  const generator = options.protocol === "openai"
-    ? dispatchStreaming({
-        requestId: options.requestId,
-        protocol: "openai",
-        body: options.body,
-        enforceOverride: options.enforceOverride,
-        signal: options.signal,
-      })
-    : dispatchStreaming({
-        requestId: options.requestId,
-        protocol: "anthropic",
-        body: options.body,
-        enforceOverride: options.enforceOverride,
-        signal: options.signal,
-      });
-
-  for await (const frame of generator) {
-    status = 200;
-    for (const line of frame.split("\n")) {
+  const iterator = dispatchStreaming({
+    requestId: options.requestId,
+    protocol: options.protocol,
+    body: options.body,
+    enforceOverride: options.enforceOverride,
+    signal: options.signal,
+  })[Symbol.asyncIterator]();
+  let next = await iterator.next();
+  while (!next.done) {
+    for (const line of next.value.split("\n")) {
       if (!line.startsWith("data:")) continue;
       const payload = line.slice(5).trim();
       if (payload.length === 0 || payload === "[DONE]") continue;
@@ -406,6 +396,8 @@ async function runStreaming(options: {
         // ignore malformed frames
       }
     }
+    next = await iterator.next();
   }
-  options.onFinal(accumulated, status || 200);
+  const finalStatus = next.done ? next.value.status : 200;
+  options.onFinal(accumulated, finalStatus);
 }

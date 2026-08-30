@@ -1,3 +1,4 @@
+import { rmWithRetry } from "./support.ts";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect } from "bun:test";
 import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import { SubagentExecutor } from "../src/routing/fusion/subagent-executor.ts";
@@ -128,7 +129,7 @@ describe("SubagentExecutor reasoning-only subagents", () => {
 
   afterAll(() => {
     globalThis.fetch = originalFetch;
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    rmWithRetry(tmpRoot, { recursive: true, force: true });
     delete process.env.FAKE_SUBAGENT_API_KEY;
   });
 

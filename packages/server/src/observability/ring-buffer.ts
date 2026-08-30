@@ -1,3 +1,4 @@
+import { parsePositiveInt as parseOptionalPositiveInt } from "../shared/utils.ts";
 /**
  * In-memory request observability records for the current process lifetime.
  *
@@ -65,8 +66,3 @@ export const requestLogRingBuffer = {
   },
 };
 
-function parseOptionalPositiveInt(value: string | undefined): number | undefined {
-  if (value === undefined || value.trim() === "") return undefined;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}

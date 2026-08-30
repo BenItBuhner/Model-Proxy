@@ -79,6 +79,7 @@ export const AnthropicMessagesRequest = z
     temperature: z.number().optional(),
     top_p: z.number().optional(),
     top_k: z.number().int().optional(),
+    thinking: z.record(z.unknown()).optional(),
     stream: z.boolean().optional(),
     stop_sequences: z.array(z.string()).optional(),
     tools: z.array(AnthropicToolDefinition).optional(),
