@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/ui/panel";
 import { Button } from "@/components/ui/button";
@@ -68,10 +68,13 @@ function ModelsBody(): React.ReactElement {
   const [status, setStatus] = useState<string | undefined>(undefined);
   const [creatingNew, setCreatingNew] = useState(false);
 
+  const initialLoadRef = useRef(false);
+
   const reload = useCallback(async () => {
-    setLoading(true);
+    if (!initialLoadRef.current) setLoading(true);
     try {
       const result = await listModels();
+      initialLoadRef.current = true;
       setModels(result.models);
       setError(undefined);
     } catch (err) {
@@ -82,7 +85,9 @@ function ModelsBody(): React.ReactElement {
   }, []);
 
   useEffect(() => {
-    reload();
+    void reload();
+    const id = setInterval(() => void reload(), 5000);
+    return () => clearInterval(id);
   }, [reload]);
 
   async function openModel(name: string): Promise<void> {

@@ -107,7 +107,7 @@ export function UsageDashboard({
         </PanelBody>
       </Panel>
 
-      <Panel title="route breakdown" subtitle="tokens and dollars by provider / model / key" accent>
+      <Panel title="route breakdown" subtitle="tokens and dollars by provider / model" accent>
         <UsageBreakdownTable summary={summary} />
       </Panel>
     </div>

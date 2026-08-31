@@ -1,15 +1,18 @@
 "use client";
 
+import { useMemo } from "react";
 import type { AnalyticsSummary } from "@/lib/endpoints";
 import { Table, Thead, Tr, Th, Td, EmptyRow } from "@/components/ui/table";
-import { formatCompact, formatCount, formatUsd } from "@/lib/format";
+import { formatCount, formatUsd } from "@/lib/format";
+
+type ProviderModelRow = AnalyticsSummary["byProviderKey"][number];
 
 export function UsageBreakdownTable({
   summary,
 }: {
   summary: AnalyticsSummary | undefined;
 }): React.ReactElement {
-  const rows = summary?.byProviderKey ?? [];
+  const rows = useMemo(() => aggregateByProviderModel(summary?.byProviderKey ?? []), [summary]);
 
   return (
     <Table>
@@ -17,7 +20,6 @@ export function UsageBreakdownTable({
         <Tr>
           <Th>Provider</Th>
           <Th>Model</Th>
-          <Th>Key</Th>
           <Th align="right" width="9ch">
             Reqs
           </Th>
@@ -37,20 +39,19 @@ export function UsageBreakdownTable({
       </Thead>
       <tbody>
         {rows.length === 0 ? (
-          <EmptyRow colSpan={8}>no route breakdown yet</EmptyRow>
+          <EmptyRow colSpan={7}>no route breakdown yet</EmptyRow>
         ) : (
           rows.map((row) => (
-            <Tr key={`${row.provider}|${row.apiKeyEnvVar}|${row.model}`}>
+            <Tr key={`${row.provider}|${row.model}`}>
               <Td className="text-bone-900">{row.provider}</Td>
               <Td className="text-bone-700">{row.model}</Td>
-              <Td className="text-bone-300">{row.apiKeyEnvVar}</Td>
               <Td align="right" className="text-bone-500">
                 {formatCount(row.requests)}
               </Td>
               <Td align="right" className="text-bone-500">
                 <CellSub
-                  value={formatCompact(row.totalTokens)}
-                  sub={`${formatCompact(row.promptTokens)} in · ${formatCompact(row.completionTokens)} out`}
+                  value={formatCount(row.totalTokens)}
+                  sub={`${formatCount(row.promptTokens)} in · ${formatCount(row.completionTokens)} out`}
                 />
               </Td>
               <Td align="right" className="text-bone-700">
@@ -61,8 +62,8 @@ export function UsageBreakdownTable({
               </Td>
               <Td align="right" className="text-bone-500">
                 <CellSub
-                  value={formatCount(row.cacheReadTokens)}
-                  sub={`${formatCount(row.cacheCreationTokens)} wr · ${formatCount(row.cacheHits)} hits`}
+                  value={formatCount(row.cacheReadTokens + row.cacheCreationTokens)}
+                  sub={`${formatCount(row.cacheHits)} hits`}
                 />
               </Td>
             </Tr>
@@ -71,6 +72,29 @@ export function UsageBreakdownTable({
       </tbody>
     </Table>
   );
+}
+
+function aggregateByProviderModel(rows: ProviderModelRow[]): ProviderModelRow[] {
+  const merged = new Map<string, ProviderModelRow>();
+  for (const row of rows) {
+    const current = merged.get(`${row.provider}|${row.model}`);
+    if (current === undefined) {
+      merged.set(`${row.provider}|${row.model}`, { ...row });
+      continue;
+    }
+    current.requests += row.requests;
+    current.promptTokens += row.promptTokens;
+    current.completionTokens += row.completionTokens;
+    current.totalTokens += row.totalTokens;
+    current.cacheReadTokens += row.cacheReadTokens;
+    current.cacheCreationTokens += row.cacheCreationTokens;
+    current.matchedTokens += row.matchedTokens;
+    current.cacheHits += row.cacheHits;
+    current.userCostUsd += row.userCostUsd;
+    current.typicalCostUsd += row.typicalCostUsd;
+    current.savedCostUsd += row.savedCostUsd;
+  }
+  return Array.from(merged.values()).sort((a, b) => b.requests - a.requests);
 }
 
 function CellSub({ value, sub }: { value: string; sub: string }): React.ReactElement {

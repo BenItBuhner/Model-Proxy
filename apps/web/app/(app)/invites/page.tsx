@@ -36,7 +36,11 @@ function InvitesBody(): React.ReactElement {
       .catch((err) => setError((err as Error).message));
   };
 
-  useEffect(reload, []);
+  useEffect(() => {
+    reload();
+    const id = setInterval(reload, 5000);
+    return () => clearInterval(id);
+  }, []);
 
   const createInvite = async (): Promise<void> => {
     setError(undefined);

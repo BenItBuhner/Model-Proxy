@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/ui/panel";
 import { Button } from "@/components/ui/button";
@@ -40,8 +40,17 @@ export function EnvBody({ embedded = false }: { embedded?: boolean }): React.Rea
     }
   }, [revealed]);
 
+  const dirtyRef = useRef(false);
   useEffect(() => {
-    load();
+    dirtyRef.current = rows.some((row) => row.touched);
+  }, [rows]);
+
+  useEffect(() => {
+    void load();
+    const id = setInterval(() => {
+      if (!dirtyRef.current) void load();
+    }, 5000);
+    return () => clearInterval(id);
   }, [load]);
 
   function updateRow(index: number, patch: Partial<RowDraft>): void {

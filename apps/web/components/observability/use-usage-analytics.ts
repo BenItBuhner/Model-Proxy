@@ -21,7 +21,7 @@ export function useUsageAnalytics({
   audience,
   filters,
   bucket,
-  pollMs = 8000,
+  pollMs = 5000,
 }: {
   audience: UsageAudience;
   filters: ObservabilityFilters;

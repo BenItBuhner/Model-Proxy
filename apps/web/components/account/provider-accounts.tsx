@@ -50,7 +50,11 @@ export function ProviderAccountsSection(): React.ReactElement {
       .catch((reason: unknown) => setError((reason as Error).message));
   }, []);
 
-  useEffect(reload, [reload]);
+  useEffect(() => {
+    reload();
+    const id = setInterval(reload, 5000);
+    return () => clearInterval(id);
+  }, [reload]);
 
   const isAdmin =
     principal?.isOwner === true ||

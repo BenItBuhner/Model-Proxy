@@ -13,6 +13,7 @@ import { UsageBreakdownTable } from "@/components/observability/usage-breakdown"
 import { UsageTimeRangeControls } from "@/components/observability/usage-time-range";
 import { UsageTrendChart } from "@/components/observability/usage-trend-chart";
 import { UsageDashboard } from "@/components/observability/usage-dashboard";
+import { UserRequestHistory } from "@/components/observability/user-request-history";
 import { useUsagePageData, USAGE_PAGE_SIZE } from "@/components/observability/use-usage-page-data";
 import { useUsageRange } from "@/components/observability/use-usage-range";
 import { PageHeader } from "@/components/page-header";
@@ -74,10 +75,15 @@ function UsageBody(): React.ReactElement {
         <PageHeader
           eyebrow="client"
           title="Usage"
-          description="Track tokens, dollar spend, and historical trends. Hover the chart for any point in time, pick a window, or set your own counter start."
+          description="Track tokens, dollar spend, historical trends, and your recent requests. Hover the chart for any point in time, pick a window, or set your own counter start."
         />
         {error !== undefined ? <div className="mb-5 text-alert-500">{error}</div> : null}
-        {error === undefined ? <UsageDashboard audience="user" scope={principal?.userId ?? "user"} /> : null}
+        {error === undefined ? (
+          <div className="space-y-5">
+            <UsageDashboard audience="user" scope={principal?.userId ?? "user"} />
+            <UserRequestHistory />
+          </div>
+        ) : null}
       </>
     );
   }
@@ -226,7 +232,7 @@ function AdminUsageView({
         </PanelBody>
       </Panel>
 
-      <Panel title="route breakdown" subtitle="tokens and dollars by provider / model / key" accent>
+      <Panel title="route breakdown" subtitle="tokens and dollars by provider / model" accent>
         <UsageBreakdownTable summary={summary} />
       </Panel>
 
@@ -239,7 +245,7 @@ function AdminUsageView({
             <div className="flex items-center gap-3">
               <span
                 className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-phosphor-500"
-                title="auto-refreshes every 4 seconds"
+                title="auto-refreshes every 5 seconds"
               >
                 <span className="relative flex h-1.5 w-1.5">
                   <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-phosphor-500 opacity-60" />
