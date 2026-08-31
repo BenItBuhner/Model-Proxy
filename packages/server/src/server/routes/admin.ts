@@ -54,6 +54,7 @@ import {
   recordAuditEvent,
   readSignupSettings,
   revokeSessionToken,
+  deleteUserApiKey,
   verifyEmailPassword,
   writeSignupSettings,
 } from "../../storage/identity-store.ts";
@@ -113,6 +114,15 @@ function filtersFromQuery(query: (name: string) => string | undefined): RequestL
   return filters;
 }
 
+function logsRange(query: (name: string) => string | undefined): { limit: number; offset: number } {
+  const limit = Number.parseInt(query("limit") ?? "", 10);
+  const offset = Number.parseInt(query("offset") ?? "", 10);
+  return {
+    limit: Number.isFinite(limit) && limit > 0 ? limit : 100,
+    offset: Number.isFinite(offset) && offset > 0 ? offset : 0,
+  };
+}
+
 
 function logWithDerivedCosts(
   row: ReturnType<typeof recentRequestLogs>[number],
@@ -136,6 +146,34 @@ function logWithDerivedCosts(
     userCostUsd: costs.userCostUsd,
     typicalCostUsd: costs.typicalCostUsd,
     savedCostUsd: costs.savedCostUsd,
+  };
+}
+
+function logsPayload({
+  filters,
+  activeCount,
+  limit,
+  offset,
+}: {
+  filters: RequestLogFilters;
+  activeCount: number;
+  limit: number;
+  offset: number;
+}) {
+  const filtered = recentRequestLogs(Number.MAX_SAFE_INTEGER, 0)
+    .filter((record) => matchesLogFilters(record, filters));
+  const records = filtered.slice(offset, offset + limit).map(logWithDerivedCosts);
+  return {
+    count: records.length,
+    limit,
+    offset,
+    total: filtered.length,
+    total_completed: filtered.filter((record) => record.state === "completed").length,
+    total_in_buffer: filtered.length,
+    active_count: activeCount,
+    has_more: offset + records.length < filtered.length,
+    filters_applied: filters,
+    records,
   };
 }
 
@@ -486,6 +524,14 @@ export function createAdminRoutes(): Hono {
     });
   });
 
+  protectedApp.get("/v1/user/logs", (c) => {
+    const p = principal(c);
+    if (p?.userId === undefined) return c.json({ error: "A persisted user account is required." }, 400);
+    const { limit, offset } = logsRange((name) => c.req.query(name));
+    const filters: RequestLogFilters = { ...filtersFromQuery((name) => c.req.query(name)), userId: p.userId };
+    return c.json(logsPayload({ filters, activeCount: activeRequestCountForUser(p.userId), limit, offset }));
+  });
+
   protectedApp.post("/v1/user/api-keys", async (c) => {
     const p = principal(c);
     if (p?.userId === undefined) return c.json({ error: "A persisted user account is required." }, 400);
@@ -496,33 +542,24 @@ export function createAdminRoutes(): Hono {
     return c.json({ api_key: createUserApiKey({ userId: p.userId, label }) }, 201);
   });
 
-  protectedApp.get("/v1/admin/logs", (c) => {
-    const limitParam = c.req.query("limit");
-    const offsetParam = c.req.query("offset");
-    const limit = limitParam !== undefined ? Number.parseInt(limitParam, 10) : undefined;
-    const offset = offsetParam !== undefined ? Number.parseInt(offsetParam, 10) : undefined;
-    const effectiveLimit = Number.isFinite(limit) && limit !== undefined && limit > 0 ? limit : 100;
-    const effectiveOffset = Number.isFinite(offset) && offset !== undefined && offset > 0 ? offset : 0;
-    const filters = filtersFromQuery((name) => c.req.query(name));
-    const filtered = recentRequestLogs(Number.MAX_SAFE_INTEGER, 0)
-      .filter((record) => matchesLogFilters(record, filters));
-    const completed = filtered.filter((record) => record.state === "completed").length;
-    const total = filtered.length;
-    const records = filtered
-      .slice(effectiveOffset, effectiveOffset + effectiveLimit)
-      .map(logWithDerivedCosts);
-    return c.json({
-      count: records.length,
-      limit: effectiveLimit,
-      offset: effectiveOffset,
-      total,
-      total_completed: completed,
-      total_in_buffer: total,
-      active_count: activeRequestCount(),
-      has_more: effectiveOffset + records.length < total,
-      filters_applied: filters,
-      records,
+  protectedApp.delete("/v1/user/api-keys/:id", (c) => {
+    const p = principal(c);
+    if (p?.userId === undefined) return c.json({ error: "A persisted user account is required." }, 400);
+    const keyId = c.req.param("id");
+    if (!deleteUserApiKey(p.userId, keyId)) return c.json({ error: "API key not found" }, 404);
+    recordAuditEvent({
+      actorUserId: p.userId,
+      eventType: "api_key.deleted",
+      targetType: "api_key",
+      targetId: keyId,
     });
+    return c.json({ deleted: true });
+  });
+
+  protectedApp.get("/v1/admin/logs", (c) => {
+    const { limit, offset } = logsRange((name) => c.req.query(name));
+    const filters = filtersFromQuery((name) => c.req.query(name));
+    return c.json(logsPayload({ filters, activeCount: activeRequestCount(), limit, offset }));
   });
 
   protectedApp.get("/v1/admin/analytics", (c) => {

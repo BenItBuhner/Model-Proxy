@@ -123,9 +123,11 @@ export function recordCacheMatch(input: CacheMatchInput): CacheMatchResult {
     input.cacheReadTokens !== undefined && input.cacheReadTokens > 0 ? input.cacheReadTokens : undefined;
   const promptTokens = input.promptTokens ?? 0;
   const matchedTokens =
-    providerMatchedTokens !== undefined || withinWindow
-      ? Math.max(promptTokens, providerMatchedTokens ?? 0)
-      : 0;
+    providerMatchedTokens !== undefined
+      ? providerMatchedTokens
+      : withinWindow
+        ? promptTokens
+        : 0;
 
   upsertEntry(entries, {
     scope: cacheScope,

@@ -24,7 +24,7 @@ export default function LoginPage(): React.ReactElement {
       .then((result) => {
         if (cancelled) return;
         if (result.authenticated && (result.session_authenticated ?? false)) {
-          router.replace("/");
+          router.replace("/account");
           return;
         }
         inputRef.current?.focus();
@@ -44,7 +44,7 @@ export default function LoginPage(): React.ReactElement {
     setSubmitting(true);
     try {
       await login(key.trim());
-      router.replace("/");
+      router.replace("/account");
     } catch (err) {
       if (err instanceof ApiException) setError(err.message);
       else setError("Unknown error");
@@ -62,7 +62,7 @@ export default function LoginPage(): React.ReactElement {
         method: "POST",
         body: { email, password },
       });
-      router.replace("/");
+      router.replace("/account");
     } catch (err) {
       if (err instanceof ApiException) setError(err.message);
       else setError("Unknown error");

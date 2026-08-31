@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  formatCompact,
   formatCount,
   formatLimit,
   formatPercent,
@@ -20,6 +19,7 @@ import { Table, Thead, Tr, Th, Td, EmptyRow } from "@/components/ui/table";
 import { ProviderAccountsSection } from "@/components/account/provider-accounts";
 import {
   createUserApiKey,
+  deleteUserApiKey,
   getCurrentUserAnalytics,
   getCurrentUserLimits,
   getMe,
@@ -45,8 +45,9 @@ function AccountBody(): React.ReactElement {
   const [label, setLabel] = useState("Default key");
   const [freshKey, setFreshKey] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
+  const [busyKeyId, setBusyKeyId] = useState<string | undefined>();
 
-  const reloadKeys = (): void => {
+  const reloadKeys = useCallback((): void => {
     listUserApiKeys()
       .then((result) => {
         setKeys(result.keys);
@@ -56,19 +57,19 @@ function AccountBody(): React.ReactElement {
         setKeys(undefined);
         setKeysError((err as Error).message);
       });
-  };
+  }, []);
 
-  useEffect(() => {
-    // Settle each fetch independently: legacy owner sessions legitimately get
-    // 400s from the per-user endpoints, and that must not discard the profile
-    // or model list.
+  const load = useCallback((): void => {
     void Promise.allSettled([
       getMe(),
       getCurrentUserAnalytics(),
       getCurrentUserLimits(),
       listAvailableModels(),
     ]).then(([me, analyticsResult, limitsResult, modelsResult]) => {
-      if (me.status === "fulfilled") setPrincipal(me.value.principal);
+      if (me.status === "fulfilled") {
+        setPrincipal(me.value.principal);
+        setError(undefined);
+      }
       if (analyticsResult.status === "fulfilled") setAnalytics(analyticsResult.value.summary);
       if (limitsResult.status === "fulfilled") setLimits(limitsResult.value.limits);
       if (modelsResult.status === "fulfilled") {
@@ -79,7 +80,13 @@ function AccountBody(): React.ReactElement {
       }
     });
     reloadKeys();
-  }, []);
+  }, [reloadKeys]);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 5000);
+    return () => clearInterval(id);
+  }, [load]);
 
   const generate = async (): Promise<void> => {
     setError(undefined);
@@ -92,9 +99,23 @@ function AccountBody(): React.ReactElement {
     }
   };
 
+  const removeKey = async (key: UserApiKeySummary): Promise<void> => {
+    if (!window.confirm(`Delete API key "${key.label ?? key.keyPrefix}"? It will stop working immediately.`)) return;
+    setError(undefined);
+    setBusyKeyId(key.id);
+    try {
+      await deleteUserApiKey(key.id);
+      reloadKeys();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusyKeyId(undefined);
+    }
+  };
+
   const cacheRate =
-    analytics !== undefined && analytics.totalRequests > 0
-      ? analytics.cacheHits / analytics.totalRequests
+    analytics !== undefined && analytics.completedRequests > 0
+      ? analytics.cacheHits / analytics.completedRequests
       : undefined;
 
   return (
@@ -118,18 +139,18 @@ function AccountBody(): React.ReactElement {
         />
         <MetricCard
           label="Tokens"
-          value={analytics !== undefined ? formatCompact(analytics.totalTokens) : "…"}
-          sublabel={analytics !== undefined ? `in ${formatCompact(analytics.promptTokens)} · out ${formatCompact(analytics.completionTokens)}` : undefined}
+          value={analytics !== undefined ? formatCount(analytics.totalTokens) : "…"}
+          sublabel={analytics !== undefined ? `in ${formatCount(analytics.promptTokens)} · out ${formatCount(analytics.completionTokens)}` : undefined}
         />
         <MetricCard
           label="Cache hit rate"
           value={analytics !== undefined ? formatPercent(cacheRate) : "…"}
-          sublabel={analytics !== undefined ? `${formatCount(analytics.cacheHits)} hits · ${formatCompact(analytics.matchedTokens)} tok matched` : undefined}
+          sublabel={analytics !== undefined ? `${formatCount(analytics.cacheHits)} hits · ${formatCount(analytics.matchedTokens)} matched` : undefined}
         />
         <MetricCard
-          label="Spend"
-          value={analytics !== undefined ? formatUsd(analytics.userCostUsd) : "…"}
-          sublabel={analytics !== undefined ? `${formatUsd(analytics.savedCostUsd)} saved of ${formatUsd(analytics.typicalCostUsd)} typical` : undefined}
+          label="Saved"
+          value={analytics !== undefined ? formatUsd(analytics.savedCostUsd) : "…"}
+          sublabel={analytics !== undefined ? `${formatUsd(analytics.userCostUsd)} spend · ${formatUsd(analytics.typicalCostUsd)} typical` : undefined}
         />
       </div>
 
@@ -171,6 +192,7 @@ function AccountBody(): React.ReactElement {
                       <Th>Key</Th>
                       <Th align="center" width="12ch">Status</Th>
                       <Th align="right" width="14ch">Last used</Th>
+                      <Th align="right" width="10ch">Actions</Th>
                     </Tr>
                   </Thead>
                   <tbody>
@@ -185,6 +207,16 @@ function AccountBody(): React.ReactElement {
                         </Td>
                         <Td align="right" className="text-bone-300">
                           {key.lastUsedAt !== undefined ? new Date(key.lastUsedAt).toLocaleString() : "never"}
+                        </Td>
+                        <Td align="right">
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            disabled={busyKeyId !== undefined}
+                            onClick={() => void removeKey(key)}
+                          >
+                            delete
+                          </Button>
                         </Td>
                       </Tr>
                     ))}

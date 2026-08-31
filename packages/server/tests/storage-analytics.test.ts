@@ -310,7 +310,7 @@ describe("persistent completion storage and analytics", () => {
     const rows = listRequestIndexRows({ limit: undefined, offset: 0 }).records;
     const row = rows.find((candidate) => candidate.requestId === "stream-cache-1");
     expect(row?.isCacheHit).toBe(true);
-    expect(row?.matchedTokens).toBe(1200);
+    expect(row?.matchedTokens).toBe(1024);
     expect(row?.cacheReadTokens).toBe(1024);
     expect(row?.promptTokens).toBe(1200);
   });

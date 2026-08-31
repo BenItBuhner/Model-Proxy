@@ -49,7 +49,9 @@ function ProxiesBody(): React.ReactElement {
   }, []);
 
   useEffect(() => {
-    reload();
+    void reload();
+    const id = window.setInterval(() => void reload(), 5000);
+    return () => window.clearInterval(id);
   }, [reload]);
 
   useEffect(() => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { PageHeader } from "@/components/page-header";
 import { Panel, PanelBody } from "@/components/ui/panel";
 import { Button } from "@/components/ui/button";
@@ -32,11 +32,17 @@ function UsersBody(): React.ReactElement {
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [error, setError] = useState<string | undefined>();
 
-  useEffect(() => {
+  const reload = useCallback((): void => {
     listUsersAdmin()
       .then((result) => setUsers(result.users))
       .catch((err) => setError((err as Error).message));
   }, []);
+
+  useEffect(() => {
+    reload();
+    const id = setInterval(reload, 5000);
+    return () => clearInterval(id);
+  }, [reload]);
 
   return (
     <div className="space-y-6">

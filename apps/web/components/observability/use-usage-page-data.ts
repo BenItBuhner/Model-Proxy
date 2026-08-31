@@ -21,7 +21,7 @@ export function useUsagePageData({
   filters,
   bucket,
   offset,
-  pollMs = 4000,
+  pollMs = 5000,
 }: {
   filters: ObservabilityFilters;
   bucket: UsageBucket;

@@ -7,6 +7,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { createApp } from "../src/server/app.ts";
 import { closeOperationalDbForTests } from "../src/storage/operational-db.ts";
+import {
+  recordRequestFinish,
+  recordRequestStart,
+  resetRequestLogForTests,
+} from "../src/server/request-log.ts";
 import { setStorageRootForTests } from "../src/storage/storage-paths.ts";
 
 const tmpRoot = join(tmpdir(), `mp-users-${process.pid}-${Date.now()}`);
@@ -54,6 +59,55 @@ describe("multi-user auth", () => {
     const meBody = await me.json() as { principal: { email: string; role: string } };
     expect(meBody.principal.email).toBe("owner@example.com");
     expect(meBody.principal.role).toBe("owner");
+  });
+
+  test("revokes user API keys so they can no longer authenticate", async () => {
+    const app = createApp();
+    const signup = await app.request("/v1/auth/signup", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer multi-user-admin-key",
+      },
+      body: JSON.stringify({ email: "owner@example.com", password: "correct-horse" }),
+    });
+    expect(signup.status).toBe(201);
+    const cookie = signup.headers.get("set-cookie") ?? "";
+
+    const keyRes = await app.request("/v1/user/api-keys", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ label: "ephemeral" }),
+    });
+    expect(keyRes.status).toBe(201);
+    const keyBody = await keyRes.json() as { api_key: { id: string; key: string } };
+
+    const list = await app.request("/v1/user/api-keys", { headers: { cookie } });
+    expect(list.status).toBe(200);
+    const listBody = await list.json() as { keys: Array<{ id: string; status: string }> };
+    expect(listBody.keys).toHaveLength(1);
+    expect(listBody.keys[0]!.status).toBe("active");
+
+    const del = await app.request(`/v1/user/api-keys/${keyBody.api_key.id}`, {
+      method: "DELETE",
+      headers: { cookie },
+    });
+    expect(del.status).toBe(200);
+
+    const me = await app.request("/v1/auth/me", {
+      headers: { authorization: `Bearer ${keyBody.api_key.key}` },
+    });
+    expect(me.status).toBe(401);
+
+    const after = await app.request("/v1/user/api-keys", { headers: { cookie } });
+    const afterBody = await after.json() as { keys: Array<{ status: string }> };
+    expect(afterBody.keys).toHaveLength(0);
+
+    const again = await app.request(`/v1/user/api-keys/${keyBody.api_key.id}`, {
+      method: "DELETE",
+      headers: { cookie },
+    });
+    expect(again.status).toBe(404);
   });
 
   test("supports invite-only signup with one-time tokens", async () => {
@@ -223,5 +277,120 @@ describe("multi-user auth", () => {
 
     const adminUsers = await app.request("/v1/admin/users", { headers: { cookie: userCookie } });
     expect(adminUsers.status).toBe(403);
+  });
+
+  test("GET /v1/user/logs scopes request history to the caller's account", async () => {
+    const app = createApp();
+    const ownerSignup = await app.request("/v1/auth/signup", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer multi-user-admin-key",
+      },
+      body: JSON.stringify({ email: "owner@example.com", password: "correct-horse" }),
+    });
+    const ownerCookie = ownerSignup.headers.get("set-cookie") ?? "";
+
+    const settings = await app.request("/v1/admin/signup-settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json", cookie: ownerCookie },
+      body: JSON.stringify({
+        multi_user_enabled: true,
+        invite_signup_enabled: true,
+        open_signup_enabled: false,
+      }),
+    });
+    expect(settings.status).toBe(200);
+
+    const invite = await app.request("/v1/admin/invites", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: ownerCookie },
+      body: JSON.stringify({ email: "client@example.com" }),
+    });
+    expect(invite.status).toBe(201);
+    const inviteBody = await invite.json() as { token: string };
+
+    const userSignup = await app.request("/v1/auth/signup", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: "client@example.com",
+        password: "correct-horse",
+        invite_token: inviteBody.token,
+      }),
+    });
+    expect(userSignup.status).toBe(201);
+    const userCookie = userSignup.headers.get("set-cookie") ?? "";
+
+    const me = await app.request("/v1/auth/me", { headers: { cookie: userCookie } });
+    const meBody = await me.json() as { principal: { userId?: string } };
+    const userId = meBody.principal.userId;
+    expect(userId).toBeDefined();
+
+    resetRequestLogForTests();
+    for (let i = 0; i < 2; i++) {
+      recordRequestStart({
+        requestId: `user-log-${i}`,
+        endpoint: "/v1/chat/completions",
+        method: "POST",
+        requestedModel: "demo-model",
+        resolvedModel: "demo-backend",
+        resolvedProvider: "demo",
+        wireProtocol: "openai",
+        userId,
+        isStreaming: false,
+        enforceMode: false,
+      });
+      recordRequestFinish({ requestId: `user-log-${i}`, responseStatus: 200, responseTimeMs: 10 + i });
+    }
+    recordRequestStart({
+      requestId: "user-log-running",
+      endpoint: "/v1/chat/completions",
+      method: "POST",
+      requestedModel: "demo-model",
+      resolvedModel: "demo-backend",
+      resolvedProvider: "demo",
+      wireProtocol: "openai",
+      userId,
+      isStreaming: false,
+      enforceMode: false,
+    });
+    recordRequestStart({
+      requestId: "other-user-log",
+      endpoint: "/v1/chat/completions",
+      method: "POST",
+      requestedModel: "demo-model",
+      resolvedModel: "demo-backend",
+      resolvedProvider: "demo",
+      wireProtocol: "openai",
+      userId: "someone-else",
+      isStreaming: false,
+      enforceMode: false,
+    });
+    recordRequestFinish({ requestId: "other-user-log", responseStatus: 200, responseTimeMs: 5 });
+
+    const logs = await app.request("/v1/user/logs?limit=1000", { headers: { cookie: userCookie } });
+    expect(logs.status).toBe(200);
+    const logsBody = await logs.json() as {
+      total: number;
+      total_completed: number;
+      active_count: number;
+      has_more: boolean;
+      filters_applied: { userId?: string };
+      records: Array<{ requestId: string; userId: string | undefined }>;
+    };
+    expect(logsBody.total).toBe(3);
+    expect(logsBody.total_completed).toBe(2);
+    expect(logsBody.active_count).toBe(1);
+    expect(logsBody.has_more).toBe(false);
+    expect(logsBody.filters_applied.userId).toBe(userId);
+    expect(logsBody.records).toHaveLength(3);
+    for (const record of logsBody.records) {
+      expect(record.userId).toBe(userId);
+      expect(record.requestId).not.toBe("other-user-log");
+    }
+
+    const unauthorized = await app.request("/v1/user/logs");
+    expect(unauthorized.status).toBe(401);
   });
 });

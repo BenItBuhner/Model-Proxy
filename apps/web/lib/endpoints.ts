@@ -146,7 +146,7 @@ export async function authStatus(): Promise<{
 }
 
 // -------- Observability --------
-export async function getLogs(limit = 100, offset = 0, filters: ObservabilityFilters = {}): Promise<{
+export interface LogsResponse {
   count: number;
   limit: number;
   offset: number;
@@ -157,7 +157,9 @@ export async function getLogs(limit = 100, offset = 0, filters: ObservabilityFil
   active_count: number;
   has_more: boolean;
   filters_applied?: ObservabilityFilters;
-}> {
+}
+
+export async function getLogs(limit = 100, offset = 0, filters: ObservabilityFilters = {}): Promise<LogsResponse> {
   return apiFetch(`/v1/admin/logs?${observabilityQuery({ limit, offset, filters })}`);
 }
 
@@ -374,6 +376,10 @@ export function getCurrentUserAnalyticsTimeseries(
   return apiFetch(`/v1/user/analytics/timeseries?${observabilityQuery({ filters, extra: { bucket } })}`);
 }
 
+export function getCurrentUserLogs(limit = 100, offset = 0, filters: ObservabilityFilters = {}): Promise<LogsResponse> {
+  return apiFetch(`/v1/user/logs?${observabilityQuery({ limit, offset, filters })}`);
+}
+
 export function listUsersAdmin(): Promise<{ users: UserRecord[] }> {
   return apiFetch("/v1/admin/users");
 }
@@ -433,6 +439,12 @@ export interface UserApiKeySummary {
 
 export function listUserApiKeys(): Promise<{ keys: UserApiKeySummary[] }> {
   return apiFetch("/v1/user/api-keys");
+}
+
+export async function deleteUserApiKey(id: string): Promise<void> {
+  await apiFetch(`/v1/user/api-keys/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }
 
 // -------- Provider subscription accounts --------

@@ -142,7 +142,7 @@ export function UsageTimeRangeControls({
             <Button
               type="button"
               variant="outline"
-              size="sm"
+              size="md"
               onClick={() => onCounterStartChange(new Date().toISOString())}
             >
               start now
@@ -150,7 +150,7 @@ export function UsageTimeRangeControls({
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="md"
               onClick={() => onCounterStartChange(undefined)}
               disabled={counterStart === undefined}
             >
