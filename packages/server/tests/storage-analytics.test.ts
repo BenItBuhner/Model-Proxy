@@ -269,6 +269,52 @@ describe("persistent completion storage and analytics", () => {
     expect(miss?.isCacheHit).toBe(false);
   });
 
+  test("provider-reported zero cached tokens overrides the fingerprint window", () => {
+    for (const [id, content] of [
+      ["cache-zero-1", "conversation zero"],
+      ["cache-zero-2", "conversation zero"],
+    ] as const) {
+      recordRequestStart({
+        requestId: id,
+        endpoint: "/v1/chat/completions",
+        method: "POST",
+        requestedModel: "cache-model",
+        resolvedModel: "cache-model",
+        wireProtocol: "openai",
+        isStreaming: false,
+        enforceMode: false,
+        requestBody: { model: "cache-model", messages: [{ role: "user", content }] },
+        persistCompletions: true,
+      });
+      recordRequestProgress({
+        requestId: id,
+        resolvedProvider: "openai",
+        resolvedModel: "cache-backend",
+        apiKeyEnvVar: "OPENAI_API_KEY",
+      });
+      recordRequestFinish({
+        requestId: id,
+        responseStatus: 200,
+        responseTimeMs: 100,
+        responseBody: {
+          choices: [{ message: { content: "ok" } }],
+          usage: {
+            prompt_tokens: 100,
+            completion_tokens: 0,
+            total_tokens: 100,
+            prompt_tokens_details: { cached_tokens: 0 },
+          },
+        },
+      });
+    }
+
+    const rows = listRequestIndexRows({ limit: undefined, offset: 0 }).records;
+    const second = rows.find((row) => row.requestId === "cache-zero-2");
+    expect(second?.isCacheHit).toBe(false);
+    expect(second?.matchedTokens).toBe(0);
+    expect(second?.cacheReadTokens).toBe(0);
+  });
+
   test("streamed usage with provider cached tokens records a cache hit", () => {
     recordRequestStart({
       requestId: "stream-cache-1",

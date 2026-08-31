@@ -119,12 +119,10 @@ export function recordCacheMatch(input: CacheMatchInput): CacheMatchResult {
     previous !== undefined ? Math.max(0, nowMs - Date.parse(previous.completedAt)) : undefined;
   const withinWindow =
     msSinceLastMatch !== undefined && msSinceLastMatch <= cacheWindowMs();
-  const providerMatchedTokens =
-    input.cacheReadTokens !== undefined && input.cacheReadTokens > 0 ? input.cacheReadTokens : undefined;
   const promptTokens = input.promptTokens ?? 0;
   const matchedTokens =
-    providerMatchedTokens !== undefined
-      ? providerMatchedTokens
+    input.cacheReadTokens !== undefined
+      ? input.cacheReadTokens
       : withinWindow
         ? promptTokens
         : 0;
