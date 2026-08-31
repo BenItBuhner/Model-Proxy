@@ -39,22 +39,6 @@ export function formatUptime(seconds: number): string {
   return `${d}d ${h % 24}h`;
 }
 
-/** Compact large-number formatting for tables and tight labels: 1234 -> "1.2k". */
-export function formatCompact(value: number | undefined): string {
-  const n = value ?? 0;
-  if (!Number.isFinite(n)) return "0";
-  const abs = Math.abs(n);
-  if (abs >= 1_000_000_000) return `${trim(n / 1_000_000_000)}B`;
-  if (abs >= 1_000_000) return `${trim(n / 1_000_000)}M`;
-  if (abs >= 10_000) return `${trim(n / 1_000)}k`;
-  return formatCount(n);
-}
-
-function trim(n: number): string {
-  const rounded = n >= 100 ? Math.round(n) : Math.round(n * 10) / 10;
-  return String(rounded);
-}
-
 /** Ratio -> percentage string: 0.987 -> "98.7%". */
 export function formatPercent(ratio: number | undefined, digits = 1): string {
   if (ratio === undefined || !Number.isFinite(ratio)) return "-";

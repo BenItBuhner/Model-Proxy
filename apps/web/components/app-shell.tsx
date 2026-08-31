@@ -27,9 +27,8 @@ type ThemePreference = (typeof THEME_OPTIONS)[number];
 type ResolvedTheme = Exclude<ThemePreference, "system">;
 
 const NAV: NavItem[] = [
-  { label: "Overview", href: "/", audience: "all" },
-  { label: "Usage", href: "/usage", audience: "all" },
   { label: "Account", href: "/account", audience: "all" },
+  { label: "Usage", href: "/usage", audience: "all" },
   { label: "Models", href: "/models", audience: "admin" },
   { label: "Providers", href: "/providers", audience: "admin" },
   { label: "Config", href: "/config", audience: "admin" },
@@ -100,7 +99,7 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
       }
     };
     load();
-    const id = setInterval(load, 15000);
+    const id = setInterval(load, 5000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -390,7 +389,7 @@ function SideRailContent({
           );
         })}
       </nav>
-      <div className="mt-auto flex flex-col gap-3 border-t border-ink-500 pt-4">
+      <div className="flex flex-col gap-3 border-t border-ink-500 pt-4">
         <ThemeToggle value={themePreference} onChange={onThemePreferenceChange} />
         <SystemStatus health={health} error={healthErr} />
         <button

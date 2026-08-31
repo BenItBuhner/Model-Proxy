@@ -80,7 +80,9 @@ function ProvidersBody(): React.ReactElement {
   }, []);
 
   useEffect(() => {
-    reload();
+    void reload();
+    const id = setInterval(() => void reload(), 5000);
+    return () => clearInterval(id);
   }, [reload]);
 
   async function open(name: string): Promise<void> {

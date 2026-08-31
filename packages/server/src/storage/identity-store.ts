@@ -340,6 +340,16 @@ export function listUserApiKeys(userId: string): ApiKeySummary[] {
   }));
 }
 
+export function deleteUserApiKey(userId: string, keyId: string): boolean {
+  const result = getOperationalDb()
+    .query(
+      `DELETE FROM api_keys
+       WHERE id = $key_id AND user_id = $user_id`,
+    )
+    .run({ $key_id: keyId, $user_id: userId });
+  return result.changes > 0;
+}
+
 export function listInvites(): StoredInvite[] {
   const rows = getOperationalDb()
     .query("SELECT * FROM invites ORDER BY created_at DESC")

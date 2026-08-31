@@ -12,8 +12,8 @@ export function RequestLogTable({
   onSelect,
 }: {
   records: RequestLogRecord[];
-  selectedId: string | undefined;
-  onSelect: (requestId: string) => void;
+  selectedId?: string;
+  onSelect?: (requestId: string) => void;
 }): React.ReactElement {
   return (
     <Table>
@@ -36,7 +36,7 @@ export function RequestLogTable({
           records.map((record) => (
             <Tr
               key={record.requestId}
-              onClick={() => onSelect(record.requestId)}
+              onClick={onSelect !== undefined ? () => onSelect(record.requestId) : undefined}
               title={record.errorMessage !== undefined ? record.errorMessage : undefined}
               className={[
                 record.state === "running" ? "bg-phosphor-50/40" : "",
