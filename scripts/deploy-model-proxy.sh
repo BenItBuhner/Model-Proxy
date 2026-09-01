@@ -84,9 +84,9 @@ write_active_upstream() {
 # cutovers. It must name exactly one active backend so storage stays effectively
 # single-writer during normal operation.
 reverse_proxy proxy-$color:9876 {
-	health_uri /health/ready
+	health_uri /health
 	health_interval 5s
-	health_timeout 2s
+	health_timeout 8s
 	flush_interval -1
 }
 EOF

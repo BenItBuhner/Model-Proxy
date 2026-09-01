@@ -1,6 +1,8 @@
 import { createApp } from "../server/app.ts";
 import { markDraining } from "../server/lifecycle.ts";
 import { activeRequestCount } from "../server/request-log.ts";
+import { warmupMetricsCache } from "../storage/metrics-store.ts";
+import { warmupUpstreamCatalogs } from "../config/upstream-model-catalog.ts";
 import { createLogger, setLogLevel, type LogLevel } from "../observability/logger.ts";
 import {
   isResponsesWsPath,
@@ -79,6 +81,10 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 export function serve(argv: string[]): void {
   const args = parseArgs(argv);
   if (args.logLevel !== undefined) setLogLevel(args.logLevel);
+
+  const warmed = warmupMetricsCache();
+  log.info("metrics cache warmed", { rows: warmed });
+  warmupUpstreamCatalogs();
 
   const app = createApp();
 

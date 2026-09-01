@@ -27,7 +27,7 @@ type ContentPart = ImageContentPart | TextContentPart | Record<string, unknown>;
  *
  * Layer 0 of the fusion pipeline. Scans incoming messages for image content
  * (image_url parts in OpenAI format), dispatches them to a vision-capable
- * model (kimi-k2.7-code) for detailed description, and replaces the raw image
+ * model (kimi-k3) for detailed description, and replaces the raw image
  * data with the generated descriptions so that non-vision subagent models can
  * still work with image context.
  */
@@ -35,7 +35,7 @@ export class ImagePreprocessor {
   private readonly fallbackRouter: FallbackRouter;
 
   /** The model routing used for image description. */
-  static readonly IMAGE_DESCRIPTION_MODEL = "kimi-k2.7-code";
+  static readonly IMAGE_DESCRIPTION_MODEL = "kimi-k3";
 
   constructor() {
     this.fallbackRouter = new FallbackRouter();
