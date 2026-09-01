@@ -12,9 +12,13 @@ const log = createLogger("config.upstream-models");
 
 const CACHE_TTL_MS = envNumber("UPSTREAM_MODELS_CACHE_TTL_SECONDS", 3600) * 1000;
 const FETCH_TIMEOUT_MS = envNumber("UPSTREAM_MODELS_FETCH_TIMEOUT_MS", 2000);
+// Doomed upstreams (401/404/timeouts) must not add per-request latency: after
+// a failed attempt, wait this long before trying again in the background.
+const FAILURE_RETRY_MS = envNumber("UPSTREAM_MODELS_FAILURE_TTL_SECONDS", 60) * 1000;
 
 interface ProviderCacheEntry {
   fetchedAtMs: number;
+  lastAttemptMs: number;
   modelsById: Map<string, number>;
   inFlight: Promise<void> | undefined;
 }
@@ -168,6 +172,7 @@ function getOrCreateEntry(providerName: string): ProviderCacheEntry {
   if (existing !== undefined) return existing;
   const fresh: ProviderCacheEntry = {
     fetchedAtMs: 0,
+    lastAttemptMs: 0,
     modelsById: new Map(),
     inFlight: undefined,
   };
@@ -183,12 +188,16 @@ function isStale(entry: ProviderCacheEntry): boolean {
 function scheduleRefresh(providerName: string): void {
   const entry = getOrCreateEntry(providerName);
   if (entry.inFlight !== undefined) return;
+  if (entry.lastAttemptMs !== 0 && Date.now() - entry.lastAttemptMs < FAILURE_RETRY_MS) return;
 
   entry.inFlight = (async () => {
     try {
+      entry.lastAttemptMs = Date.now();
       const models = await fetchProviderCatalog(providerName);
-      entry.modelsById = models;
-      entry.fetchedAtMs = Date.now();
+      if (models.size > 0) {
+        entry.modelsById = models;
+        entry.fetchedAtMs = Date.now();
+      }
     } finally {
       entry.inFlight = undefined;
     }
@@ -211,8 +220,12 @@ export async function getUpstreamContextWindow(
   }
 
   if (isStale(entry)) {
+    const hadAttempt = entry.lastAttemptMs !== 0;
     scheduleRefresh(providerName);
-    if (entry.inFlight !== undefined) {
+    // Block only on the very first populate so callers get real data. After
+    // that, a failing upstream refreshes in the background and must never
+    // add request latency.
+    if (entry.inFlight !== undefined && !hadAttempt) {
       const timeout = new Promise<void>((resolve) =>
         setTimeout(resolve, FETCH_TIMEOUT_MS),
       );
@@ -227,4 +240,24 @@ export async function getUpstreamContextWindow(
 /** Reset in-memory catalog (tests). */
 export function clearUpstreamModelCatalogCache(): void {
   cacheByProvider.clear();
+}
+
+/**
+ * Kick off background catalog fetches for every configured provider so the
+ * first /v1/models call never pays the fetch cost. Fire-and-forget.
+ */
+export function warmupUpstreamCatalogs(): void {
+  let providers: string[] = [];
+  try {
+    providers = providerConfigLoader.getAvailableProviders();
+  } catch {
+    return;
+  }
+  for (const name of providers) {
+    try {
+      scheduleRefresh(name);
+    } catch {
+      // ignore individual provider warmup failures
+    }
+  }
 }

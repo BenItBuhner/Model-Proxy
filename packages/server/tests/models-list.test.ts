@@ -23,6 +23,9 @@ type MockFetch = (input: Parameters<typeof fetch>[0], init?: Parameters<typeof f
 let fetchImpl: MockFetch = (input, init) => originalFetch(input, init);
 
 beforeAll(() => {
+  // Other test files may have poisoned the shared catalog cache (real fetches
+  // set the failure backoff); start clean.
+  clearUpstreamModelCatalogCache();
   mkdirSync(join(tmpRoot, "models"), { recursive: true });
   mkdirSync(join(tmpRoot, "providers"), { recursive: true });
   setPrimaryConfigDirForTests(tmpRoot);

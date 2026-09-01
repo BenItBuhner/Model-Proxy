@@ -101,8 +101,41 @@ export function createHealthRoutes(): Hono {
   );
 
   app.get("/health/ready", (c) => {
-    const body = readiness();
-    return c.json(body, body.ready ? 200 : 503);
+    const draining = isDraining();
+    let dbOk = true;
+    let dbMessage = "sqlite operational store opened";
+    try {
+      getOperationalDb().query("SELECT 1 AS ok").get();
+    } catch (err) {
+      dbOk = false;
+      dbMessage = err instanceof Error ? err.message : String(err);
+    }
+    const ready = dbOk && !draining;
+    return c.json(
+      {
+        status: ready ? "ready" : "not_ready",
+        ready,
+        uptime_seconds: uptimeSeconds(),
+        active_requests: activeRequestCount(),
+        deployment: deploymentState(),
+        storage: {
+          root: getStorageRoot(),
+        },
+        checks: [
+          {
+            name: "operational_db",
+            ok: dbOk,
+            message: dbMessage,
+          },
+          {
+            name: "drain_state",
+            ok: !draining,
+            message: draining ? "instance is draining" : "accepting new requests",
+          },
+        ],
+      },
+      ready ? 200 : 503,
+    );
   });
 
   app.get("/health/detailed", (c) => {

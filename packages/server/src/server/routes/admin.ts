@@ -502,21 +502,23 @@ export function createAdminRoutes(): Hono {
     return c.json({ limits: getUserLimits(p.userId) });
   });
 
-  protectedApp.get("/v1/user/analytics", (c) => {
+  protectedApp.get("/v1/user/analytics", async (c) => {
     const p = principal(c);
     if (p?.userId === undefined) return c.json({ error: "A persisted user account is required." }, 400);
     const filters: RequestLogFilters = { ...filtersFromQuery((name) => c.req.query(name)), userId: p.userId };
+    await new Promise((resolve) => setTimeout(resolve, 0));
     return c.json({
       filters_applied: filters,
       summary: getAnalyticsSummary(filters, activeRequestCountForUser(p.userId)),
     });
   });
 
-  protectedApp.get("/v1/user/analytics/timeseries", (c) => {
+  protectedApp.get("/v1/user/analytics/timeseries", async (c) => {
     const p = principal(c);
     if (p?.userId === undefined) return c.json({ error: "A persisted user account is required." }, 400);
     const filters: RequestLogFilters = { ...filtersFromQuery((name) => c.req.query(name)), userId: p.userId };
     const bucket = c.req.query("bucket") === "day" ? "day" : "hour";
+    await new Promise((resolve) => setTimeout(resolve, 0));
     return c.json({
       bucket,
       filters_applied: filters,
@@ -562,17 +564,19 @@ export function createAdminRoutes(): Hono {
     return c.json(logsPayload({ filters, activeCount: activeRequestCount(), limit, offset }));
   });
 
-  protectedApp.get("/v1/admin/analytics", (c) => {
+  protectedApp.get("/v1/admin/analytics", async (c) => {
     const filters = filtersFromQuery((name) => c.req.query(name));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     return c.json({
       filters_applied: filters,
       summary: getAnalyticsSummary(filters, activeRequestCount()),
     });
   });
 
-  protectedApp.get("/v1/admin/analytics/timeseries", (c) => {
+  protectedApp.get("/v1/admin/analytics/timeseries", async (c) => {
     const filters = filtersFromQuery((name) => c.req.query(name));
     const bucket = c.req.query("bucket") === "day" ? "day" : "hour";
+    await new Promise((resolve) => setTimeout(resolve, 0));
     return c.json({
       bucket,
       filters_applied: filters,

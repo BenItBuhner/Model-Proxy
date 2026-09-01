@@ -29,6 +29,7 @@ services:
       - ./config:/app/config
       - ./.env:/app/.env
       - ./.storage:/app/.storage
+      - ${CODEX_OAUTH_AUTH_FILE_HOST:-/home/bennett/.codex/auth.json}:/home/bun/.codex/auth.json:ro
     env_file:
       - path: .env
         required: false
@@ -38,8 +39,9 @@ services:
       MODEL_PROXY_BUILD_ID: ${MODEL_PROXY_BUILD_ID:-local}
       MODEL_PROXY_STORAGE_DIR: /app/.storage
       MODEL_PROXY_DRAIN_TIMEOUT_MS: ${MODEL_PROXY_DRAIN_TIMEOUT_MS:-300000}
+      CODEX_HOME: /home/bun/.codex
     healthcheck:
-      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:9876/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:9876/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -60,6 +62,7 @@ services:
       - ./config:/app/config
       - ./.env:/app/.env
       - ./.storage:/app/.storage
+      - ${CODEX_OAUTH_AUTH_FILE_HOST:-/home/bennett/.codex/auth.json}:/home/bun/.codex/auth.json:ro
     env_file:
       - path: .env
         required: false
@@ -69,8 +72,9 @@ services:
       MODEL_PROXY_BUILD_ID: ${MODEL_PROXY_BUILD_ID:-local}
       MODEL_PROXY_STORAGE_DIR: /app/.storage
       MODEL_PROXY_DRAIN_TIMEOUT_MS: ${MODEL_PROXY_DRAIN_TIMEOUT_MS:-300000}
+      CODEX_HOME: /home/bun/.codex
     healthcheck:
-      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:9876/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:9876/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 6

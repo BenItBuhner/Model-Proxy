@@ -70,7 +70,7 @@ export interface FusionRequestContext {
    * so downstream scoring and routing can still account for the vision work.
    */
   hadImages?: boolean;
-  /** Descriptions produced by the vision model (kimi-k2.7-code) for any images in the request. */
+  /** Descriptions produced by the vision model (kimi-k3) for any images in the request. */
   imageDescriptions?: string[];
 }
 
