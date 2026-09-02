@@ -1,0 +1,20 @@
+{
+  "name": "Cesium engine",
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
+  "forwardPorts": [
+    9100
+  ],
+  "portsAttributes": {
+    "9100": {
+      "label": "Cesium engine",
+      "onAutoForward": "silent"
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/cesium/bootstrap.sh install",
+  "postStartCommand": "bash .devcontainer/cesium/bootstrap.sh start",
+  "customizations": {
+    "cesium": {
+      "templateVersion": 1
+    }
+  }
+}
