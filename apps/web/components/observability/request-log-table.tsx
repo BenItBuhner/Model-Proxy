@@ -79,7 +79,7 @@ export function RequestLogTable({
   );
 }
 
-function StatusChip({ record }: { record: RequestLogRecord }): React.ReactElement {
+export function StatusChip({ record }: { record: RequestLogRecord }): React.ReactElement {
   const status = record.responseStatus;
   if (record.state === "running") return <Badge tone="phosphor">running</Badge>;
   if (status === undefined) return <Badge tone="muted">pending</Badge>;

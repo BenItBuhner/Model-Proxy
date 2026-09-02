@@ -384,171 +384,191 @@ async function handleResponsesNative(c: Context, endpointPath: string): Promise<
   }
 
   if (modelConfig.fusion?.enabled === true) {
-    return handleResponsesFusion(c, requestDict, model, modelConfig, isStream, endpointPath);
+    return runWithRequestContext(requestId, () =>
+      handleResponsesFusion(c, requestDict, model, modelConfig, isStream, endpointPath));
   }
 
-  recordRequestStart({
-    requestId,
-    endpoint: endpointPath,
-    method: "POST",
-    requestedModel: model,
-    resolvedModel: model,
-    wireProtocol: "responses",
-    isStreaming: isStream,
-    enforceMode: false,
-    promptTokens: estimatedPromptTokens,
-    promptTokensEstimated: true,
-    requestBody: inputRequest,
-    persistCompletions: completionPersistenceForRequest(p, undefined),
-    userId: p?.userId,
-    apiKeyId: p?.apiKeyId,
-    principalRole: p?.role,
-    ownerBypass: p?.ownerBypass,
-  });
-  emit({
-    type: "request.started",
-    at: nowIso(),
-    protocol: "responses",
-    endpoint: endpointPath,
-    model,
-    stream: isStream,
-    enforceEnabled: false,
-  });
+  return runWithRequestContext(requestId, async () => {
+    recordRequestStart({
+      requestId,
+      endpoint: endpointPath,
+      method: "POST",
+      requestedModel: model,
+      resolvedModel: model,
+      wireProtocol: "responses",
+      isStreaming: isStream,
+      enforceMode: false,
+      promptTokens: estimatedPromptTokens,
+      promptTokensEstimated: true,
+      requestBody: inputRequest,
+      persistCompletions: completionPersistenceForRequest(p, undefined),
+      userId: p?.userId,
+      apiKeyId: p?.apiKeyId,
+      principalRole: p?.role,
+      ownerBypass: p?.ownerBypass,
+    });
+    emit({
+      type: "request.started",
+      at: nowIso(),
+      protocol: "responses",
+      endpoint: endpointPath,
+      model,
+      stream: isStream,
+      enforceEnabled: false,
+    });
 
-  const fallback = new FallbackRouter({ principal: p });
-  const extraHeaders = buildUpstreamExtraHeaders(c);
-  const signal = c.req.raw.signal;
+    const fallback = new FallbackRouter({ principal: p });
+    const extraHeaders = buildUpstreamExtraHeaders(c);
+    const signal = c.req.raw.signal;
+    const recordAbort = () => {
+      recordRequestAbort({
+        requestId,
+        responseTimeMs: Math.round(performance.now() - c.get("startedAt")),
+      });
+    };
+    if (signal.aborted) {
+      recordAbort();
+    } else {
+      signal.addEventListener("abort", recordAbort, { once: true });
+    }
 
-  if (isStream) {
-    const stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        const encoder = new TextEncoder();
-        let clientGone = false;
-        const safeEnqueue = (text: string): boolean => {
-          if (clientGone) return false;
-          try {
-            controller.enqueue(encoder.encode(text));
-            return true;
-          } catch {
-            clientGone = true;
-            return false;
-          }
-        };
-        let completed: Record<string, unknown> | undefined;
-        const started = performance.now();
-        try {
-          const generator = fallback.streamWithFallback({
-            logicalModel: model,
-            requestData: requestDict,
-            targetProtocol: "responses",
-            extraHeaders,
-            ...(signal !== undefined ? { signal } : {}),
-            ...(p !== undefined ? { principal: p } : {}),
+    if (isStream) {
+      const stream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          const encoder = new TextEncoder();
+          let clientGone = false;
+          const safeEnqueue = (text: string): boolean => {
+            if (clientGone) return false;
+            try {
+              controller.enqueue(encoder.encode(text));
+              return true;
+            } catch {
+              clientGone = true;
+              return false;
+            }
+          };
+          let completed: Record<string, unknown> | undefined;
+          const started = performance.now();
+          // Nested run() so the lazily-iterated generator still resolves the
+          // request context (emits + route progress) after the handler returned.
+          await runWithRequestContext(requestId, async () => {
+            try {
+              const generator = fallback.streamWithFallback({
+                logicalModel: model,
+                requestData: requestDict,
+                targetProtocol: "responses",
+                extraHeaders,
+                ...(signal !== undefined ? { signal } : {}),
+                ...(p !== undefined ? { principal: p } : {}),
+              });
+              for await (const chunk of generator) {
+                completed = completedResponseFromSseChunk(chunk) ?? completed;
+                if (!safeEnqueue(chunk)) break;
+                recordRequestProgress({ requestId, streamBytes: Buffer.byteLength(chunk, "utf8"), streamChunkCount: 1 });
+              }
+              if (storeEnabled && completed !== undefined && typeof completed["id"] === "string") {
+                const chatRequest = responsesRequestToChat(requestDict);
+                const chatResponse = responsesResponseToChatResponse(completed);
+                getGlobalResponseStore().set({
+                  id: completed["id"] as string,
+                  ownerId: responseOwnerId(p),
+                  model,
+                  createdAt: typeof completed["created_at"] === "number" ? completed["created_at"] : Math.floor(Date.now() / 1000),
+                  status: typeof completed["status"] === "string" ? completed["status"] : "completed",
+                  messages: buildStoredMessages((chatRequest["messages"] as Array<Record<string, unknown>>) ?? [], chatResponse),
+                  inputItems: responsesInputItemsForStorage(requestDict, completed),
+                  response: completed,
+                  store: true,
+                });
+              }
+              try {
+                controller.close();
+              } catch {
+                // stream already errored/cancelled
+              }
+              const totalMs = Math.round(performance.now() - started);
+              // Pass the final `response.completed` payload so analytics record
+              // real usage (including cached input tokens) instead of estimates.
+              const finishStatus = clientGone ? 499 : 200;
+              recordRequestFinish({
+                requestId,
+                responseStatus: finishStatus,
+                responseTimeMs: totalMs,
+                ...(clientGone ? { errorMessage: "Client closed request before completion", errorType: "ClientAbort" } : {}),
+                ...(completed !== undefined && !clientGone ? { responseBody: completed } : {}),
+              });
+              emit({ type: "request.finished", at: nowIso(), status: finishStatus, totalMs, ...(clientGone ? { errorType: "ClientAbort" } : {}) });
+            } catch (err) {
+              const status = err instanceof RoutingError ? routingErrorStatus(err).status : err instanceof RouteExecutionError ? (err.statusCode ?? 502) : 500;
+              const message = err instanceof Error ? err.message : String(err);
+              safeEnqueue(`event: error\ndata: ${JSON.stringify({ type: "error", error: { message } })}\n\n`);
+              try {
+                controller.close();
+              } catch {
+                // stream already errored/cancelled
+              }
+              const totalMs = Math.round(performance.now() - started);
+              recordRequestFinish({ requestId, responseStatus: status, responseTimeMs: totalMs, errorMessage: message, errorType: err instanceof Error ? err.name : "Unknown" });
+              emit({ type: "request.finished", at: nowIso(), status, totalMs, errorMessage: message, errorType: err instanceof Error ? err.name : "Unknown" });
+            }
           });
-          for await (const chunk of generator) {
-            completed = completedResponseFromSseChunk(chunk) ?? completed;
-            if (!safeEnqueue(chunk)) break;
-            recordRequestProgress({ requestId, streamBytes: Buffer.byteLength(chunk, "utf8"), streamChunkCount: 1 });
-          }
-          if (storeEnabled && completed !== undefined && typeof completed["id"] === "string") {
-            const chatRequest = responsesRequestToChat(requestDict);
-            const chatResponse = responsesResponseToChatResponse(completed);
-            getGlobalResponseStore().set({
-              id: completed["id"] as string,
-              ownerId: responseOwnerId(p),
-              model,
-              createdAt: typeof completed["created_at"] === "number" ? completed["created_at"] : Math.floor(Date.now() / 1000),
-              status: typeof completed["status"] === "string" ? completed["status"] : "completed",
-              messages: buildStoredMessages((chatRequest["messages"] as Array<Record<string, unknown>>) ?? [], chatResponse),
-              inputItems: responsesInputItemsForStorage(requestDict, completed),
-              response: completed,
-              store: true,
-            });
-          }
-          try {
-            controller.close();
-          } catch {
-            // stream already errored/cancelled
-          }
-          const totalMs = Math.round(performance.now() - started);
-          // Pass the final `response.completed` payload so analytics record
-          // real usage (including cached input tokens) instead of estimates.
-          recordRequestFinish({
-            requestId,
-            responseStatus: 200,
-            responseTimeMs: totalMs,
-            ...(completed !== undefined ? { responseBody: completed } : {}),
-          });
-          emit({ type: "request.finished", at: nowIso(), status: 200, totalMs });
-        } catch (err) {
-          const status = err instanceof RoutingError ? routingErrorStatus(err).status : err instanceof RouteExecutionError ? (err.statusCode ?? 502) : 500;
-          const message = err instanceof Error ? err.message : String(err);
-          safeEnqueue(`event: error\ndata: ${JSON.stringify({ type: "error", error: { message } })}\n\n`);
-          try {
-            controller.close();
-          } catch {
-            // stream already errored/cancelled
-          }
-          const totalMs = Math.round(performance.now() - started);
-          recordRequestFinish({ requestId, responseStatus: status, responseTimeMs: totalMs, errorMessage: message, errorType: err instanceof Error ? err.name : "Unknown" });
-          emit({ type: "request.finished", at: nowIso(), status, totalMs, errorMessage: message, errorType: err instanceof Error ? err.name : "Unknown" });
-        }
-      },
-    });
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-cache, no-transform",
-        Connection: "keep-alive",
-        "X-Accel-Buffering": "no",
-      },
-    });
-  }
-
-  const started = performance.now();
-  try {
-    const response = await fallback.callWithFallback({
-      logicalModel: model,
-      requestData: requestDict,
-      targetProtocol: "responses",
-      extraHeaders,
-      ...(signal !== undefined ? { signal } : {}),
-      ...(p !== undefined ? { principal: p } : {}),
-    });
-    if (storeEnabled && typeof response["id"] === "string") {
-      const chatRequest = responsesRequestToChat(requestDict);
-      const chatResponse = responsesResponseToChatResponse(response);
-      getGlobalResponseStore().set({
-        id: response["id"] as string,
-        ownerId: responseOwnerId(p),
-        model,
-        createdAt: typeof response["created_at"] === "number" ? response["created_at"] : Math.floor(Date.now() / 1000),
-        status: typeof response["status"] === "string" ? response["status"] : "completed",
-        messages: buildStoredMessages((chatRequest["messages"] as Array<Record<string, unknown>>) ?? [], chatResponse),
-        inputItems: responsesInputItemsForStorage(requestDict, response),
-        response,
-        store: true,
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream; charset=utf-8",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+          "X-Accel-Buffering": "no",
+        },
       });
     }
-    const usage = typeof response["usage"] === "object" && response["usage"] !== null ? response["usage"] as Record<string, unknown> : {};
-    recordRequestFinish({
-      requestId,
-      responseStatus: 200,
-      responseTimeMs: Math.round(performance.now() - started),
-      responseBody: response,
-      promptTokens: typeof usage["input_tokens"] === "number" ? usage["input_tokens"] : undefined,
-      completionTokens: typeof usage["output_tokens"] === "number" ? usage["output_tokens"] : undefined,
-      totalTokens: typeof usage["total_tokens"] === "number" ? usage["total_tokens"] : undefined,
-    });
-    emit({ type: "request.finished", at: nowIso(), status: 200, totalMs: Math.round(performance.now() - started) });
-    return c.json(response);
-  } catch (err) {
-    const status = err instanceof RoutingError ? routingErrorStatus(err).status : err instanceof RouteExecutionError ? (err.statusCode ?? 502) : 500;
-    const message = err instanceof Error ? err.message : String(err);
-    recordRequestFinish({ requestId, responseStatus: status, responseTimeMs: Math.round(performance.now() - started), errorMessage: message, errorType: err instanceof Error ? err.name : "Unknown" });
-    emit({ type: "request.finished", at: nowIso(), status, totalMs: Math.round(performance.now() - started), errorMessage: message, errorType: err instanceof Error ? err.name : "Unknown" });
-    return c.json(formatOpenAIError(status, message, status >= 500 ? "api_error" : "invalid_request_error"), status as ContentfulStatusCode);
-  }
+
+    const started = performance.now();
+    try {
+      const response = await fallback.callWithFallback({
+        logicalModel: model,
+        requestData: requestDict,
+        targetProtocol: "responses",
+        extraHeaders,
+        ...(signal !== undefined ? { signal } : {}),
+        ...(p !== undefined ? { principal: p } : {}),
+      });
+      if (storeEnabled && typeof response["id"] === "string") {
+        const chatRequest = responsesRequestToChat(requestDict);
+        const chatResponse = responsesResponseToChatResponse(response);
+        getGlobalResponseStore().set({
+          id: response["id"] as string,
+          ownerId: responseOwnerId(p),
+          model,
+          createdAt: typeof response["created_at"] === "number" ? response["created_at"] : Math.floor(Date.now() / 1000),
+          status: typeof response["status"] === "string" ? response["status"] : "completed",
+          messages: buildStoredMessages((chatRequest["messages"] as Array<Record<string, unknown>>) ?? [], chatResponse),
+          inputItems: responsesInputItemsForStorage(requestDict, response),
+          response,
+          store: true,
+        });
+      }
+      const usage = typeof response["usage"] === "object" && response["usage"] !== null ? response["usage"] as Record<string, unknown> : {};
+      recordRequestFinish({
+        requestId,
+        responseStatus: 200,
+        responseTimeMs: Math.round(performance.now() - started),
+        responseBody: response,
+        promptTokens: typeof usage["input_tokens"] === "number" ? usage["input_tokens"] : undefined,
+        completionTokens: typeof usage["output_tokens"] === "number" ? usage["output_tokens"] : undefined,
+        totalTokens: typeof usage["total_tokens"] === "number" ? usage["total_tokens"] : undefined,
+      });
+      emit({ type: "request.finished", at: nowIso(), status: 200, totalMs: Math.round(performance.now() - started) });
+      return c.json(response);
+    } catch (err) {
+      const status = err instanceof RoutingError ? routingErrorStatus(err).status : err instanceof RouteExecutionError ? (err.statusCode ?? 502) : 500;
+      const message = err instanceof Error ? err.message : String(err);
+      recordRequestFinish({ requestId, responseStatus: status, responseTimeMs: Math.round(performance.now() - started), errorMessage: message, errorType: err instanceof Error ? err.name : "Unknown" });
+      emit({ type: "request.finished", at: nowIso(), status, totalMs: Math.round(performance.now() - started), errorMessage: message, errorType: err instanceof Error ? err.name : "Unknown" });
+      return c.json(formatOpenAIError(status, message, status >= 500 ? "api_error" : "invalid_request_error"), status as ContentfulStatusCode);
+    }
+  });
 }
 
 /** Run the existing fusion engine on its canonical chat representation while
@@ -1383,6 +1403,9 @@ async function handleFusionStream(
         }
       }, 2_500);
 
+      // Nested run() so the emit/finish calls below still resolve the request
+      // context: start() runs after the route handler (and its ALS scope) exited.
+      await runWithRequestContext(requestId, async () => {
       try {
         const generator = fusionRouter.stream(fusionCtx);
         for await (const event of generator) {
@@ -1459,6 +1482,7 @@ async function handleFusionStream(
         streamFinishEvent["fusionTrace"] = fusionCtx.streamFusionTrace;
       }
       emit(streamFinishEvent as never);
+      });
     },
   });
 

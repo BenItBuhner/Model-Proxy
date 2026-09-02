@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Panel, PanelBody } from "@/components/ui/panel";
 import { getCurrentUserLogs, type RequestLogRecord } from "@/lib/endpoints";
 import { formatCount } from "@/lib/format";
+import { RequestDetailModal } from "./request-detail-modal";
 import { RequestLogTable } from "./request-log-table";
 
 const REQUEST_LIMIT = 1000;
@@ -16,6 +17,8 @@ export function UserRequestHistory(): React.ReactElement {
   const [completed, setCompleted] = useState(0);
   const [active, setActive] = useState(0);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
+  const selectedSnapshotRef = useRef<RequestLogRecord | undefined>(undefined);
   const sequenceRef = useRef(0);
   const inFlightRef = useRef(false);
   const pendingRef = useRef(false);
@@ -53,6 +56,15 @@ export function UserRequestHistory(): React.ReactElement {
     return () => clearInterval(id);
   }, [reload]);
 
+  const selected = useMemo(() => {
+    if (selectedId === undefined) return undefined;
+    const current = records.find((record) => record.requestId === selectedId);
+    return current ?? selectedSnapshotRef.current;
+  }, [records, selectedId]);
+  useEffect(() => {
+    if (selected !== undefined) selectedSnapshotRef.current = selected;
+  }, [selected]);
+
   return (
     <Panel
       title="request history"
@@ -78,8 +90,9 @@ export function UserRequestHistory(): React.ReactElement {
     >
       <PanelBody>
         {error !== undefined ? <div className="mb-3 text-alert-500">{error}</div> : null}
-        <RequestLogTable records={records} />
+        <RequestLogTable records={records} selectedId={selectedId} onSelect={setSelectedId} />
       </PanelBody>
+      {selected !== undefined ? <RequestDetailModal record={selected} onClose={() => setSelectedId(undefined)} /> : null}
     </Panel>
   );
 }

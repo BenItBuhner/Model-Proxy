@@ -570,6 +570,9 @@ function handleAnthropicFusionStream(
       }, Math.max(1_000, Math.floor(STREAM_HEARTBEAT_MS / 2)));
 
       let status = 200;
+      // Nested run() so the emit/finish calls below still resolve the request
+      // context: start() runs after the route handler (and its ALS scope) exited.
+      await runWithRequestContext(requestId, async () => {
       try {
         for await (const event of fusionRouter.stream(fusionCtx)) {
           if (!safeEnqueue(event)) break;
@@ -636,6 +639,7 @@ function handleAnthropicFusionStream(
         finishEvent["fusionTrace"] = fusionCtx.streamFusionTrace;
       }
       emit(finishEvent as never);
+      });
     },
   });
 

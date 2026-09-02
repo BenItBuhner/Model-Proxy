@@ -85,6 +85,15 @@ const STALE_INFLIGHT_MS =
   parseOptionalPositiveInt(process.env.REQUEST_LOG_STALE_RUNNING_MS) ?? 30 * 60 * 1000;
 
 export function recordRequestStart(entry: StartEntry): void {
+  const existing = inflight.get(entry.requestId);
+  if (existing !== undefined) {
+    log.warn("requestId reused while previous request still running; replacing inflight record", {
+      requestId: entry.requestId,
+      previousEndpoint: existing.endpoint,
+      previousStartedAt: existing.timestamp,
+      newEndpoint: entry.endpoint,
+    });
+  }
   inflight.set(entry.requestId, {
     requestId: entry.requestId,
     timestamp: new Date().toISOString(),
