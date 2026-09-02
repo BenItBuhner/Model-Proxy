@@ -60,9 +60,6 @@ function buildContext(
   if (route.bufferPartialToolCalls !== undefined) {
     ctx.bufferPartialToolCalls = route.bufferPartialToolCalls;
   }
-  if (route.smoothStreaming === true) {
-    ctx.smoothStreaming = true;
-  }
   return ctx;
 }
 

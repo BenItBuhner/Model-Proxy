@@ -8,12 +8,6 @@ import {
 } from "./base.ts";
 import { ProviderAPIError, ProviderTimeoutError } from "./errors.ts";
 import {
-  isSmoothStreamingEnabled,
-  pureContentDelta,
-  StreamPacer,
-  withDeltaContent,
-} from "./stream-pacer.ts";
-import {
   parseRetryAfterFromErrorBody,
   parseRetryAfterHeader,
   readBodyWithDeadline,
@@ -294,21 +288,11 @@ export class OpenAIProvider extends AbstractProvider {
       for (const chunk of bufferedToolCallChunks) yield chunk;
       bufferedToolCallChunks = [];
     };
-    const pacer = isSmoothStreamingEnabled(ctx) ? new StreamPacer() : undefined;
-    let lastContentChunk: Record<string, unknown> | undefined = undefined;
-    const drainPacer = function* (): Generator<string, void, unknown> {
-      if (pacer === undefined || lastContentChunk === undefined) return;
-      const rest = pacer.drain();
-      if (rest.length > 0) {
-        yield `data: ${JSON.stringify(withDeltaContent(lastContentChunk, rest))}\n\n`;
-      }
-    };
     for await (const line of readSSELines(response.body)) {
       const trimmed = line.trim();
       if (trimmed === "" || trimmed === "data:") continue;
       if (trimmed === "data: [DONE]") {
         if (bufferPartialToolCalls) yield* flushBufferedToolCallChunks();
-        yield* drainPacer();
         yield "data: [DONE]\n\n";
         return;
       }
@@ -327,7 +311,6 @@ export class OpenAIProvider extends AbstractProvider {
       if (jsonStr.length === 0) continue;
       if (jsonStr === "[DONE]") {
         if (bufferPartialToolCalls) yield* flushBufferedToolCallChunks();
-        yield* drainPacer();
         yield "data: [DONE]\n\n";
         return;
       }
@@ -361,17 +344,6 @@ export class OpenAIProvider extends AbstractProvider {
         if (bufferPartialToolCalls && bufferedToolCallChunks.length > 0) {
           yield* flushBufferedToolCallChunks();
         }
-        if (pacer !== undefined) {
-          const content = pureContentDelta(normalized);
-          if (content !== undefined) {
-            lastContentChunk = normalized;
-            for await (const piece of pacer.feed(content)) {
-              yield `data: ${JSON.stringify(withDeltaContent(normalized, piece))}\n\n`;
-            }
-            continue;
-          }
-          yield* drainPacer();
-        }
         yield output;
       } catch (err) {
         if (err instanceof ProviderAPIError) throw err;
@@ -389,7 +361,6 @@ export class OpenAIProvider extends AbstractProvider {
         });
       }
     }
-    if (pacer !== undefined) yield* drainPacer();
     if (bufferPartialToolCalls && bufferedToolCallChunks.length > 0) {
       throw new ProviderAPIError(
         `${this.providerName} stream ended before completing a tool call`,

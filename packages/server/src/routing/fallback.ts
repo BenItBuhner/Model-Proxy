@@ -484,9 +484,6 @@ export class FallbackRouter {
     if (modelConfig.buffer_partial_tool_calls) {
       route.bufferPartialToolCalls = true;
     }
-    if (modelConfig.smooth_streaming) {
-      route.smoothStreaming = true;
-    }
     return route;
   }
 

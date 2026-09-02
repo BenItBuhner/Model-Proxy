@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { OpenAIProvider } from "../src/providers/openai-provider.ts";
-import type { ProviderCallContext } from "../src/providers/base.ts";
 
 const tmpRoot = join(tmpdir(), `mp-openai-stream-${process.pid}-${Date.now()}`);
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -801,98 +800,6 @@ describe("OpenAIProvider streaming termination", () => {
     expect(delta["content"]).toBe("");
     expect(delta["reasoning_content"]).toBe("json thinking");
     expect(result[1]).toBe("data: [DONE]\n\n");
-  });
-});
-
-describe("OpenAIProvider stream smoothing", () => {
-  const SENTENCE =
-    "Streaming feels much smoother when bursts are re-chunked into steady pieces. ";
-
-  function burstServer(): ReturnType<typeof Bun.serve> {
-    const encoder = new TextEncoder();
-    return Bun.serve({
-      port: 0,
-      fetch() {
-        const stream = new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(
-              encoder.encode(
-                'data: {"id":"c1","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}\n\n',
-              ),
-            );
-            controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({
-                  id: "c2",
-                  object: "chat.completion.chunk",
-                  model: "m",
-                  choices: [{ index: 0, delta: { content: SENTENCE }, finish_reason: null }],
-                })}\n\n`,
-              ),
-            );
-            controller.enqueue(
-              encoder.encode(
-                'data: {"id":"c3","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
-              ),
-            );
-            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-          },
-        });
-        return new Response(stream, {
-          headers: { "content-type": "text/event-stream" },
-        });
-      },
-    });
-  }
-
-  function makeCtx(smooth: boolean): ProviderCallContext {
-    return {
-      apiKey: "test-key",
-      baseUrlOverride: undefined,
-      timeoutSeconds: 30,
-      signal: new AbortController().signal,
-      smoothStreaming: smooth,
-    };
-  }
-
-  function deltaOf(chunk: Record<string, unknown>): Record<string, unknown> {
-    return ((chunk["choices"] as Array<Record<string, unknown>>)[0]!["delta"] ??
-      {}) as Record<string, unknown>;
-  }
-
-  test("re-chunks content bursts into paced pieces with order preserved", async () => {
-    server = burstServer();
-    writeProviderConfig(server.url.origin);
-    const provider = new OpenAIProvider("stream-test");
-    const chunks = await collect(
-      provider.streamOpenAI(
-        { model: "stream-model", messages: [{ role: "user", content: "hi" }], stream: true },
-        makeCtx(true),
-      ),
-    );
-    expect(chunks[chunks.length - 1]).toBe("data: [DONE]\n\n");
-    const parsed = chunks
-      .slice(0, -1)
-      .map((c) => JSON.parse(c.slice("data: ".length)) as Record<string, unknown>);
-    const finishFrame = parsed[parsed.length - 1]!;
-    expect(finishFrame["choices"] && (finishFrame["choices"] as Array<Record<string, unknown>>)[0]!["finish_reason"]).toBe("stop");
-    const contentFrames = parsed.slice(0, -1);
-    expect(contentFrames.length).toBeGreaterThan(2);
-    expect(contentFrames.map((c) => deltaOf(c)["content"]).join("")).toBe(SENTENCE);
-    expect(deltaOf(contentFrames[0]!)["role"]).toBe("assistant");
-  });
-
-  test("stays 1:1 passthrough when smoothing is off", async () => {
-    server = burstServer();
-    writeProviderConfig(server.url.origin);
-    const provider = new OpenAIProvider("stream-test");
-    const chunks = await collect(
-      provider.streamOpenAI(
-        { model: "stream-model", messages: [{ role: "user", content: "hi" }], stream: true },
-        makeCtx(false),
-      ),
-    );
-    expect(chunks).toHaveLength(4);
   });
 });
 

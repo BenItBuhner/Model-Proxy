@@ -363,19 +363,6 @@ beforeAll(() => {
   );
 
   writeFileSync(
-    join(tmpRoot, "models", "fake-smooth-model.json"),
-    JSON.stringify({
-      logical_name: "fake-smooth-model",
-      timeout_seconds: 5,
-      default_cooldown_seconds: 0,
-      smooth_streaming: true,
-      model_routings: [
-        { provider: "fake", model: "fake-backend", wire_protocol: "openai" },
-      ],
-    }),
-  );
-
-  writeFileSync(
     join(tmpRoot, "models", "fake-openai-defaults-model.json"),
     JSON.stringify({
       logical_name: "fake-openai-defaults-model",
@@ -728,37 +715,6 @@ describe("FallbackRouter", () => {
 
     expect(FakeProvider.calls.length).toBe(1);
     expect(FakeProvider.calls[0]?.args["reasoning_effort"]).toBe("high");
-  });
-
-  test("plumbs smooth_streaming model config into the provider context", async () => {
-    FakeProvider.calls = [];
-    FakeProvider.responses = [
-      {
-        id: "chatcmpl-x",
-        object: "chat.completion",
-        choices: [
-          {
-            index: 0,
-            message: { role: "assistant", content: "hello" },
-            finish_reason: "stop",
-          },
-        ],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      },
-    ];
-
-    const router = makeRouter();
-    await router.callWithFallback({
-      logicalModel: "fake-smooth-model",
-      requestData: {
-        model: "fake-smooth-model",
-        messages: [{ role: "user", content: "hi" }],
-      },
-      targetProtocol: "openai",
-    });
-
-    expect(FakeProvider.calls.length).toBe(1);
-    expect(FakeProvider.calls[0]?.ctx.smoothStreaming).toBe(true);
   });
 
   test("omits reasoning_effort from provider args when not requested", async () => {
