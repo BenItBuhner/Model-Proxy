@@ -517,7 +517,7 @@ export class TaskDividerAgent {
           id: `heuristic-${tasks.length + 1}`,
           description: `Handle the ${area}-related aspects of the request. Analyze all relevant context in the conversation.`,
           focus_area: area,
-          suggested_model_routing: area === "research" || area === "reasoning" ? "glm-5.2" : defaultModel,
+          suggested_model_routing: area === "reasoning" ? "kimi-k3" : "glm-5.3",
         });
       }
     }

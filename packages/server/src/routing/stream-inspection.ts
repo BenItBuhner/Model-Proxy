@@ -53,13 +53,15 @@ export function isMeaningfulStreamChunk(
     }
     if (targetProtocol === "responses") {
       const eventType = typeof obj["type"] === "string" ? obj["type"] : "";
+      // Only content-bearing events count as meaningful. Lifecycle events
+      // (created/in_progress/output_item.added/completed) carry no text, so
+      // counting them lets an upstream stream that dies before emitting any
+      // content pass as "successful" and surface an empty response.
       if (
-        eventType === "response.created" ||
-        eventType === "response.in_progress" ||
-        eventType === "response.output_item.added" ||
         eventType === "response.output_text.delta" ||
         eventType === "response.function_call_arguments.delta" ||
-        eventType === "response.completed"
+        eventType === "response.reasoning_text.delta" ||
+        eventType === "response.refusal.delta"
       ) {
         return true;
       }
@@ -141,7 +143,12 @@ export async function* requireMeaningfulStream(
   }
 
   if (!emittedMeaningfulChunk) {
-    if (options.allowEmptyPassthrough === true) {
+    // Only pass an empty stream through when the client already saw bytes.
+    // Otherwise an upstream stream that ends without meaningful content
+    // throws a 502 that the router treats as fallback-worthy (retries the
+    // same route with the next key/cycle, then other routes, then surfaces a
+    // real error instead of a silent empty 200).
+    if (options.allowEmptyPassthrough === true && buffered.length > 0) {
       for (const bufferedChunk of buffered) yield bufferedChunk;
       if (
         targetProtocol === "openai" &&

@@ -4,6 +4,11 @@ import { join, resolve } from "node:path";
 import { getDataDir } from "../config/data-dir.ts";
 
 let testStorageRoot: string | undefined;
+const storageRootResetters: Array<() => void> = [];
+
+export function registerStorageRootReset(reset: () => void): void {
+  storageRootResetters.push(reset);
+}
 
 export function getStorageRoot(): string {
   if (testStorageRoot !== undefined) return resolve(testStorageRoot);
@@ -29,4 +34,5 @@ export function getStorageDir(...parts: string[]): string {
 
 export function setStorageRootForTests(path: string | undefined): void {
   testStorageRoot = path;
+  for (const reset of storageRootResetters) reset();
 }

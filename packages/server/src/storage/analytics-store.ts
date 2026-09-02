@@ -1,11 +1,43 @@
 import { calculateCosts, resolvePricing } from "../observability/pricing.ts";
 import type { UsageSnapshot } from "../observability/usage.ts";
-import { listRequestMetricRows } from "./metrics-store.ts";
+import { registerStorageRootReset } from "./storage-paths.ts";
+import { listRequestMetricRows, metricsStoreFingerprint } from "./metrics-store.ts";
 import type { AnalyticsSummary, RequestLogFilters, RequestMetricRow } from "./types.ts";
 
+const summaryCache = new Map<string, { fingerprint: string; activeRequests: number; summary: AnalyticsSummary }>();
+const timeseriesCache = new Map<string, { fingerprint: string; points: AnalyticsTimeseriesPoint[] }>();
+
+registerStorageRootReset(() => {
+  summaryCache.clear();
+  timeseriesCache.clear();
+});
+
+function filterCacheKey(filters: RequestLogFilters): string {
+  return JSON.stringify({
+    provider: filters.provider,
+    model: filters.model,
+    apiKeyEnvVar: filters.apiKeyEnvVar,
+    userId: filters.userId,
+    apiKeyId: filters.apiKeyId,
+    state: filters.state,
+    cacheHit: filters.cacheHit,
+    status: filters.status,
+    since: filters.since,
+    until: filters.until,
+  });
+}
+
 export function getAnalyticsSummary(filters: RequestLogFilters = {}, activeRequests = 0): AnalyticsSummary {
+  const fingerprint = metricsStoreFingerprint();
+  const cacheKey = filterCacheKey(filters);
+  const cached = summaryCache.get(cacheKey);
+  if (cached !== undefined && cached.fingerprint === fingerprint && cached.activeRequests === activeRequests) {
+    return cached.summary;
+  }
   const rows = listRequestMetricRows({ limit: undefined, offset: 0, filters }).records;
-  return summarizeRows(rows, activeRequests);
+  const summary = summarizeRows(rows, activeRequests);
+  summaryCache.set(cacheKey, { fingerprint, activeRequests, summary });
+  return summary;
 }
 
 export interface AnalyticsTimeseriesPoint {
@@ -23,6 +55,12 @@ export function getAnalyticsTimeseries(
   filters: RequestLogFilters = {},
   bucket: "hour" | "day" = "hour",
 ): AnalyticsTimeseriesPoint[] {
+  const fingerprint = metricsStoreFingerprint();
+  const cacheKey = `${filterCacheKey(filters)}|${bucket}`;
+  const cached = timeseriesCache.get(cacheKey);
+  if (cached !== undefined && cached.fingerprint === fingerprint) {
+    return cached.points;
+  }
   const rows = listRequestMetricRows({ limit: undefined, offset: 0, filters }).records;
   const buckets = new Map<string, AnalyticsTimeseriesPoint>();
   for (const row of rows) {
@@ -47,7 +85,7 @@ export function getAnalyticsTimeseries(
     current.savedCostUsd += costs.savedCostUsd;
     buckets.set(key, current);
   }
-  return Array.from(buckets.values())
+  const points = Array.from(buckets.values())
     .sort((a, b) => a.bucket.localeCompare(b.bucket))
     .map((point) => ({
       ...point,
@@ -55,6 +93,8 @@ export function getAnalyticsTimeseries(
       typicalCostUsd: roundMoney(point.typicalCostUsd),
       savedCostUsd: roundMoney(point.savedCostUsd),
     }));
+  timeseriesCache.set(cacheKey, { fingerprint, points });
+  return points;
 }
 
 function summarizeRows(rows: RequestMetricRow[], activeRequests: number): AnalyticsSummary {

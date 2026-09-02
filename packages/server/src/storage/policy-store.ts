@@ -63,7 +63,8 @@ export function hasAllowedEntitlement(
   resourceType: EntitlementResourceType,
   resourceId: string,
 ): boolean {
-  const row = getOperationalDb()
+  const db = getOperationalDb();
+  const row = db
     .query(
       `SELECT allowed FROM user_entitlements
        WHERE user_id = $user_id
@@ -71,7 +72,15 @@ export function hasAllowedEntitlement(
          AND resource_id = $resource_id`,
     )
     .get({ $user_id: userId, $resource_type: resourceType, $resource_id: resourceId }) as { allowed: number } | null;
-  return row?.allowed === 1;
+  if (row?.allowed === 1) return true;
+  if (row?.allowed === 0) return false;
+  const configured = db
+    .query(
+      `SELECT 1 AS present FROM user_entitlements
+       WHERE user_id = $user_id AND resource_type = $resource_type LIMIT 1`,
+    )
+    .get({ $user_id: userId, $resource_type: resourceType }) as { present: number } | null;
+  return configured === null;
 }
 
 function entitlementFromRow(row: EntitlementRow): UserEntitlement {

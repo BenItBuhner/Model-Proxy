@@ -5,7 +5,7 @@ import type { FusionRequestContext } from "./types.ts";
 const log = createLogger("routing.fusion.image-preprocessor");
 export class ImagePreprocessor {
   private readonly fallbackRouter: FallbackRouter;
-  static readonly IMAGE_DESCRIPTION_MODEL = "kimi-k2.7-code";
+  static readonly IMAGE_DESCRIPTION_MODEL = "kimi-k3";
   constructor() {
     this.fallbackRouter = new FallbackRouter();
   }

@@ -1499,10 +1499,10 @@ export class FusionRouter {
         id: `image-desc-${i + 1}`,
         description: "Provide a detailed textual description of the user-provided image(s) so that text-only models can reason about visual content.",
         focus_area: "vision",
-        suggested_model_routing: "kimi-k2.7-code",
+        suggested_model_routing: "kimi-k3",
       },
       success: true,
-      usedModelRouting: "kimi-k2.7-code",
+      usedModelRouting: "kimi-k3",
       content: desc,
       durationMs: 0,
     }));

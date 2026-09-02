@@ -393,4 +393,58 @@ describe("multi-user auth", () => {
     const unauthorized = await app.request("/v1/user/logs");
     expect(unauthorized.status).toBe(401);
   });
+
+  test("users with no model entitlements can list and use models", async () => {
+    const app = createApp();
+    const ownerSignup = await app.request("/v1/auth/signup", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer multi-user-admin-key",
+      },
+      body: JSON.stringify({ email: "owner2@example.com", password: "correct-horse" }),
+    });
+    const ownerCookie = ownerSignup.headers.get("set-cookie") ?? "";
+
+    await app.request("/v1/admin/signup-settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json", cookie: ownerCookie },
+      body: JSON.stringify({
+        multi_user_enabled: true,
+        invite_signup_enabled: true,
+        open_signup_enabled: false,
+      }),
+    });
+
+    const invite = await app.request("/v1/admin/invites", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: ownerCookie },
+      body: JSON.stringify({ email: "unrestricted@example.com" }),
+    });
+    const inviteBody = await invite.json() as { token: string };
+
+    const userSignup = await app.request("/v1/auth/signup", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: "unrestricted@example.com",
+        password: "correct-horse",
+        invite_token: inviteBody.token,
+      }),
+    });
+    expect(userSignup.status).toBe(201);
+    const userBody = await userSignup.json() as { user: { id: string } };
+    const userCookie = userSignup.headers.get("set-cookie") ?? "";
+
+    await app.request(`/v1/admin/users/${userBody.user.id}/entitlements`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", cookie: ownerCookie },
+      body: JSON.stringify({ entitlements: [] }),
+    });
+
+    const models = await app.request("/v1/models", { headers: { cookie: userCookie } });
+    expect(models.status).toBe(200);
+    const modelsBody = await models.json() as { data: Array<{ id: string }> };
+    expect(modelsBody.data.length).toBeGreaterThan(0);
+  });
 });

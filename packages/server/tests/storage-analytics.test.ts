@@ -427,4 +427,42 @@ describe("persistent completion storage and analytics", () => {
     expect(daily[0]?.requests).toBe(2);
     expect(daily[0]?.totalTokens).toBe(45);
   });
+
+  test("metric reads pick up newly written rows without a process restart", () => {
+    recordRequestStart({
+      requestId: "cache-1",
+      endpoint: "/v1/chat/completions",
+      method: "POST",
+      requestedModel: "demo",
+      isStreaming: false,
+      enforceMode: false,
+    });
+    recordRequestFinish({
+      requestId: "cache-1",
+      responseStatus: 200,
+      responseTimeMs: 10,
+      responseBody: { usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    });
+    expect(listRequestMetricRows({ limit: undefined, offset: 0 }).records).toHaveLength(1);
+
+    recordRequestStart({
+      requestId: "cache-2",
+      endpoint: "/v1/chat/completions",
+      method: "POST",
+      requestedModel: "demo",
+      isStreaming: false,
+      enforceMode: false,
+    });
+    recordRequestFinish({
+      requestId: "cache-2",
+      responseStatus: 200,
+      responseTimeMs: 11,
+      responseBody: { usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 } },
+    });
+    expect(listRequestMetricRows({ limit: undefined, offset: 0 }).records).toHaveLength(2);
+    const first = getAnalyticsSummary({}, 0);
+    const second = getAnalyticsSummary({}, 0);
+    expect(second.totalRequests).toBe(first.totalRequests);
+    expect(second.totalTokens).toBe(first.totalTokens);
+  });
 });
