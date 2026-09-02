@@ -1547,22 +1547,21 @@ export class FallbackRouter {
     return "throw";
   }
 
-  /**
-   * When a request carries images but no route of the chosen logical model
-   * accepts them, describe the images via a vision-capable model and swap the
-   * image parts for their descriptions so the original model can still answer.
-   */
+  private ownRouteTuples(logicalModel: string, principal: Principal | undefined): RouteTuple[] {
+    return this.collectRouteConfigs(logicalModel, principal).filter(
+      (tuple) => tuple.sourceModel === logicalModel && tuple.isFallback !== true,
+    );
+  }
   private async withImageDescriptions(args: CallWithFallbackArgs): Promise<CallWithFallbackArgs> {
     if (args.skipImageDescription === true) return args;
     const principal = args.principal ?? this.principal;
     const analysis = analyzeRequestForRouting(args.requestData);
     if (!analysis.hasMultimodalContent) return args;
-    const routeTuples = this.collectRouteConfigs(args.logicalModel, principal);
-    if (routeTuples.length === 0) return args;
-    const { eligible, skipped } = this.eligibleRouteTuples(routeTuples, analysis, { emitSkips: false });
-    if (eligible.length > 0) return args;
+    const ownTuples = this.ownRouteTuples(args.logicalModel, principal);
+    if (ownTuples.length === 0) return args;
+    const { skipped } = this.eligibleRouteTuples(ownTuples, analysis, { emitSkips: false });
     if (!skipped.some((skip) => skip.reason === "multimodal_unsupported")) return args;
-    const visionModel = resolveVisionModel(principal, new Set([args.logicalModel]));
+    const visionModel = resolveVisionModel(principal);
     if (visionModel === undefined) {
       log.info("no vision-capable model available to describe images", { logicalModel: args.logicalModel });
       return args;
