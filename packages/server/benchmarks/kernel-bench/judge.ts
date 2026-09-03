@@ -105,6 +105,11 @@ async function main(): Promise<void> {
       const judge = judgeFor(fusionFamilies, job.base, args.bases);
       const user = `BRIEF:\n${job.item.messages[0]!.content}\n\n=== RESPONSE A ===\n${A.content}\n\n=== RESPONSE B ===\n${B.content}\n\nWhich response better fulfils the brief? Output the json block.`;
       const res = await chatCall({ ...opts, stream: true, reasoningEffort: "medium" }, judge, [{ role: "system", content: JUDGE_SYSTEM }, { role: "user", content: user }], `${job.item.id}-${job.base}-${job.order}`.replace(/[^a-zA-Z0-9_.:-]/g, "_"));
+      if (!res.ok) {
+        // Never persist a failed judge call as a verdict; it is retried on the next run.
+        console.log(`  judge call failed ${job.item.id} vs ${job.base} [${job.order}]: ${res.error ?? "unknown"}`);
+        continue;
+      }
       const m = res.content.match(/"winner"\s*:\s*"(A|B|tie)"/i);
       const winner = (m?.[1]?.toUpperCase() === "A" ? "A" : m?.[1]?.toUpperCase() === "B" ? "B" : "tie") as JudgeRow["winner"];
       const rationale = res.content.match(/"rationale"\s*:\s*"([\s\S]*?)"\s*\}/)?.[1]?.slice(0, 600) ?? res.error ?? "";
