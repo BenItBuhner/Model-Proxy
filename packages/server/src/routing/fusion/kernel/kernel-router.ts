@@ -173,9 +173,14 @@ export class FusionKernel {
       this.recordAnswer(run, result.content, result.toolCalls);
     }
     this.finalize(ctx, run);
-    result.cacheHit = run.mode === "search" && run.totalWork > 0 && run.cachedWork === run.totalWork;
+    result.cacheHit = this.searchServedFromCache(run);
     result.cacheKey = run.workKeys[0];
     return result;
+  }
+
+  /** True when a search turn ran no fresh worker to completion (everything reused; stragglers cancelled by early settle do not count). */
+  private searchServedFromCache(run: KernelRun): boolean {
+    return run.mode === "search" && run.cachedWork > 0 && run.cachedWork >= run.totalWork - run.cancelledWorkers;
   }
 
   /**
@@ -296,7 +301,7 @@ export class FusionKernel {
     });
     this.recordAnswer(run, answer.content, answer.toolNames.length > 0 ? answer.toolNames : undefined);
     this.finalize(ctx, run);
-    this.setStreamTrace(ctx, run, run.mode === "search" && run.totalWork > 0 && run.cachedWork === run.totalWork);
+    this.setStreamTrace(ctx, run, this.searchServedFromCache(run));
   }
 
   // ── Preparation / classification ──────────────────────────────────
