@@ -307,9 +307,10 @@ describe("Fusion kernel engine", () => {
       expect(w["stream"]).toBe(true);
       expect(w["max_tokens"]).toBeLessThanOrEqual(2_000);
     }
-    // Per-role reasoning effort: verifiers run low, proposers keep the model default.
+    // Per-role reasoning effort: verifiers run low; this request asked for `high`
+    // (band F3), so proposers inherit high effort like a base model would.
     for (const v of captured.verifier) expect(v["reasoning_effort"]).toBe("low");
-    for (const p of captured.proposer) expect(p["reasoning_effort"]).toBeUndefined();
+    for (const p of captured.proposer) expect(p["reasoning_effort"]).toBe("high");
     // Synthesis received consensus notes and the kernel brief.
     const synthText = allText(captured.synthesis[0]!["messages"] as unknown[]);
     expect(synthText).toContain("KERNEL SYNTHESIS BRIEF");

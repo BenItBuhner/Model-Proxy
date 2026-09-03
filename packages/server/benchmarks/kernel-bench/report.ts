@@ -10,10 +10,10 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { RUN_VERSION, type ModelRun } from "./types.ts";
 
-interface Args { in: string; out?: string; json?: string; fusion: string }
+interface Args { in: string; out?: string; json?: string; fusion: string; alias: Map<string, string> }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { in: "/tmp/kernel-bench/results.jsonl", fusion: "fusion-max" };
+  const args: Args = { in: "/tmp/kernel-bench/results.jsonl", fusion: "fusion-max", alias: new Map() };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     const next = () => argv[++i] ?? "";
@@ -21,6 +21,14 @@ function parseArgs(argv: string[]): Args {
     else if (a === "--out") args.out = next();
     else if (a === "--json") args.json = next();
     else if (a === "--fusion") args.fusion = next();
+    else if (a === "--alias") {
+      // --alias fusion-max@v8=fusion-max,fusion-max@v9=fusion-max : merge labelled runs
+      // into one model column (later files/rows win per item).
+      for (const pair of next().split(",")) {
+        const [from, to] = pair.split("=");
+        if (from !== undefined && to !== undefined) args.alias.set(from.trim(), to.trim());
+      }
+    }
   }
   return args;
 }
@@ -51,8 +59,9 @@ function main(): void {
   for (const path of present) {
     for (const line of readFileSync(path, "utf8").split("\n")) {
       if (line.trim().length === 0) continue;
-      const row = JSON.parse(line) as ModelRun;
-      if (row.version !== RUN_VERSION) continue;
+      const parsed = JSON.parse(line) as ModelRun;
+      if (parsed.version !== RUN_VERSION) continue;
+      const row = args.alias.has(parsed.model) ? { ...parsed, model: args.alias.get(parsed.model)! } : parsed;
       latest.set(`${row.itemId}|${row.model}`, row);
     }
   }

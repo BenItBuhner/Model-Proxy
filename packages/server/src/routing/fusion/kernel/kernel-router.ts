@@ -574,6 +574,18 @@ export class FusionKernel {
     return Math.min(run.kcfg.worker_max_tokens, byBand ?? run.kcfg.worker_max_tokens);
   }
 
+  /**
+   * Effort passed to proposer-class workers. Explicit config wins; otherwise
+   * F3/max requests (an explicit ask for more compute) run proposers at high
+   * reasoning effort, matching what a client would get from the base model.
+   */
+  private proposerReasoningEffort(run: KernelRun, role: WorkerRole): "low" | "medium" | "high" | undefined {
+    const configured = run.kcfg.worker_reasoning_effort[role === "intent" ? "proposer" : role];
+    if (configured !== undefined) return configured;
+    if (role === "proposer" && run.band !== "F2") return "high";
+    return undefined;
+  }
+
   /** Worker hard cap for this band, bounded by the remaining search budget (never below 15s). */
   private workerTimeoutMs(run: KernelRun): number {
     const seconds = run.kcfg.worker_timeout_seconds_by_band?.[run.band] ?? run.kcfg.worker_timeout_seconds;
@@ -1115,7 +1127,7 @@ export class FusionKernel {
             maxTokens,
             timeoutMs,
             idleTimeoutMs: kcfg.worker_idle_timeout_seconds * 1000,
-            reasoningEffort: kcfg.worker_reasoning_effort[role === "intent" ? "proposer" : role],
+            reasoningEffort: this.proposerReasoningEffort(run, role),
             onSegment: run.narrator.segment,
             semaphore: run.semaphore,
             signal,

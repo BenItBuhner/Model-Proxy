@@ -268,19 +268,34 @@ describe("kernel wave parsing and consensus", () => {
       ({ ...verification(id, proposalId, family, verdict), finalAnswerCorrect: ok });
 
     // Live failure mmlu-law:932 wave 1: E from glm+kimi (+glm audit confirms), F from deepseek only,
-    // and deepseek's own verifier rejects E. That rejection is not independent → decisive for E.
+    // and deepseek's own verifier rejects E. Neither the glm confirmation (leader camp) nor the
+    // deepseek rejection (dissent camp) is independent, so with three families this is NOT
+    // decisive — it escalates to a de-herded wave instead of committing early.
     const majority = buildAnswerVote(
       [p("p1", "glm", "E", "a"), p("p2", "kimi", "E", "b"), p("p3", "deepseek", "F", "c")],
       [judged("v1", "p1", "glm", "revise", true), judged("v2", "p2", "deepseek", "reject", false), judged("v3", "p3", "kimi", "reject", false)],
     );
     expect(majority?.leader?.key).toBe("e");
-    expect(isDecisiveVote(majority, [])).toBe(true);
+    expect(isDecisiveVote(majority, [])).toBe(false);
+    // With a fourth, uncommitted family confirming the leader, the same split IS decisive.
+    const fourFamilies = buildAnswerVote(
+      [p("p1", "glm", "E", "a"), p("p2", "kimi", "E", "b"), p("p3", "deepseek", "F", "c")],
+      [judged("v1", "p1", "qwen", "accept", true), judged("v2", "p2", "deepseek", "reject", false)],
+    );
+    expect(isDecisiveVote(fourFamilies, [])).toBe(true);
     // Same split but an INDEPENDENT family (kimi) rejects E → not decisive.
     const contested = buildAnswerVote(
       [p("p1", "glm", "E", "a"), p("p2", "kimi", "E", "b"), p("p3", "deepseek", "F", "c")],
       [judged("v2", "p1", "kimi", "reject", false)],
     );
     expect(isDecisiveVote(contested, [])).toBe(false);
+    // Live regression mmlu-law:948: glm+kimi say A, deepseek says F, and only a glm audit
+    // confirms A. A confirmation from a family already in the leader camp is not independent.
+    const selfConfirmed = buildAnswerVote(
+      [p("p1", "glm", "A", "a"), p("p2", "kimi", "A", "b"), p("p3", "deepseek", "F", "c")],
+      [judged("v1", "p2", "glm", "accept", true)],
+    );
+    expect(isDecisiveVote(selfConfirmed, [])).toBe(false);
 
     // Live failure mmlu-law:919 wave 2: E unanimous across 3 families; verifiers reject on
     // presentation grounds (no final-answer judgment) and one explicitly disputes → decisive.

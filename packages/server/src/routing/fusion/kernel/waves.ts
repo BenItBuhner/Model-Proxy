@@ -266,7 +266,9 @@ export function isDecisiveVote(vote: AnswerVote | undefined, verifications: Veri
   if (leaderFamilies.length < 2 || vote.leaderShare < 0.7 || dissentFamilies.size > 1) return false;
   const independentRejects = leader.rejectFamilies.filter((f) => !dissentFamilies.has(f));
   if (independentRejects.length > 0) return false;
-  const independentConfirms = leader.confirmFamilies.filter((f) => !dissentFamilies.has(f));
+  // An independent confirmation comes from a family that neither proposed the
+  // leader nor the dissent: a third, uncommitted family.
+  const independentConfirms = leader.confirmFamilies.filter((f) => !dissentFamilies.has(f) && !leaderFamilies.includes(f));
   return independentConfirms.length >= 1 || leaderFamilies.length >= 3;
 }
 
