@@ -231,6 +231,12 @@ describe("kernel wave parsing and consensus", () => {
     expect(unanimous?.leader?.weight).toBe(3.5);
     expect(unanimous?.leaderShare).toBe(1);
 
+    // Sloppy declarations with trailing prose merge into the clean answer.
+    const sloppy = buildAnswerVote([p("p1", "glm", "1736"), p("p2", "kimi", "1736 as the very last line, and put nothing after"), p("p3", "deepseek", "$1736$")], []);
+    expect(sloppy?.unanimous).toBe(true);
+    expect(sloppy?.leader?.weight).toBe(3);
+    expect(sloppy?.entries).toHaveLength(1);
+
     const split = buildAnswerVote([p("p1", "glm", "750"), p("p2", "kimi", "500"), p("p3", "deepseek", "750")], [v("v2", "p2", "deepseek", false, "750")]);
     expect(split?.unanimous).toBe(false);
     expect(split?.leader?.key).toBe("750");

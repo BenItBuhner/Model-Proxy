@@ -39,7 +39,7 @@
       "worker_reasoning_effort": { "verifier": "low", "intent": "low", "repair": "medium", "checkpoint": "medium" },
       "worker_timeout_seconds": 300,
       "worker_timeout_seconds_by_band": { "F2": 300, "F3": 600, "max": 900 },
-      "worker_idle_timeout_seconds": 60,
+      "worker_idle_timeout_seconds": 180,
       "proposal_width": { "F2": 3, "F3": 4, "max": 6 },
       "verifiers_per_candidate": { "F2": 1, "F3": 1, "max": 2 },
       "max_waves": { "F2": 2, "F3": 3, "max": 4 },

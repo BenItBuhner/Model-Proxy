@@ -218,6 +218,15 @@ export function parseVerdict(raw: string): ParsedVerdict {
   };
 }
 
+/** True when some whitespace/punctuation-delimited prefix of `raw` normalizes to `key`. */
+function rawHasAnswerPrefix(raw: string, key: string): boolean {
+  for (let i = 1; i < raw.length; i++) {
+    if (!/[\s,.;:)\]]/.test(raw[i] ?? "")) continue;
+    if (normalizeFinalAnswer(raw.slice(0, i)) === key) return true;
+  }
+  return false;
+}
+
 /**
  * Weighted final-answer vote. Each proposal with a final answer casts 1 vote;
  * a verifier confirming the candidate's answer adds +0.5 to it, a verifier
@@ -253,6 +262,23 @@ export function buildAnswerVote(proposals: Proposal[], verifications: Verificati
       bump(candidate.finalAnswer, -0.5, undefined, 0, 1);
       if (v.correctedFinalAnswer !== undefined) bump(v.correctedFinalAnswer, 0.5, `verifier:${v.family}`);
     }
+  }
+  // Merge sloppy declarations into their clean form: "1736 as the last line"
+  // normalizes to a key that starts with "1736" followed by a non-alphanumeric
+  // boundary, so it is the same answer with trailing prose.
+  const keys = [...entries.keys()].sort((a, b) => a.length - b.length);
+  for (const longer of keys) {
+    const raw = entries.get(longer)?.answer ?? "";
+    const short = keys.find((k) => k !== longer && k.length < longer.length && longer.startsWith(k) && rawHasAnswerPrefix(raw, k));
+    if (short === undefined) continue;
+    const target = entries.get(short);
+    const source = entries.get(longer);
+    if (target === undefined || source === undefined) continue;
+    target.weight += source.weight;
+    target.verifierConfirms += source.verifierConfirms;
+    target.verifierRejects += source.verifierRejects;
+    for (const f of source.families) if (!target.families.includes(f)) target.families.push(f);
+    entries.delete(longer);
   }
   const list = [...entries.values()].map((e) => ({ ...e, weight: Math.max(0, Math.round(e.weight * 100) / 100) })).sort((a, b) => b.weight - a.weight);
   const total = list.reduce((s, e) => s + e.weight, 0);
