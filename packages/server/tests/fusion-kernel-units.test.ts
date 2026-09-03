@@ -375,6 +375,7 @@ describe("kernel scheduler", () => {
     pipeline_verification: true,
     adaptive_verification: true,
     control_proposer: true,
+    effort_by_domain: { math: "F3", science: "F3" },
     worker_reasoning_effort: {},
     worker_timeout_seconds: 300,
     worker_idle_timeout_seconds: 60,
@@ -399,6 +400,16 @@ describe("kernel scheduler", () => {
     expect(effortBandFor("F2", "auto")).toBe("F2");
     expect(effortBandFor("F3", "auto")).toBe("F3");
     expect(effortBandFor("F1", "max")).toBe("max");
+    expect(effortBandFor("F2", "high")).toBe("F3");
+    // Domain-aware floor: only when effort is left to the kernel.
+    const byDomain = { math: "F3" as const, science: "F3" as const };
+    expect(effortBandFor("F2", "auto", { domains: ["math"], effortByDomain: byDomain })).toBe("F3");
+    expect(effortBandFor("F2", "auto", { domains: ["swe", "science"], effortByDomain: byDomain })).toBe("F3");
+    expect(effortBandFor("F2", "auto", { domains: ["writing"], effortByDomain: byDomain })).toBe("F2");
+    expect(effortBandFor("F2", "low", { domains: ["math"], effortByDomain: byDomain })).toBe("F2");
+    expect(effortBandFor("F2", "auto", { domains: ["math"], effortByDomain: { math: "max" } })).toBe("max");
+    const mathIntent = deterministicIntent("Find the number of primes p < 100 such that p^2 + 2 is also prime. Compute the answer.", 0);
+    expect(mathIntent.domains).toContain("math");
   });
 
   it("derives widths per band and caps verifiers by available other families", () => {

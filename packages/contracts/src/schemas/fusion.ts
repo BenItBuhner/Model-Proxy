@@ -253,6 +253,15 @@ export const FusionKernelConfigSchema = z
     verifiers_per_candidate: EffortWidthSchema.default({ F2: 1, F3: 2, max: 3 }),
     /** Maximum proposal waves (escalations) before synthesis, by effort band. */
     max_waves: EffortWidthSchema.default({ F2: 2, F3: 3, max: 4 }),
+    /**
+     * Domain-aware effort floor, applied only when the client did not request
+     * an effort explicitly (`auto`): a fresh task whose detected domains match
+     * runs at least at the given band (e.g. math/science at F3), since short
+     * hard problems score low on generic complexity heuristics.
+     */
+    effort_by_domain: z
+      .record(z.string(), z.enum(["F2", "F3", "max"]))
+      .default({ math: "F3", science: "F3" }),
     /** Agreement score (0-1) at or above which the search stops escalating. */
     agreement_threshold: z.number().min(0).max(1).default(0.62),
     /** Max concurrent upstream worker calls across all waves. */

@@ -27,9 +27,24 @@ export function parseRequestedKernelEffort(requestData: Record<string, unknown>)
  * the prompt looks (short AIME problems score as low complexity), so it maps
  * to F3; `max` maps to max.
  */
-export function effortBandFor(resolved: FusionEffortLevel | undefined, requested: RequestedKernelEffort): EffortBand {
+export function effortBandFor(
+  resolved: FusionEffortLevel | undefined,
+  requested: RequestedKernelEffort,
+  domainHint?: { domains: string[]; effortByDomain: Record<string, EffortBand> },
+): EffortBand {
   if (requested === "max") return "max";
   if (requested === "high" || resolved === "F3") return "F3";
+  // Domain floor only when the client left effort to the kernel (`auto`): an
+  // explicit low/medium is a deliberate budget choice and is respected.
+  if (requested === "auto" && domainHint !== undefined) {
+    const rank: Record<EffortBand, number> = { F2: 0, F3: 1, max: 2 };
+    let band: EffortBand = "F2";
+    for (const domain of domainHint.domains) {
+      const floor = domainHint.effortByDomain[domain];
+      if (floor !== undefined && rank[floor] > rank[band]) band = floor;
+    }
+    return band;
+  }
   return "F2";
 }
 

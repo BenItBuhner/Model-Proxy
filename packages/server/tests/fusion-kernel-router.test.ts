@@ -59,6 +59,7 @@ const kernelConfig: FusionConfig = {
     pipeline_verification: true,
     adaptive_verification: false,
     control_proposer: false,
+    effort_by_domain: { math: "F3", science: "F3" },
     worker_reasoning_effort: { verifier: "low" },
     worker_timeout_seconds: 30,
     worker_idle_timeout_seconds: 20,

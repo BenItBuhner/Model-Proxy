@@ -28,7 +28,9 @@ import type {
 import { assembleStream } from "./assemble.ts";
 import { compileCapsule, controlCapsule, type Capsule } from "./capsule.ts";
 import { INTENT_OBJECTIVE, deterministicIntent, mergeModelIntent } from "./intent.ts";
-import { hashMessages, truncateMiddle } from "./messages.ts";
+import { hashMessages, truncateMiddle,
+  findLastUserInstruction,
+} from "./messages.ts";
 import { ModelPool, type PoolPick } from "./model-pool.ts";
 import {
   decideEscalation,
@@ -349,7 +351,14 @@ export class FusionKernel {
       repairOnError: kcfg.continuation.repair_on_error,
     });
     const requested = parseRequestedKernelEffort(ctx.requestData);
-    const band = effortBandFor(ctx.resolvedFusionEffort, requested);
+    // Domain hint for the effort floor: the ledger's intent when continuing a
+    // task, otherwise a deterministic read of the current instruction.
+    const instruction = findLastUserInstruction(ctx.messages);
+    const domainHint = {
+      domains: ledger.intent?.domains ?? deterministicIntent(instruction.text, instruction.index).domains,
+      effortByDomain: kcfg.effort_by_domain as Record<string, EffortBand>,
+    };
+    const band = effortBandFor(ctx.resolvedFusionEffort, requested, domainHint);
     const runtimeEffort = ctx.runtimeEffort ?? score.effort;
 
     let mode: KernelMode;
