@@ -53,7 +53,7 @@ import type {
   WaveWidths,
   WorkerRole,
 } from "./types.ts";
-import { buildAnswerVote, buildConsensus, normalizeFinalAnswer, novelClaimCount, parseProposal, parseVerdict } from "./waves.ts";
+import { buildAnswerVote, buildConsensus, isDecisiveVote, normalizeFinalAnswer, novelClaimCount, parseProposal, parseVerdict } from "./waves.ts";
 import { WorkCache, computeWorkKey, type WorkSpec } from "./work-cache.ts";
 import { Semaphore, runWorker } from "./worker.ts";
 
@@ -956,10 +956,7 @@ export class FusionKernel {
     // settled — the synthesizer presents the best derivation instead of
     // re-solving the task with deep thinking. Split votes keep full depth.
     const vote = finalConsensus.answerVote;
-    const settled = vote !== undefined && vote.unanimous && vote.voters >= 2 &&
-      (verifications.length === 0 || verifications.some((v) => v.success && (v.finalAnswerCorrect === true || v.verdict === "accept"))) &&
-      !verifications.some((v) => v.success && (v.finalAnswerCorrect === false || v.verdict === "reject"));
-    run.settledAnswer = settled ? vote.leader?.answer : undefined;
+    run.settledAnswer = isDecisiveVote(vote, verifications) ? vote?.leader?.answer : undefined;
   }
 
   private async extractIntent(ctx: FusionRequestContext, run: KernelRun): Promise<void> {

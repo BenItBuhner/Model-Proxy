@@ -27,7 +27,7 @@ export interface ParsedVerdict {
 function optionalAnswer(value: unknown): string | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
+  const trimmed = value.trim().replace(/^[`"'\s]+|[`"'\s]+$/g, "");
   if (trimmed.length === 0 || /^(null|none|n\/a|undefined)$/i.test(trimmed)) return undefined;
   return trimmed.length > 200 ? `${trimmed.slice(0, 197)}...` : trimmed;
 }
@@ -39,7 +39,7 @@ function optionalAnswer(value: unknown): string | undefined {
  */
 export function normalizeFinalAnswer(raw: string): string {
   let s = raw.trim();
-  s = s.replace(/^\**|\**$/g, "").trim();
+  s = s.replace(/^[`"'*\s]+|[`"'*\s]+$/g, "").trim();
   s = s.replace(/^(?:final\s*answer|answer|final)\s*[:=]\s*/i, "");
   s = s.replace(/^\$+|\$+$/g, "");
   s = s.replace(/\\boxed\{([\s\S]*)\}/, "$1");
@@ -221,10 +221,25 @@ export function parseVerdict(raw: string): ParsedVerdict {
 /** True when some whitespace/punctuation-delimited prefix of `raw` normalizes to `key`. */
 function rawHasAnswerPrefix(raw: string, key: string): boolean {
   for (let i = 1; i < raw.length; i++) {
-    if (!/[\s,.;:)\]]/.test(raw[i] ?? "")) continue;
+    if (/[a-zA-Z0-9]/.test(raw[i] ?? "")) continue;
     if (normalizeFinalAnswer(raw.slice(0, i)) === key) return true;
   }
   return false;
+}
+
+/**
+ * A vote is decisive when every reasoner declared the same final answer and
+ * the audits that judged it confirm it more often than they reject it (or no
+ * audit ran but ≥3 voters agree). Decisive votes stop escalation and switch
+ * synthesis to presentation mode regardless of how poorly prose claims cluster.
+ */
+export function isDecisiveVote(vote: AnswerVote | undefined, verifications: Verification[]): boolean {
+  if (vote === undefined || !vote.unanimous || vote.voters < 2) return false;
+  const usable = verifications.filter((v) => v.success);
+  const confirms = usable.filter((v) => v.finalAnswerCorrect === true || (v.verdict === "accept" && v.finalAnswerCorrect !== false)).length;
+  const rejects = usable.filter((v) => v.finalAnswerCorrect === false || v.verdict === "reject").length;
+  if (usable.length === 0) return vote.voters >= 3;
+  return confirms > rejects && (confirms >= 1);
 }
 
 /**
@@ -478,6 +493,9 @@ export function buildConsensus(proposals: Proposal[], verifications: Verificatio
       ? claimConsensus
       : 0.55 * claimConsensus + 0.45 * verifierAcceptRate;
   }
+  // Math/MC prose clusters poorly even when every reasoner reached the same
+  // answer; a decisive vote must not be dragged below threshold by that.
+  if (isDecisiveVote(answerVote, verifications)) agreement = Math.max(agreement, 0.8);
 
   return {
     agreement: round3(agreement),

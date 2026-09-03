@@ -246,6 +246,17 @@ describe("kernel wave parsing and consensus", () => {
     const consensus = buildConsensus([p("p1", "glm", "750"), p("p2", "kimi", "750")], []);
     expect(consensus.answerVote?.unanimous).toBe(true);
     expect(consensus.agreement).toBeGreaterThanOrEqual(0.75);
+
+    // Decisive: four reasoners agree (one with a backticked, prose-suffixed declaration),
+    // three audits confirm and one rejects — prose claims that never cluster must not force escalation.
+    const disjoint = (id: string, family: string, finalAnswer: string, claim: string): Proposal => ({ ...proposal(id, family, [claim]), finalAnswer });
+    const decisive = buildConsensus(
+      [disjoint("p1", "glm", "699", "N = 5694 via digit analysis"), disjoint("p2", "kimi", "`699` on its own line.", "casework on the thousands digit"), disjoint("p3", "deepseek", "699", "the quotient is 56 and remainder 94"), disjoint("p4", "glm", "$699$", "mod 7 constraints on each digit")],
+      [v("v1", "p1", "kimi", true), v("v2", "p3", "glm", true), v("v3", "p4", "kimi", true), { ...verification("v4", "p2", "deepseek", "reject"), finalAnswerCorrect: undefined }],
+    );
+    expect(decisive.answerVote?.entries).toHaveLength(1);
+    expect(decisive.answerVote?.unanimous).toBe(true);
+    expect(decisive.agreement).toBeGreaterThanOrEqual(0.8);
     const single = buildConsensus([p("p1", "glm", "750")], []);
     expect(single.agreement).toBeLessThanOrEqual(0.5);
   });
