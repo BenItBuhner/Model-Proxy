@@ -125,6 +125,7 @@ export class ResponseFuser {
         model: fusionModel,
         messages: synthesisMessages,
         max_tokens: synthesisBudget.outputBudgetTokens,
+        ...(ctx.kernelSynthesisReasoningEffort !== undefined ? { reasoning_effort: ctx.kernelSynthesisReasoningEffort } : {}),
       };
       const tools = (ctx.requestData?.["tools"] as unknown[] | undefined);
       const toolChoice = ctx.requestData?.["tool_choice"];
@@ -276,6 +277,7 @@ export class ResponseFuser {
         messages: synthesisMessages,
         max_tokens: synthesisBudget.outputBudgetTokens,
         stream: true,
+        ...(ctx.kernelSynthesisReasoningEffort !== undefined ? { reasoning_effort: ctx.kernelSynthesisReasoningEffort } : {}),
       };
       const tools = (ctx.requestData?.["tools"] as unknown[] | undefined);
       const toolChoice = ctx.requestData?.["tool_choice"];
@@ -343,6 +345,14 @@ export class ResponseFuser {
         yield `data: ${JSON.stringify(fallbackChunk)}\n\n`;
       }
     }
+  }
+
+  /** Convert an OpenAI-compatible SSE stream into Anthropic message events (used by the kernel fast path). */
+  convertOpenAIStreamToAnthropic(
+    ctx: FusionRequestContext,
+    streamGen: AsyncGenerator<string, void, unknown>,
+  ): AsyncGenerator<string, void, unknown> {
+    return this.openAIStreamToAnthropic(ctx, streamGen);
   }
 
   private async *openAIStreamToAnthropic(

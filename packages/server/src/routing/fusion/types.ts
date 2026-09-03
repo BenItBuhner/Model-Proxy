@@ -79,6 +79,8 @@ export interface FusionRequestContext {
   kernelBrief?: string;
   /** Kernel engine: synthesis/executor routing override for this turn. */
   kernelSynthesisRouting?: string;
+  /** Kernel engine: reasoning_effort forwarded to the synthesis/executor call. */
+  kernelSynthesisReasoningEffort?: "low" | "medium" | "high";
   /** Kernel engine: compact summary attached to the fusion trace. */
   kernelTrace?: Record<string, unknown>;
 }

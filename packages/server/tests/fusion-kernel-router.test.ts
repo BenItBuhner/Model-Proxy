@@ -185,8 +185,7 @@ function installFetch(captured: Captured, options: { synthesisToolCall?: boolean
 
     // Synthesis / executor.
     captured.synthesis.push(body);
-    expect(body["tools"]).toBeDefined();
-    const wantsTool = options.synthesisToolCall === true;
+    const wantsTool = options.synthesisToolCall === true && Array.isArray(body["tools"]);
     if (body["stream"] === true) {
       return wantsTool
         ? streamResponse(model, [], { name: "read_file", arguments: JSON.stringify({ path: "src/auth.ts" }) })
@@ -510,6 +509,48 @@ describe("Fusion kernel engine", () => {
     // Truncated work is not cached: only glm + kimi proposals (+ intent + verifiers) were stored.
     const cachedProposals = getOperationalDb().query("SELECT model_routing FROM fusion_kernel_work WHERE kind = 'proposer'").all() as Array<{ model_routing: string }>;
     expect(cachedProposals.map((r) => r.model_routing).sort()).toEqual(["glm-5.3", "kimi-k3"]);
+  });
+
+  it("serves Anthropic-protocol clients: fast path converts the request and emits Anthropic events; search synthesizes through the fuser", async () => {
+    const conversationId = `conv-anthropic-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const anthropicCfg: FusionConfig = { ...kernelConfig, fusion: { ...kernelConfig.fusion, wire_protocol: "anthropic" } };
+    const makeAnthropicCtx = (messages: unknown[], extra: Record<string, unknown> = {}): FusionRequestContext => ({
+      logicalModel: "fusion-max",
+      fusionConfig: anthropicCfg,
+      requestData: { model: "fusion-max", max_tokens: 200, system: SYSTEM.content, messages, ...extra },
+      clientProtocol: "anthropic",
+      messages,
+      conversationId,
+      requestId: `req-${Math.random().toString(16).slice(2)}`,
+    });
+
+    // Fast path, non-streaming: request converted to OpenAI shape upstream, assembled back.
+    const trivial = [{ role: "user", content: "What is 2+2?" }];
+    const fast = await router.route(makeAnthropicCtx(trivial, { reasoning_effort: "low" }));
+    expect(fast.content).toContain("Final synthesized answer");
+    expect(fast.wireProtocol).toBe("anthropic");
+    const fastBody = captured.synthesis[0]!;
+    expect(fastBody["stream"]).toBe(true);
+    expect(fastBody["model"]).toBe("up-flash");
+    const upstreamRoles = (fastBody["messages"] as Array<Record<string, unknown>>).map((m) => m["role"]);
+    expect(upstreamRoles[0]).toBe("system");
+
+    // Fast path, streaming: events are Anthropic SSE.
+    const streamed = await collectStream(router.stream(makeAnthropicCtx(trivial, { reasoning_effort: "low", stream: true })));
+    expect(streamed).toContain("event: message_start");
+    expect(streamed).toContain("text_delta");
+    expect(streamed).toContain("event: message_stop");
+    expect(streamed).not.toContain("chat.completion.chunk");
+
+    // Search turn (F2) streams Anthropic thinking narration + synthesized text.
+    const goal = [{ role: "user", content: GOAL }];
+    const search = await collectStream(router.stream(makeAnthropicCtx(goal, { reasoning_effort: "high", stream: true })));
+    expect(search).toContain("thinking_delta");
+    expect(search).toContain("Kernel: new task");
+    expect(search).toContain("Final synthesized answer");
+    expect(captured.proposer.length).toBe(3);
   });
 
   it("uses the fast path for trivial fresh requests and still records the ledger for later continuation", async () => {

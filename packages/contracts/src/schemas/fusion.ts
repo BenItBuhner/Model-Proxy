@@ -191,6 +191,8 @@ export const FusionKernelConfigSchema = z
     synthesis_routing: z.string().min(1).optional(),
     /** Fast, cheap routing for intent extraction and light structured passes. Defaults to the summarizer routing. */
     fast_routing: z.string().min(1).optional(),
+    /** `reasoning_effort` forwarded to the synthesis/executor model (unset = model default, i.e. deepest). */
+    synthesis_reasoning_effort: z.enum(["low", "medium", "high"]).optional(),
     /** Target input tokens per worker context capsule (hard cap for proposers/verifiers). */
     capsule_tokens: z.number().int().min(2_000).max(200_000).default(24_000),
     /** Max output tokens for proposal/verification workers (ceiling; see worker_max_tokens_by_band). */

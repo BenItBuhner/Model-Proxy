@@ -1,5 +1,6 @@
 import type { FusionKernelConfig } from "@model-proxy/contracts/schemas/fusion.ts";
 import { modelConfigLoader } from "../../../config/model-loader.ts";
+import { anthropicToOpenaiRequest } from "../../../format/converters.ts";
 import { createLogger } from "../../../observability/logger.ts";
 import { calculateCosts, resolvePricing } from "../../../observability/pricing.ts";
 import { usageSnapshotFromCounts } from "../../../shared/usage-snapshot.ts";
@@ -557,17 +558,7 @@ export class FusionKernel {
     emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "fast_path", status: "started", modelRouting: run.fastRouting });
     this.beginFreshTaskIfNeeded(ctx, run);
     // Stream upstream even for non-streaming clients (origin-timeout safety), then assemble.
-    const assembled = await assembleStream(
-      this.fallbackRouter.streamWithFallback({
-        logicalModel: run.fastRouting,
-        requestData: { ...ctx.requestData, stream: true },
-        targetProtocol: ctx.clientProtocol,
-        signal: ctx.signal,
-        principal: ctx.principal,
-        extraHeaders: ctx.extraHeaders,
-      }),
-      ctx.clientProtocol,
-    );
+    const assembled = await assembleStream(this.fastPathUpstreamStream(ctx, run), "openai");
     const extracted = {
       content: assembled.content,
       reasoning: undefined as string | undefined,
@@ -612,19 +603,34 @@ export class FusionKernel {
     };
   }
 
+  /**
+   * Fast-path upstream stream, always OpenAI-shaped: Anthropic requests are
+   * converted first (the routes are OpenAI-wire) and converted back at the
+   * edge, exactly like the synthesis path.
+   */
+  private fastPathUpstreamStream(ctx: FusionRequestContext, run: KernelRun): AsyncGenerator<string, void, unknown> {
+    const requestData = ctx.clientProtocol === "anthropic"
+      ? anthropicToOpenaiRequest(ctx.requestData)
+      : ctx.requestData;
+    return this.fallbackRouter.streamWithFallback({
+      logicalModel: run.fastRouting,
+      requestData: { ...requestData, model: run.fastRouting, stream: true },
+      targetProtocol: "openai",
+      signal: ctx.signal,
+      principal: ctx.principal,
+      extraHeaders: ctx.extraHeaders,
+    });
+  }
+
   private async *streamFastPath(ctx: FusionRequestContext, run: KernelRun): AsyncGenerator<string, void, unknown> {
     const started = performance.now();
     emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "fast_path", status: "started", modelRouting: run.fastRouting });
     this.beginFreshTaskIfNeeded(ctx, run);
     const answer = { content: "", toolNames: [] as string[] };
-    const stream = this.fallbackRouter.streamWithFallback({
-      logicalModel: run.fastRouting,
-      requestData: ctx.requestData,
-      targetProtocol: ctx.clientProtocol,
-      signal: ctx.signal,
-      principal: ctx.principal,
-      extraHeaders: ctx.extraHeaders,
-    });
+    const upstream = this.fastPathUpstreamStream(ctx, run);
+    const stream = ctx.clientProtocol === "anthropic"
+      ? this.responseFuser.convertOpenAIStreamToAnthropic(ctx, upstream)
+      : upstream;
     for await (const chunk of stream) {
       this.observeAnswerChunk(ctx, chunk, answer);
       yield chunk;
@@ -1368,6 +1374,7 @@ export class FusionKernel {
 
   private applySynthesisContext(ctx: FusionRequestContext, run: KernelRun): void {
     ctx.kernelSynthesisRouting = run.executorRouting;
+    ctx.kernelSynthesisReasoningEffort = run.kcfg.synthesis_reasoning_effort;
     if (ctx.kernelBrief === undefined) ctx.kernelBrief = "KERNEL BRIEF\nAnswer the current request from the conversation context.";
   }
 
