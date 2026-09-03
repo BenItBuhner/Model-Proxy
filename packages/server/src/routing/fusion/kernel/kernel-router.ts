@@ -101,6 +101,8 @@ interface KernelRun {
   truncatedWorkers: number;
   /** Waves settled early because the settled subset already decided the outcome. */
   earlySettles: number;
+  /** Final answer agreed unanimously and confirmed; synthesis runs in presentation mode. */
+  settledAnswer?: string;
 }
 
 interface QuorumJob<T> {
@@ -411,6 +413,7 @@ export class FusionKernel {
       cancelledWorkers: 0,
       truncatedWorkers: 0,
       earlySettles: 0,
+      settledAnswer: undefined,
     };
   }
 
@@ -861,6 +864,14 @@ export class FusionKernel {
     };
     run.notes = this.buildSearchNotes(finalConsensus, proposals, verifications);
     ctx.kernelBrief = this.searchBrief(run, finalConsensus, proposals.length, verifications.length);
+    // Adaptive synthesis depth: a unanimous, verifier-confirmed final answer is
+    // settled — the synthesizer presents the best derivation instead of
+    // re-solving the task with deep thinking. Split votes keep full depth.
+    const vote = finalConsensus.answerVote;
+    const settled = vote !== undefined && vote.unanimous && vote.voters >= 2 &&
+      (verifications.length === 0 || verifications.some((v) => v.success && v.finalAnswerCorrect === true)) &&
+      !verifications.some((v) => v.success && v.finalAnswerCorrect === false);
+    run.settledAnswer = settled ? vote.leader?.answer : undefined;
   }
 
   private async extractIntent(ctx: FusionRequestContext, run: KernelRun): Promise<void> {
@@ -1301,7 +1312,7 @@ export class FusionKernel {
       "- Candidate answers are full independent attempts ranked by verifier verdicts; merge the best specifics (exact values, code, steps) rather than averaging prose.",
       consensus.answerVote !== undefined
         ? consensus.answerVote.unanimous
-          ? "- The FINAL ANSWER VOTE is unanimous: your final answer must match it unless you find a concrete error in every derivation. Present it in exactly the format the user requested."
+          ? "- The FINAL ANSWER VOTE is unanimous and verified: the answer is SETTLED. Do not re-solve the task from scratch — present the clearest candidate derivation (fix only obvious slips), keep it concise, and state that final answer in exactly the format the user requested."
           : "- The FINAL ANSWER VOTE is split: do not pick by popularity or persuasiveness alone — locate the step where the derivations diverge, work it out yourself, then commit to one answer in exactly the format the user requested."
         : "",
       "- Produce ONE complete, final, user-facing answer for the goal. If the correct next step is an action in the user's environment and tools are available, emit structured tool calls instead of describing them.",
@@ -1429,7 +1440,9 @@ export class FusionKernel {
 
   private applySynthesisContext(ctx: FusionRequestContext, run: KernelRun): void {
     ctx.kernelSynthesisRouting = run.executorRouting;
-    ctx.kernelSynthesisReasoningEffort = run.kcfg.synthesis_reasoning_effort;
+    ctx.kernelSynthesisReasoningEffort = run.settledAnswer !== undefined
+      ? (run.kcfg.synthesis_reasoning_effort ?? "low")
+      : run.kcfg.synthesis_reasoning_effort;
     if (ctx.kernelBrief === undefined) ctx.kernelBrief = "KERNEL BRIEF\nAnswer the current request from the conversation context.";
   }
 
@@ -1530,6 +1543,7 @@ export class FusionKernel {
       cancelledWorkers: run.cancelledWorkers,
       truncatedWorkers: run.truncatedWorkers,
       earlySettles: run.earlySettles,
+      settledAnswer: run.settledAnswer,
       searchBudgetSeconds: run.kcfg.search_deadline_seconds[run.band],
       continuationSteps: run.ledger.continuationSteps,
       totalContinuationSteps: run.ledger.totalContinuationSteps,

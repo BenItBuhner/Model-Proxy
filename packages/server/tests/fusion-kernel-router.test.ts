@@ -576,6 +576,9 @@ describe("Fusion kernel engine", () => {
     expect(synthA).toContain("FINAL ANSWER VOTE");
     expect(synthA).toContain("UNANIMOUS");
     expect(a.fusionTrace?.kernel?.["agreement"] as number).toBeGreaterThanOrEqual(0.7);
+    // Settled answer → presentation-mode synthesis at low reasoning effort.
+    expect(a.fusionTrace?.kernel?.["settledAnswer"]).toBe("750");
+    expect(unanimous.synthesis[0]!["reasoning_effort"]).toBe("low");
 
     // Fresh storage + router: the work cache is content-addressed, so identical
     // glm/deepseek proposals from the unanimous run would otherwise be reused.
@@ -594,6 +597,8 @@ describe("Fusion kernel engine", () => {
     expect(synthB).toContain("SPLIT");
     expect(synthB).toContain("500");
     expect(synthB).toContain("asserted by kimi");
+    // Split vote → full-depth synthesis (model default effort).
+    expect(split.synthesis[0]!["reasoning_effort"]).toBeUndefined();
   });
 
   it("uses the fast path for trivial fresh requests and still records the ledger for later continuation", async () => {
