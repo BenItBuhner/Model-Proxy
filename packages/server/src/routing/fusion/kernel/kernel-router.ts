@@ -869,8 +869,8 @@ export class FusionKernel {
     // re-solving the task with deep thinking. Split votes keep full depth.
     const vote = finalConsensus.answerVote;
     const settled = vote !== undefined && vote.unanimous && vote.voters >= 2 &&
-      (verifications.length === 0 || verifications.some((v) => v.success && v.finalAnswerCorrect === true)) &&
-      !verifications.some((v) => v.success && v.finalAnswerCorrect === false);
+      (verifications.length === 0 || verifications.some((v) => v.success && (v.finalAnswerCorrect === true || v.verdict === "accept"))) &&
+      !verifications.some((v) => v.success && (v.finalAnswerCorrect === false || v.verdict === "reject"));
     run.settledAnswer = settled ? vote.leader?.answer : undefined;
   }
 
