@@ -529,6 +529,42 @@ describe("Fusion kernel engine", () => {
     expect(cachedProposals.map((r) => r.model_routing).sort()).toEqual(["glm-5.3", "kimi-k3"]);
   });
 
+  it("retries a failed audit with another family instead of settling a two-family answer on an upstream error", async () => {
+    // Fresh storage: identical candidates from earlier tests would otherwise serve the audit from the work cache.
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-audit-retry-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const baseFetch = globalThis.fetch;
+    let verifierCalls = 0;
+    const verifierModels: string[] = [];
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      // Only glm + kimi propose (deepseek is down); the FIRST audit call fails upstream.
+      if (String(body["model"]) === "up-deepseek" && system.includes("independent expert reasoners")) {
+        return new Response(JSON.stringify({ error: { message: "upstream unavailable" } }), { status: 503, headers: { "content-type": "application/json" } });
+      }
+      if (system.includes("adversarial verifier")) {
+        verifierCalls += 1;
+        verifierModels.push(String(body["model"]));
+        if (verifierCalls === 1) return new Response(JSON.stringify({ error: { message: "upstream unavailable" } }), { status: 503, headers: { "content-type": "application/json" } });
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-audit-retry-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true, control_proposer: false, search_deadline_seconds: { F2: 120, F3: 120, max: 120 } } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(verifierCalls).toBe(2);
+    expect(new Set(verifierModels).size).toBe(2);
+    expect(result.fusionTrace?.kernel?.["settledAnswer"]).toBe("750");
+    expect(result.fusionTrace?.kernel?.["waves"]).toBe(1);
+  });
+
   it("runs one control proposer on the verbatim task and lets its dissent block a decisive vote", async () => {
     const mathPrompt = [{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }];
     const controlCfg: FusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true, control_proposer: true } };

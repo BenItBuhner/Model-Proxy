@@ -873,6 +873,20 @@ export class FusionKernel {
         }
         if (entries.length > 0) {
           const waveVerifications = await this.settleWithQuorum(run, entries, Math.min(2, run.pool.proposerFamilyCount), (settled) => this.verdictsAlreadyAccept(settled));
+          // A failed audit is not evidence. If no verdict succeeded and time
+          // remains, retry once on the leading candidate with a different family
+          // so a unanimous answer is never settled on the strength of an upstream error.
+          if (waveVerifications.every((v) => !v.success) && this.remainingSearchMs(run) > 45_000) {
+            const failedFamilies = new Set(waveVerifications.map((v) => v.family));
+            const leaderKey = preVote?.leader?.key;
+            const leaderCandidate = candidates.find((c) => c.finalAnswer !== undefined && leaderKey !== undefined && normalizeFinalAnswer(c.finalAnswer) === leaderKey) ?? candidates[0];
+            if (leaderCandidate !== undefined) {
+              await run.narrator.say("Kernel: the audit failed upstream; retrying with another model family before settling.");
+              const retry = this.launchVerification(ctx, run, intent, searchLedger, [leaderCandidate], wave, { ...widths, verifiersPerCandidate: 1 }, taskStartIndex, { excludeFamilies: failedFamilies, idSuffix: "-retry" });
+              const retried = await this.settleWithQuorum(run, retry, 1);
+              waveVerifications.push(...retried);
+            }
+          }
           verifications.push(...waveVerifications);
           this.recordVerificationWave(ctx, run, waveVerifications, wave, Math.round(performance.now() - verifyStarted));
         }
@@ -1218,12 +1232,13 @@ export class FusionKernel {
     wave: number,
     widths: WaveWidths,
     taskStartIndex: number,
+    options: { excludeFamilies?: Set<string>; idSuffix?: string } = {},
   ): QuorumEntry<Verification>[] {
     const { kcfg } = run;
     const jobs: Array<{ candidate: Proposal; pick: PoolPick; id: string }> = [];
     for (const candidate of candidates) {
-      const picks = run.pool.verifiersFor(candidate.family, widths.verifiersPerCandidate);
-      picks.forEach((pick, i) => jobs.push({ candidate, pick, id: `verify-w${wave}-${candidate.id.replace(/^[a-z]+-w\d+-/, "")}-${i + 1}` }));
+      const picks = run.pool.verifiersFor(candidate.family, widths.verifiersPerCandidate, options.excludeFamilies);
+      picks.forEach((pick, i) => jobs.push({ candidate, pick, id: `verify-w${wave}-${candidate.id.replace(/^[a-z]+-w\d+-/, "")}-${i + 1}${options.idSuffix ?? ""}` }));
     }
     const timeoutMs = this.workerTimeoutMs(run);
     return this.launchJobs<Verification>(

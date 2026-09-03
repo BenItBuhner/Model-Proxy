@@ -252,7 +252,9 @@ export function isDecisiveVote(vote: AnswerVote | undefined, verifications: Veri
     const explicit = usable.filter((v) => v.finalAnswerCorrect !== undefined);
     const confirms = explicit.filter((v) => v.finalAnswerCorrect === true).length + usable.filter((v) => v.finalAnswerCorrect === undefined && v.verdict === "accept").length;
     const rejects = explicit.filter((v) => v.finalAnswerCorrect === false).length;
-    if (confirms === 0 && rejects === 0) return vote.voters >= 3 || leaderFamilies.length >= 2;
+    // No successful judgment at all (audit skipped or failed): only three
+    // independent voices can settle without an audit.
+    if (confirms === 0 && rejects === 0) return vote.voters >= 3 && leaderFamilies.length >= 2;
     if (confirms > rejects) return true;
     // Three independent families agreeing outweigh a single dissenting audit.
     return leaderFamilies.length >= 3 && rejects <= 1;
