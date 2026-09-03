@@ -574,6 +574,12 @@ export class FusionKernel {
     return Math.min(run.kcfg.worker_max_tokens, byBand ?? run.kcfg.worker_max_tokens);
   }
 
+  /** Worker hard cap for this band, bounded by the remaining search budget (never below 15s). */
+  private workerTimeoutMs(run: KernelRun): number {
+    const seconds = run.kcfg.worker_timeout_seconds_by_band?.[run.band] ?? run.kcfg.worker_timeout_seconds;
+    return Math.max(15_000, Math.min(seconds * 1000, this.remainingSearchMs(run)));
+  }
+
   private poolFor(kcfg: FusionKernelConfig, fingerprint: string): ModelPool {
     const existing = this.pools.get(fingerprint);
     if (existing !== undefined) return existing;
@@ -1070,7 +1076,7 @@ export class FusionKernel {
       })),
     });
 
-    const timeoutMs = Math.max(15_000, Math.min(kcfg.worker_timeout_seconds * 1000, this.remainingSearchMs(run)));
+    const timeoutMs = this.workerTimeoutMs(run);
     const results = await this.runWithQuorum<Proposal>(
       run,
       picks.map((pick, i) => ({
@@ -1195,7 +1201,7 @@ export class FusionKernel {
       const picks = run.pool.verifiersFor(candidate.family, widths.verifiersPerCandidate);
       picks.forEach((pick, i) => jobs.push({ candidate, pick, id: `verify-w${wave}-${candidate.id.replace(/^[a-z]+-w\d+-/, "")}-${i + 1}` }));
     }
-    const timeoutMs = Math.max(15_000, Math.min(kcfg.worker_timeout_seconds * 1000, this.remainingSearchMs(run)));
+    const timeoutMs = this.workerTimeoutMs(run);
     return this.launchJobs<Verification>(
       jobs.map(({ candidate, pick, id }) => ({
         family: pick.family,

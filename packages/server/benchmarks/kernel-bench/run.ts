@@ -43,7 +43,7 @@ function parseArgs(argv: string[]): Args {
     out: "/tmp/kernel-bench/results.jsonl",
     effort: "high",
     maxTokens: undefined,
-    timeoutMs: 1_200_000,
+    timeoutMs: 1_800_000,
     retryFailed: false,
     onlyItems: undefined,
     label: undefined,

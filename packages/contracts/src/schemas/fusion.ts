@@ -230,6 +230,15 @@ export const FusionKernelConfigSchema = z
       .default({}),
     /** Per-worker hard wall clock cap (also bounded by the band's search deadline). */
     worker_timeout_seconds: z.number().int().positive().default(300),
+    /**
+     * Per-band override of worker_timeout_seconds. Hard problems at high/max
+     * effort need thinking models to run far longer than the F2 cap; a worker
+     * cut off mid-reasoning contributes only truncated evidence.
+     */
+    worker_timeout_seconds_by_band: z
+      .object({ F2: z.number().int().positive().optional(), F3: z.number().int().positive().optional(), max: z.number().int().positive().optional() })
+      .strict()
+      .optional(),
     /** Abort a worker whose upstream stream has produced no bytes (content or reasoning) for this long. */
     worker_idle_timeout_seconds: z.number().int().positive().default(60),
     /** Parallel proposals per wave, by effort band. */
