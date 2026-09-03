@@ -93,6 +93,7 @@ function openaiArgsFromRequest(
     response_format: request["response_format"],
     reasoning: request["reasoning"],
     reasoning_effort: request["reasoning_effort"] as string | undefined,
+    extra_body: request["extra_body"] as Record<string, unknown> | undefined,
     chat_template_kwargs: request["chat_template_kwargs"] as
       | Record<string, unknown>
       | undefined,

@@ -20,6 +20,15 @@ import {
   upstreamFetch,
 } from "./upstream-fetch.ts";
 import { buildEndpointUrl } from "./provider-helpers.ts";
+import {
+  buildGeminiExtraBody,
+  createGeminiThoughtStreamState,
+  flushGeminiThoughtStream,
+  marksGeminiThought,
+  normalizeGeminiChatResponse,
+  splitGeminiThoughtStream,
+  type GeminiThoughtStreamState,
+} from "./gemini-thinking.ts";
 
 const log = createLogger("provider.openai");
 
@@ -87,7 +96,7 @@ export class OpenAIProvider extends AbstractProvider {
       model: args.model,
       messageCount: Array.isArray(args.messages) ? args.messages.length : 0,
     });
-    return await this.fetchJson(
+    const data = await this.fetchJson(
       url,
       {
         method: "POST",
@@ -96,6 +105,9 @@ export class OpenAIProvider extends AbstractProvider {
       },
       ctx,
     );
+    // Gemini (include_thoughts) returns thought text inside message.content;
+    // relocate it to reasoning_content so clients see the canonical shape.
+    return this.quirks().isGemini ? normalizeGeminiChatResponse(data) : data;
   }
 
   /** Native Responses API transport for routes configured with responses wire format. */
@@ -274,6 +286,7 @@ export class OpenAIProvider extends AbstractProvider {
       } catch {
         // leave as empty dict
       }
+      if (this.quirks().isGemini) data = normalizeGeminiChatResponse(data);
       yield* synthesizeSingleChunkStream(data, args.model);
       return;
     }
@@ -287,7 +300,7 @@ export class OpenAIProvider extends AbstractProvider {
     }
 
     const streamId = `chatcmpl-${Date.now()}`;
-    const normalizeState = createStreamNormalizeState();
+    const normalizeState = createStreamNormalizeState(this.quirks().isGemini);
     const bufferPartialToolCalls = ctx.bufferPartialToolCalls === true;
     let bufferedToolCallChunks: string[] = [];
     const flushBufferedToolCallChunks = function* () {
@@ -303,12 +316,33 @@ export class OpenAIProvider extends AbstractProvider {
         yield `data: ${JSON.stringify(withDeltaContent(lastContentChunk, rest))}\n\n`;
       }
     };
+    // Gemini thought-splitting may hold back a partial `<thought>`/`</thought>`
+    // tag across chunk boundaries; release it as a final delta at end of stream.
+    const model = args.model;
+    const flushGeminiCarry = function* (): Generator<string, void, unknown> {
+      const gemini = normalizeState.gemini;
+      if (gemini === undefined) return;
+      const { reasoning, content } = flushGeminiThoughtStream(gemini);
+      if (reasoning.length === 0 && content.length === 0) return;
+      const delta: Record<string, unknown> = {};
+      if (reasoning.length > 0) delta["reasoning_content"] = reasoning;
+      if (content.length > 0) delta["content"] = content;
+      const chunk = {
+        id: normalizeState.canonicalId ?? streamId,
+        object: "chat.completion.chunk",
+        created: normalizeState.canonicalCreated ?? Math.floor(Date.now() / 1000),
+        model,
+        choices: [{ index: 0, delta, finish_reason: null }],
+      };
+      yield `data: ${JSON.stringify(chunk)}\n\n`;
+    };
     for await (const line of readSSELines(response.body)) {
       const trimmed = line.trim();
       if (trimmed === "" || trimmed === "data:") continue;
       if (trimmed === "data: [DONE]") {
         if (bufferPartialToolCalls) yield* flushBufferedToolCallChunks();
         yield* drainPacer();
+        yield* flushGeminiCarry();
         yield "data: [DONE]\n\n";
         return;
       }
@@ -328,6 +362,7 @@ export class OpenAIProvider extends AbstractProvider {
       if (jsonStr === "[DONE]") {
         if (bufferPartialToolCalls) yield* flushBufferedToolCallChunks();
         yield* drainPacer();
+        yield* flushGeminiCarry();
         yield "data: [DONE]\n\n";
         return;
       }
@@ -390,6 +425,7 @@ export class OpenAIProvider extends AbstractProvider {
       }
     }
     if (pacer !== undefined) yield* drainPacer();
+    yield* flushGeminiCarry();
     if (bufferPartialToolCalls && bufferedToolCallChunks.length > 0) {
       throw new ProviderAPIError(
         `${this.providerName} stream ended before completing a tool call`,
@@ -470,8 +506,22 @@ export class OpenAIProvider extends AbstractProvider {
     if (args.reasoning !== undefined && !isGemini) {
       payload["reasoning"] = args.reasoning;
     }
-    if (args.reasoning_effort !== undefined) {
+    if (args.reasoning_effort !== undefined && !isGemini) {
       payload["reasoning_effort"] = args.reasoning_effort;
+    }
+    if (isGemini) {
+      // Gemini expresses thinking via extra_body.google.thinking_config and
+      // 400s when reasoning_effort is ALSO present, so exactly one control is
+      // emitted: a client-supplied thinking_config wins, otherwise
+      // reasoning_effort / reasoning.effort is mapped onto thinking_level with
+      // include_thoughts enabled (the stream normalizer relocates the returned
+      // thought text into reasoning_content).
+      const extraBody = buildGeminiExtraBody({
+        extra_body: args.extra_body,
+        reasoning: args.reasoning,
+        reasoning_effort: args.reasoning_effort,
+      });
+      if (extraBody !== undefined) payload["extra_body"] = extraBody;
     }
     if (
       args.chat_template_kwargs !== undefined &&
@@ -510,6 +560,10 @@ function sanitizeGeminiMessages(messages: unknown[]): unknown[] {
     if (m["tool_calls"] !== undefined) clean["tool_calls"] = m["tool_calls"];
     if (m["tool_call_id"] !== undefined) clean["tool_call_id"] = m["tool_call_id"];
     if (m["name"] !== undefined) clean["name"] = m["name"];
+    // Thought signatures ride in extra_content (message-level and inside
+    // tool_calls entries, which pass through above untouched); Gemini needs
+    // them echoed back for multi-turn thinking, so never strip them.
+    if (m["extra_content"] !== undefined) clean["extra_content"] = m["extra_content"];
     out.push(clean);
   }
   return out;
@@ -705,10 +759,17 @@ interface StreamNormalizeState {
   canonicalCreated?: number;
   /** Choices whose delta already carried `role` (spec: role on first delta only). */
   roleEmitted: Set<number>;
+  /** Present only for Gemini: thought-vs-content splitter state. */
+  gemini?: GeminiThoughtStreamState;
 }
 
-function createStreamNormalizeState(): StreamNormalizeState {
-  return { slots: new Map(), nextOutIndex: new Map(), roleEmitted: new Set() };
+function createStreamNormalizeState(geminiThoughts = false): StreamNormalizeState {
+  return {
+    slots: new Map(),
+    nextOutIndex: new Map(),
+    roleEmitted: new Set(),
+    ...(geminiThoughts ? { gemini: createGeminiThoughtStreamState() } : {}),
+  };
 }
 
 function normalizeStreamChoice(
@@ -758,6 +819,31 @@ function normalizeStreamDelta(
   const content = normalized["content"];
   if (content !== undefined && typeof content !== "string") {
     normalized["content"] = "";
+  }
+  // Gemini include_thoughts streams thought text inside delta.content —
+  // flagged via extra_content.google.thought and/or wrapped in
+  // <thought>…</thought> tags — and never uses reasoning_content. Split it
+  // onto the reasoning channel so clients don't render thoughts (or, worse,
+  // post-thought tool text) as one mashed thought block.
+  if (state.gemini !== undefined) {
+    const flagged = marksGeminiThought(normalized);
+    const contentText =
+      typeof normalized["content"] === "string" ? normalized["content"] : undefined;
+    if (flagged || (contentText !== undefined && contentText.length > 0)) {
+      const { reasoning, content: plain } = splitGeminiThoughtStream(
+        state.gemini,
+        contentText ?? "",
+        flagged,
+      );
+      if (contentText !== undefined) normalized["content"] = plain;
+      if (reasoning.length > 0) {
+        const prior =
+          typeof normalized["reasoning_content"] === "string"
+            ? normalized["reasoning_content"]
+            : "";
+        normalized["reasoning_content"] = prior + reasoning;
+      }
+    }
   }
   // Canonical deltas only carry `content` when there is content to add (or on
   // the role-bearing first delta). Upstreams that stamp `content: ""` onto
@@ -856,6 +942,13 @@ function normalizeStreamToolCalls(
       // Upstreams like nahcrof re-send the id plus an empty name on every
       // fragment, which strict client accumulators can misread as the start
       // of a new call; stripping the repetition removes that ambiguity.
+      // Provider extensions like Gemini's extra_content.google.thought_signature
+      // must survive normalization: clients echo them back on the next turn.
+      const extraContent =
+        normalized["extra_content"] !== undefined
+          ? { extra_content: normalized["extra_content"] }
+          : {};
+
       if (isNewCall) {
         const name = hasName ? (incomingName as string) : "";
         return {
@@ -866,6 +959,7 @@ function normalizeStreamToolCalls(
               ? normalized["type"]
               : "function",
           function: { name, arguments: argumentsText },
+          ...extraContent,
         };
       }
       return {
@@ -875,6 +969,7 @@ function normalizeStreamToolCalls(
         function: hasName
           ? { name: incomingName as string, arguments: argumentsText }
           : { arguments: argumentsText },
+        ...extraContent,
       };
     });
 }

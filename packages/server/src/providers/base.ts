@@ -55,6 +55,8 @@ export interface OpenAICallArgs {
   response_format?: unknown;
   reasoning?: unknown;
   reasoning_effort?: string | undefined;
+  /** OpenAI-compat vendor extension bag (e.g. Gemini's `extra_body.google.thinking_config`). */
+  extra_body?: Record<string, unknown> | undefined;
   stream_options?: Record<string, unknown> | undefined;
   [key: string]: unknown;
 }
