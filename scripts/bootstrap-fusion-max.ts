@@ -10,9 +10,9 @@
  *                             deepseek-v4-pro-0813,deepseek-v4-pro,turbo}.json
  *   <data-dir>/config/models/fusion-max.json             from config/templates/fusion_max_template.json
  *
- * Primary logical models (glm-5.3, kimi-k3, deepseek-v4-pro-0813) are hedged
- * against their `-alt` upstream so tail latency drops without changing the
- * kernel's family semantics.
+ * Primary logical models (glm-5.3, kimi-k3, deepseek-v4-pro-0813) fall back to
+ * their `-alt` upstream sequentially. Pass --hedge to race primary and alt in
+ * parallel instead (lower tail latency, double upstream load per worker).
  *
  * Usage:
  *   bun run scripts/bootstrap-fusion-max.ts --data-dir /tmp/mp-fusion \
@@ -42,7 +42,7 @@ function parseArgs(argv: string[]): Args {
     provider: "techlitnow",
     apiKeyEnv: "TECHLITNOW_API_KEY",
     skipUpstreams: false,
-    hedge: true,
+    hedge: false,
     force: false,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -58,6 +58,7 @@ function parseArgs(argv: string[]): Args {
       case "--provider": args.provider = next(); break;
       case "--api-key-env": args.apiKeyEnv = next(); break;
       case "--skip-upstreams": args.skipUpstreams = true; break;
+      case "--hedge": args.hedge = true; break;
       case "--no-hedge": args.hedge = false; break;
       case "--force": args.force = true; break;
       case "-h":
@@ -109,7 +110,7 @@ function providerJson(args: Args): Record<string, unknown> {
     },
     authentication: { type: "bearer", header_name: "Authorization", header_format: "Bearer {api_key}" },
     request_config: {
-      timeout_seconds: 600,
+      timeout_seconds: 1200,
       max_retries: 2,
       retry_on_status: [429, 500, 502, 503, 504],
       default_parameters: {},
@@ -137,15 +138,19 @@ function modelJson(args: Args, model: UpstreamModel): Record<string, unknown> {
     model: upstream,
     wire_protocol: "openai",
     context_window: model.contextWindow,
-    timeout_seconds: 600,
+    timeout_seconds: 1200,
     cooldown_seconds: 10,
   });
+  // The alt upstream is always a sequential fallback; it only runs in parallel
+  // (hedged) when --hedge is set. Hedging doubles upstream load per worker,
+  // which hurts a throughput-limited inference proxy more than it helps tail
+  // latency — the kernel already gets redundancy from quorum + alt routings.
   const routes = [route(model.upstream)];
+  if (model.alt !== undefined) routes.push(route(model.alt));
   const hedged = args.hedge && model.alt !== undefined;
-  if (hedged) routes.push(route(model.alt!));
   return {
     logical_name: model.logical,
-    timeout_seconds: 600,
+    timeout_seconds: 1200,
     default_cooldown_seconds: 10,
     context_window: model.contextWindow,
     model_routings: routes,
