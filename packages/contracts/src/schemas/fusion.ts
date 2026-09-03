@@ -193,8 +193,17 @@ export const FusionKernelConfigSchema = z
     fast_routing: z.string().min(1).optional(),
     /** Target input tokens per worker context capsule (hard cap for proposers/verifiers). */
     capsule_tokens: z.number().int().min(2_000).max(200_000).default(24_000),
-    /** Max output tokens for proposal/verification workers. */
+    /** Max output tokens for proposal/verification workers (ceiling; see worker_max_tokens_by_band). */
     worker_max_tokens: z.number().int().min(256).max(65_536).default(6_000),
+    /** Optional per-band proposal output budgets; each is capped by worker_max_tokens. */
+    worker_max_tokens_by_band: z
+      .object({ F2: z.number().int().min(256), F3: z.number().int().min(256), max: z.number().int().min(256) })
+      .strict()
+      .optional(),
+    /** Max output tokens for verifiers (they are terse by contract). */
+    verifier_max_tokens: z.number().int().min(256).max(32_768).default(2_500),
+    /** Start verifying each candidate as soon as it lands instead of after the whole proposal wave settles. */
+    pipeline_verification: z.boolean().default(true),
     /** Per-worker wall clock budget. */
     worker_timeout_seconds: z.number().int().positive().default(180),
     /** Parallel proposals per wave, by effort band. */

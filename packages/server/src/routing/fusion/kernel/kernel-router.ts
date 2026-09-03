@@ -24,6 +24,7 @@ import type {
   FusionStep,
   SubagentResult,
 } from "../types.ts";
+import { assembleStream } from "./assemble.ts";
 import { compileCapsule, type Capsule } from "./capsule.ts";
 import { INTENT_OBJECTIVE, deterministicIntent, mergeModelIntent } from "./intent.ts";
 import { hashMessages, truncateMiddle } from "./messages.ts";
@@ -97,11 +98,20 @@ interface KernelRun {
   /** Workers cancelled by wave quorum (observability). */
   cancelledWorkers: number;
   truncatedWorkers: number;
+  /** Waves settled early because the settled subset already decided the outcome. */
+  earlySettles: number;
 }
 
 interface QuorumJob<T> {
   family: string;
   start: (signal: AbortSignal) => Promise<T>;
+}
+
+/** A launched job: its promise plus a cancel handle for straggler cut-off. */
+interface QuorumEntry<T> {
+  family: string;
+  promise: Promise<T>;
+  cancel: () => void;
 }
 
 interface CachedProposal {
@@ -158,13 +168,66 @@ export class FusionKernel {
       if (run.mode === "search") await this.runSearch(ctx, run);
       else await this.runContinuation(ctx, run);
       this.applySynthesisContext(ctx, run);
-      result = await this.responseFuser.fuse(ctx, run.notes, run.steps, run.costs);
+      result = await this.synthesizeAssembled(ctx, run);
       this.recordAnswer(run, result.content, result.toolCalls);
     }
     this.finalize(ctx, run);
     result.cacheHit = run.mode === "search" && run.totalWork > 0 && run.cachedWork === run.totalWork;
     result.cacheKey = run.workKeys[0];
     return result;
+  }
+
+  /**
+   * Non-streaming clients still get a streamed upstream synthesis: the stream
+   * is assembled into a complete response here. Long thinking generations
+   * behind a 100s origin timeout only survive when bytes keep flowing.
+   */
+  private async synthesizeAssembled(ctx: FusionRequestContext, run: KernelRun): Promise<FusionResult> {
+    const started = performance.now();
+    // Reasoning summaries are for live clients; skip the summarizer round-trips
+    // when the answer is being assembled server-side.
+    const quietCtx: FusionRequestContext = {
+      ...ctx,
+      fusionConfig: { ...ctx.fusionConfig, summarizer: { ...ctx.fusionConfig.summarizer, enabled: false } },
+    };
+    const assembled = await assembleStream(this.responseFuser.fuseStream(quietCtx, run.notes), ctx.clientProtocol);
+    const durationMs = Math.round(performance.now() - started);
+    run.steps.push({
+      type: "synthesis",
+      label: run.mode === "continue" ? "Continuation Step" : "Response Synthesis",
+      startedAt: nowIso(),
+      durationMs,
+      modelRouting: run.executorRouting,
+      details: {
+        contentLength: assembled.content?.length ?? 0,
+        hasToolCalls: (assembled.toolCalls?.length ?? 0) > 0,
+        noteCount: run.notes.length,
+        usage: assembled.usage,
+        streamedUpstream: true,
+      },
+    });
+    if (assembled.usage !== undefined) {
+      const pricing = resolvePricing({ requestedModel: run.executorRouting });
+      const cost = calculateCosts(usageSnapshotFromCounts(assembled.usage), pricing);
+      run.costs.push({
+        modelRouting: run.executorRouting,
+        promptTokens: assembled.usage.promptTokens,
+        completionTokens: assembled.usage.completionTokens,
+        totalTokens: assembled.usage.totalTokens,
+        userCostUsd: cost.userCostUsd,
+        typicalCostUsd: cost.typicalCostUsd,
+      });
+    }
+    return {
+      content: assembled.content,
+      reasoningContent: assembled.reasoningContent,
+      toolCalls: assembled.toolCalls,
+      finishReason: assembled.finishReason,
+      wireProtocol: ctx.clientProtocol,
+      subagentResults: run.notes,
+      fusedByModelRouting: run.executorRouting,
+      usage: assembled.usage,
+    };
   }
 
   async *stream(ctx: FusionRequestContext, score: ComplexityScore): AsyncGenerator<string, void, unknown> {
@@ -335,7 +398,23 @@ export class FusionKernel {
       searchDeadlineAt: startedAt + kcfg.search_deadline_seconds[band] * 1000,
       cancelledWorkers: 0,
       truncatedWorkers: 0,
+      earlySettles: 0,
     };
+  }
+
+  /** Proposal-wave early settle: ≥2 families already agree above threshold. */
+  private proposalsAlreadyAgree(run: KernelRun, settled: Proposal[]): boolean {
+    const usable = settled.filter((p) => p.success && p.claims.length > 0);
+    if (new Set(usable.map((p) => p.family)).size < 2) return false;
+    const pre = buildConsensus(usable, []);
+    return pre.claimConsensus >= run.kcfg.agreement_threshold;
+  }
+
+  /** Verification-wave early settle: every settled verdict accepts and at least two candidates were verified. */
+  private verdictsAlreadyAccept(settled: Verification[]): boolean {
+    const usable = settled.filter((v) => v.success);
+    if (usable.length < 2) return false;
+    return usable.every((v) => v.verdict === "accept" && v.issues.length === 0);
   }
 
   /** Remaining wall-clock budget for search waves, in ms (0 when exhausted). */
@@ -351,49 +430,91 @@ export class FusionKernel {
    * it is substantial (see runWorker), so quorum trades tail latency for at
    * most a truncated proposal — never for silent data loss.
    */
-  private async runWithQuorum<T>(run: KernelRun, jobs: QuorumJob<T>[], minFamilies: number): Promise<T[]> {
+  private launchJobs<T>(jobs: QuorumJob<T>[]): QuorumEntry<T>[] {
+    return jobs.map((job) => {
+      const controller = new AbortController();
+      return { family: job.family, promise: job.start(controller.signal), cancel: () => controller.abort() };
+    });
+  }
+
+  private async runWithQuorum<T>(
+    run: KernelRun,
+    jobs: QuorumJob<T>[],
+    minFamilies: number,
+    earlySettle?: (settled: T[]) => boolean,
+  ): Promise<T[]> {
+    return this.settleWithQuorum(run, this.launchJobs(jobs), minFamilies, earlySettle);
+  }
+
+  /**
+   * `earlySettle(settled)` is consulted once quorum is reached: when the
+   * already-settled results make the remaining workers unable to change the
+   * decision (e.g. two families already agree above threshold), stragglers are
+   * cancelled immediately instead of after the grace period.
+   */
+  private async settleWithQuorum<T>(
+    run: KernelRun,
+    entries: QuorumEntry<T>[],
+    minFamilies: number,
+    earlySettle?: (settled: T[]) => boolean,
+  ): Promise<T[]> {
     const { kcfg } = run;
-    if (jobs.length === 0) return [];
-    const controllers = jobs.map(() => new AbortController());
-    const results: T[] = new Array<T>(jobs.length);
+    if (entries.length === 0) return [];
+    const results: T[] = new Array<T>(entries.length);
     const pending = new Map<number, Promise<{ index: number; value: T }>>();
-    jobs.forEach((job, index) => {
-      pending.set(index, job.start(controllers[index]!.signal).then((value) => ({ index, value })));
+    entries.forEach((entry, index) => {
+      pending.set(index, entry.promise.then((value) => ({ index, value })));
     });
 
-    const distinctFamilies = new Set(jobs.map((j) => j.family)).size;
+    const distinctFamilies = new Set(entries.map((e) => e.family)).size;
     // Round, not ceil: 0.67 × 3 = 2.01 must mean "two of three", not "all three".
     const quorumCount = kcfg.wave_quorum >= 1
-      ? jobs.length
-      : Math.min(jobs.length, Math.max(1, Math.round(jobs.length * kcfg.wave_quorum)));
+      ? entries.length
+      : Math.min(entries.length, Math.max(1, Math.round(entries.length * kcfg.wave_quorum)));
     const familyTarget = Math.min(minFamilies, distinctFamilies);
     const settledFamilies = new Set<string>();
-    let settledCount = 0;
+    const settledValues: T[] = [];
     let graceTimer: Promise<{ index: -1; value: undefined }> | undefined;
+
+    const cancelStragglers = async (): Promise<void> => {
+      for (const index of pending.keys()) entries[index]!.cancel();
+      run.cancelledWorkers += pending.size;
+      const rest = await Promise.all(pending.values());
+      for (const r of rest) results[r.index] = r.value;
+      pending.clear();
+    };
 
     while (pending.size > 0) {
       const racers: Array<Promise<{ index: number; value: T | undefined }>> = [...pending.values()];
       if (graceTimer !== undefined) racers.push(graceTimer);
       const outcome = await Promise.race(racers);
       if (outcome.index === -1) {
-        // Grace expired: cancel stragglers, then collect whatever they salvaged.
-        for (const index of pending.keys()) controllers[index]!.abort();
-        run.cancelledWorkers += pending.size;
-        const rest = await Promise.all(pending.values());
-        for (const r of rest) results[r.index] = r.value;
-        pending.clear();
+        await cancelStragglers();
         break;
       }
       pending.delete(outcome.index);
       results[outcome.index] = outcome.value as T;
-      settledCount += 1;
-      settledFamilies.add(jobs[outcome.index]!.family);
-      if (graceTimer === undefined && pending.size > 0 && settledCount >= quorumCount && settledFamilies.size >= familyTarget) {
-        const graceMs = Math.min(kcfg.straggler_grace_seconds * 1000, this.remainingSearchMs(run));
-        graceTimer = sleep(graceMs).then(() => ({ index: -1 as const, value: undefined }));
+      settledValues.push(outcome.value as T);
+      settledFamilies.add(entries[outcome.index]!.family);
+      const quorumReached = settledValues.length >= quorumCount && settledFamilies.size >= familyTarget;
+      if (pending.size > 0 && quorumReached) {
+        if (earlySettle !== undefined && earlySettle(settledValues)) {
+          run.earlySettles += 1;
+          await cancelStragglers();
+          break;
+        }
+        if (graceTimer === undefined) {
+          const graceMs = Math.min(kcfg.straggler_grace_seconds * 1000, this.remainingSearchMs(run));
+          graceTimer = sleep(graceMs).then(() => ({ index: -1 as const, value: undefined }));
+        }
       }
     }
     return results;
+  }
+
+  private proposalMaxTokens(run: KernelRun): number {
+    const byBand = run.kcfg.worker_max_tokens_by_band?.[run.band];
+    return Math.min(run.kcfg.worker_max_tokens, byBand ?? run.kcfg.worker_max_tokens);
   }
 
   private poolFor(kcfg: FusionKernelConfig, fingerprint: string): ModelPool {
@@ -425,15 +546,26 @@ export class FusionKernel {
     const started = performance.now();
     emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "fast_path", status: "started", modelRouting: run.fastRouting });
     this.beginFreshTaskIfNeeded(ctx, run);
-    const response = await this.fallbackRouter.callWithFallback({
-      logicalModel: run.fastRouting,
-      requestData: ctx.requestData,
-      targetProtocol: ctx.clientProtocol,
-      signal: ctx.signal,
-      principal: ctx.principal,
-      extraHeaders: ctx.extraHeaders,
-    });
-    const extracted = extractChatResponse(response);
+    // Stream upstream even for non-streaming clients (origin-timeout safety), then assemble.
+    const assembled = await assembleStream(
+      this.fallbackRouter.streamWithFallback({
+        logicalModel: run.fastRouting,
+        requestData: { ...ctx.requestData, stream: true },
+        targetProtocol: ctx.clientProtocol,
+        signal: ctx.signal,
+        principal: ctx.principal,
+        extraHeaders: ctx.extraHeaders,
+      }),
+      ctx.clientProtocol,
+    );
+    const extracted = {
+      content: assembled.content,
+      reasoning: undefined as string | undefined,
+      reasoningContent: assembled.reasoningContent,
+      toolCalls: assembled.toolCalls,
+      finishReason: assembled.finishReason,
+      usage: assembled.usage,
+    };
     const durationMs = Math.round(performance.now() - started);
     emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "fast_path", status: "completed", durationMs, modelRouting: run.fastRouting });
     run.steps.push({
@@ -561,13 +693,46 @@ export class FusionKernel {
 
     for (let wave = 1; wave <= widths.maxWaves; wave++) {
       run.waves = wave;
-      const waveProposals = await this.proposalWave(ctx, run, proposerIntent, searchLedger, wave, widths, taskStartIndex, strategyNote);
+      const verifyCandidates = widths.verifiersPerCandidate > 0;
+      // Pipelined verification: each candidate's verifiers launch the moment
+      // the candidate lands, overlapping with slower proposers.
+      const pipelined: QuorumEntry<Verification>[] = [];
+      let verificationStarted = false;
+      const onProposal = verifyCandidates && kcfg.pipeline_verification
+        ? async (proposal: Proposal): Promise<void> => {
+            if (!proposal.success || (proposal.answer.length === 0 && proposal.claims.length === 0)) return;
+            if (this.remainingSearchMs(run) <= 10_000) return;
+            await intentPromise;
+            const intent = run.ledger.intent ?? baseIntent;
+            if (!verificationStarted) {
+              verificationStarted = true;
+              emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, pipelined: true } });
+              await run.narrator.say(`Kernel: first candidate landed; starting cross-family verification while the other reasoners finish.`);
+            }
+            pipelined.push(...this.launchVerification(ctx, run, intent, searchLedger, [proposal], wave, widths, taskStartIndex));
+          }
+        : undefined;
+
+      const waveProposals = await this.proposalWave(ctx, run, proposerIntent, searchLedger, wave, widths, taskStartIndex, strategyNote, "proposer", undefined, onProposal);
       proposals.push(...waveProposals);
       await intentPromise;
       const intent = run.ledger.intent ?? baseIntent;
-      if (widths.verifiersPerCandidate > 0 && this.remainingSearchMs(run) > 10_000) {
-        const waveVerifications = await this.verificationWave(ctx, run, intent, searchLedger, waveProposals, wave, widths, taskStartIndex);
-        verifications.push(...waveVerifications);
+      if (verifyCandidates && this.remainingSearchMs(run) > 10_000) {
+        const verifyStarted = performance.now();
+        let entries = pipelined;
+        if (!kcfg.pipeline_verification) {
+          const candidates = waveProposals.filter((p) => p.success && (p.answer.length > 0 || p.claims.length > 0));
+          if (candidates.length > 0) {
+            emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, candidates: candidates.length } });
+            await run.narrator.say(`Kernel: verifying ${candidates.length} candidate answer(s) with cross-family auditors.`);
+            entries = this.launchVerification(ctx, run, intent, searchLedger, candidates, wave, widths, taskStartIndex);
+          }
+        }
+        if (entries.length > 0) {
+          const waveVerifications = await this.settleWithQuorum(run, entries, Math.min(2, run.pool.proposerFamilyCount), (settled) => this.verdictsAlreadyAccept(settled));
+          verifications.push(...waveVerifications);
+          this.recordVerificationWave(ctx, run, waveVerifications, wave, Math.round(performance.now() - verifyStarted));
+        }
       }
       consensus = buildConsensus(proposals, verifications);
       run.agreement = consensus.agreement;
@@ -726,10 +891,17 @@ export class FusionKernel {
     strategyNote: string | undefined,
     role: WorkerRole = "proposer",
     widthOverride?: number,
+    onProposal?: (proposal: Proposal) => Promise<void>,
   ): Promise<Proposal[]> {
     const { kcfg } = run;
     const started = performance.now();
     const picks = run.pool.proposers(widthOverride ?? widths.proposals);
+    const hooks: Promise<void>[] = [];
+    const settle = (proposal: Proposal): Proposal => {
+      if (onProposal !== undefined) hooks.push(onProposal(proposal).catch((err) => log.warn("proposal hook failed", { id: proposal.id, error: String(err) })));
+      return proposal;
+    };
+    const maxTokens = this.proposalMaxTokens(run);
     const objective = this.proposerObjective(intent, role);
     const phase = role === "repair" ? "repair" : role === "checkpoint" ? "checkpoint" : "proposal";
     emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase, status: "started", detail: { wave, count: picks.length, routings: picks.map((p) => p.routing) } });
@@ -775,7 +947,7 @@ export class FusionKernel {
           if (cached !== undefined && cached.status === "completed") {
             this.noteWork(ctx, run, workKey, true, id, pick, role);
             const parsed = parseProposal(cached.result.content);
-            return { id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: cached.result.content, workKey, cached: true, durationMs: 0, success: true };
+            return settle({ id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: cached.result.content, workKey, cached: true, durationMs: 0, success: true });
           }
           const result = await runWorker(ctx, this.fallbackRouter, {
             id,
@@ -783,7 +955,7 @@ export class FusionKernel {
             focus: `${role} · ${pick.family}`,
             routing: pick.routing,
             messages: capsule.messages,
-            maxTokens: kcfg.worker_max_tokens,
+            maxTokens,
             timeoutMs,
             onSegment: run.narrator.segment,
             semaphore: run.semaphore,
@@ -794,7 +966,7 @@ export class FusionKernel {
           this.noteWork(ctx, run, workKey, false, id, pick, role);
           if (result.truncated === true) run.truncatedWorkers += 1;
           if (!result.success) {
-            return { id, family: pick.family, routing: pick.routing, wave, answer: "", claims: [], assumptions: [], risks: [], confidence: undefined, raw: "", workKey, cached: false, durationMs: result.durationMs, success: false, error: result.error };
+            return settle({ id, family: pick.family, routing: pick.routing, wave, answer: "", claims: [], assumptions: [], risks: [], confidence: undefined, raw: "", workKey, cached: false, durationMs: result.durationMs, success: false, error: result.error });
           }
           // Truncated output is usable evidence for this turn but is not
           // cached: a replay should get the chance to finish it.
@@ -802,11 +974,13 @@ export class FusionKernel {
             this.work.put(workKey, spec, { content: result.content, durationMs: result.durationMs } satisfies CachedProposal, "completed", run.ledger.conversationId);
           }
           const parsed = parseProposal(result.content);
-          return { id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: result.content, workKey, cached: false, durationMs: result.durationMs, success: true };
+          return settle({ id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: result.content, workKey, cached: false, durationMs: result.durationMs, success: true });
         },
       })),
       Math.min(2, run.pool.proposerFamilyCount),
+      role === "proposer" ? (settled) => this.proposalsAlreadyAgree(run, settled) : undefined,
     );
+    await Promise.all(hooks);
 
     const durationMs = Math.round(performance.now() - started);
     const succeeded = results.filter((r) => r.success).length;
@@ -837,21 +1011,36 @@ export class FusionKernel {
     widths: WaveWidths,
     taskStartIndex: number,
   ): Promise<Verification[]> {
-    const { kcfg } = run;
     const candidates = proposals.filter((p) => p.success && (p.answer.length > 0 || p.claims.length > 0));
     if (candidates.length === 0) return [];
     const started = performance.now();
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, candidates: candidates.length } });
+    await run.narrator.say(`Kernel: verifying ${candidates.length} candidate answer(s) with cross-family auditors.`);
+    const entries = this.launchVerification(ctx, run, intent, ledgerView, candidates, wave, widths, taskStartIndex);
+    const results = await this.settleWithQuorum(run, entries, Math.min(2, run.pool.proposerFamilyCount));
+    this.recordVerificationWave(ctx, run, results, wave, Math.round(performance.now() - started));
+    return results;
+  }
+
+  /** Launch cross-family verifiers for the given candidates; returns running entries for quorum settlement. */
+  private launchVerification(
+    ctx: FusionRequestContext,
+    run: KernelRun,
+    intent: NonNullable<KernelLedger["intent"]>,
+    ledgerView: KernelLedger,
+    candidates: Proposal[],
+    wave: number,
+    widths: WaveWidths,
+    taskStartIndex: number,
+  ): QuorumEntry<Verification>[] {
+    const { kcfg } = run;
     const jobs: Array<{ candidate: Proposal; pick: PoolPick; id: string }> = [];
     for (const candidate of candidates) {
       const picks = run.pool.verifiersFor(candidate.family, widths.verifiersPerCandidate);
       picks.forEach((pick, i) => jobs.push({ candidate, pick, id: `verify-w${wave}-${candidate.id.replace(/^[a-z]+-w\d+-/, "")}-${i + 1}` }));
     }
-    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, count: jobs.length, candidates: candidates.length } });
-    await run.narrator.say(`Kernel: verifying ${candidates.length} candidate answer(s) with ${jobs.length} cross-family auditor(s).`);
-
     const timeoutMs = Math.max(15_000, Math.min(kcfg.worker_timeout_seconds * 1000, this.remainingSearchMs(run)));
-    const results = await this.runWithQuorum<Verification>(
-      run,
+    return this.launchJobs<Verification>(
       jobs.map(({ candidate, pick, id }) => ({
         family: pick.family,
         start: async (signal): Promise<Verification> => {
@@ -891,7 +1080,7 @@ export class FusionKernel {
             focus: `verifier · ${pick.family} → ${candidate.family}`,
             routing: pick.routing,
             messages: capsule.messages,
-            maxTokens: Math.min(kcfg.worker_max_tokens, 4_000),
+            maxTokens: Math.min(kcfg.worker_max_tokens, kcfg.verifier_max_tokens),
             timeoutMs,
             onSegment: run.narrator.segment,
             semaphore: run.semaphore,
@@ -912,10 +1101,10 @@ export class FusionKernel {
           return { id, proposalId: candidate.id, family: pick.family, routing: pick.routing, ...parsed, raw: result.content, workKey, cached: false, durationMs: result.durationMs, success: true };
         },
       })),
-      Math.min(2, run.pool.proposerFamilyCount),
     );
+  }
 
-    const durationMs = Math.round(performance.now() - started);
+  private recordVerificationWave(ctx: FusionRequestContext, run: KernelRun, results: Verification[], wave: number, durationMs: number): void {
     const verdicts = { accept: 0, revise: 0, reject: 0 };
     for (const v of results) if (v.success) verdicts[v.verdict] += 1;
     emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "completed", durationMs, detail: { wave, total: results.length, ...verdicts, cached: results.filter((r) => r.cached).length, cancelled: run.cancelledWorkers, truncated: run.truncatedWorkers } });
@@ -926,7 +1115,6 @@ export class FusionKernel {
       durationMs,
       details: { wave, total: results.length, ...verdicts, cached: results.filter((r) => r.cached).length, verifiers: results.map((v) => ({ id: v.id, candidate: v.proposalId, family: v.family, model: v.routing, verdict: v.verdict, issues: v.issues.length, success: v.success })) },
     });
-    return results;
   }
 
   private applyConsensusToLedger(run: KernelRun, consensus: Consensus, priorFindings: KernelFinding[]): void {
@@ -1239,6 +1427,7 @@ export class FusionKernel {
       cachedWorkItems: run.cachedWork,
       cancelledWorkers: run.cancelledWorkers,
       truncatedWorkers: run.truncatedWorkers,
+      earlySettles: run.earlySettles,
       searchBudgetSeconds: run.kcfg.search_deadline_seconds[run.band],
       continuationSteps: run.ledger.continuationSteps,
       totalContinuationSteps: run.ledger.totalContinuationSteps,
@@ -1279,55 +1468,4 @@ export class FusionKernel {
       kernel: ctx.kernelTrace,
     };
   }
-}
-
-// ── Response extraction (fast path) ────────────────────────────────────
-
-function extractChatResponse(response: Record<string, unknown>): {
-  content: string | null;
-  reasoning: string | undefined;
-  reasoningContent: string | undefined;
-  toolCalls: unknown[] | undefined;
-  finishReason: string | undefined;
-  usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
-} {
-  const choices = response["choices"] as Array<Record<string, unknown>> | undefined;
-  const usageObj = response["usage"] as Record<string, unknown> | undefined;
-  const usage = usageObj
-    ? {
-        promptTokens: Number(usageObj["prompt_tokens"] ?? usageObj["input_tokens"] ?? 0),
-        completionTokens: Number(usageObj["completion_tokens"] ?? usageObj["output_tokens"] ?? 0),
-        totalTokens: Number(usageObj["total_tokens"] ?? (Number(usageObj["input_tokens"] ?? 0) + Number(usageObj["output_tokens"] ?? 0))),
-      }
-    : undefined;
-  if (!choices || choices.length === 0) {
-    // Anthropic-shaped response.
-    const blocks = response["content"] as Array<Record<string, unknown>> | undefined;
-    if (Array.isArray(blocks)) {
-      const text = blocks.filter((b) => b["type"] === "text").map((b) => String(b["text"] ?? "")).join("\n");
-      const tools = blocks.filter((b) => b["type"] === "tool_use");
-      return {
-        content: tools.length > 0 && text.length === 0 ? null : text,
-        reasoning: undefined,
-        reasoningContent: undefined,
-        toolCalls: tools.length > 0 ? tools : undefined,
-        finishReason: typeof response["stop_reason"] === "string" ? (response["stop_reason"] as string) : undefined,
-        usage,
-      };
-    }
-    return { content: JSON.stringify(response), reasoning: undefined, reasoningContent: undefined, toolCalls: undefined, finishReason: undefined, usage };
-  }
-  const choice = choices[0]!;
-  const message = choice["message"] as Record<string, unknown> | undefined;
-  const finishReason = typeof choice["finish_reason"] === "string" ? (choice["finish_reason"] as string) : undefined;
-  if (!message) return { content: JSON.stringify(response), reasoning: undefined, reasoningContent: undefined, toolCalls: undefined, finishReason, usage };
-  const toolCalls = message["tool_calls"] as unknown[] | undefined;
-  return {
-    content: toolCalls && toolCalls.length > 0 ? (typeof message["content"] === "string" ? (message["content"] as string) : null) : ((message["content"] as string | null) ?? null),
-    reasoning: typeof message["reasoning"] === "string" ? (message["reasoning"] as string) : undefined,
-    reasoningContent: typeof message["reasoning_content"] === "string" ? (message["reasoning_content"] as string) : undefined,
-    toolCalls,
-    finishReason,
-    usage,
-  };
 }

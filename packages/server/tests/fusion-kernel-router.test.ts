@@ -55,6 +55,8 @@ const kernelConfig: FusionConfig = {
     fast_routing: "glm-5.3-flash",
     capsule_tokens: 8_000,
     worker_max_tokens: 2_000,
+    verifier_max_tokens: 1_500,
+    pipeline_verification: true,
     worker_timeout_seconds: 30,
     proposal_width: { F2: 3, F3: 3, max: 6 },
     verifiers_per_candidate: { F2: 1, F3: 1, max: 2 },
@@ -492,7 +494,11 @@ describe("Fusion kernel engine", () => {
 
     expect(hangingAborted).toBe(true);
     expect(elapsed).toBeLessThan(15_000);
-    expect(result.fusionTrace?.kernel?.["cancelledWorkers"]).toBe(1);
+    // The hanging proposer is cancelled (early settle: glm + kimi already agree);
+    // the pipelined verifier for its truncated candidate may be cancelled too
+    // once the first two verdicts accept.
+    expect(result.fusionTrace?.kernel?.["cancelledWorkers"] as number).toBeGreaterThanOrEqual(1);
+    expect(result.fusionTrace?.kernel?.["earlySettles"] as number).toBeGreaterThanOrEqual(1);
     expect(result.fusionTrace?.kernel?.["truncatedWorkers"]).toBe(1);
     // The truncated deepseek proposal still reached synthesis as a candidate note.
     expect(result.subagentResults.some((n) => n.subTask.focus_area.includes("deepseek"))).toBe(true);

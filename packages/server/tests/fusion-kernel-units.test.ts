@@ -15,6 +15,7 @@ import {
 import { decideEscalation, effortBandFor, parseRequestedKernelEffort, widthsFor } from "../src/routing/fusion/kernel/scheduler.ts";
 import { ModelPool } from "../src/routing/fusion/kernel/model-pool.ts";
 import { computeWorkKey } from "../src/routing/fusion/kernel/work-cache.ts";
+import { assembleStream } from "../src/routing/fusion/kernel/assemble.ts";
 import type { KernelLedger, Proposal, Verification } from "../src/routing/fusion/kernel/types.ts";
 import type { FusionKernelConfig } from "@model-proxy/contracts/schemas/fusion.ts";
 
@@ -221,6 +222,8 @@ describe("kernel scheduler", () => {
     ],
     capsule_tokens: 24_000,
     worker_max_tokens: 6_000,
+    verifier_max_tokens: 2_500,
+    pipeline_verification: true,
     worker_timeout_seconds: 180,
     proposal_width: { F2: 3, F3: 6, max: 9 },
     verifiers_per_candidate: { F2: 1, F3: 2, max: 3 },
@@ -271,6 +274,68 @@ describe("kernel scheduler", () => {
     pool.recordOutcome("glm-5.3", false, 100);
     expect(pool.reliability("glm-5.3")).toBeLessThan(1);
     expect(pool.reliability("kimi-k3")).toBe(1);
+  });
+});
+
+describe("kernel stream assembly", () => {
+  async function* chunks(events: unknown[]): AsyncGenerator<string> {
+    for (const event of events) {
+      yield typeof event === "string" ? event : `data: ${JSON.stringify(event)}\n\n`;
+    }
+  }
+  const openaiChunk = (delta: Record<string, unknown>, finish: string | null = null, usage?: Record<string, unknown>) =>
+    ({ id: "c", object: "chat.completion.chunk", created: 1, model: "m", choices: [{ index: 0, delta, finish_reason: finish }], ...(usage !== undefined ? { usage } : {}) });
+
+  it("assembles OpenAI content, reasoning, split tool-call arguments, finish reason and usage", async () => {
+    const assembled = await assembleStream(chunks([
+      openaiChunk({ role: "assistant", reasoning_content: "thinking " }),
+      openaiChunk({ reasoning_content: "more" }),
+      openaiChunk({ content: "Hello " }),
+      openaiChunk({ content: "world" }),
+      openaiChunk({ tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "read_file", arguments: "{\"pa" } }] }),
+      openaiChunk({ tool_calls: [{ index: 0, function: { arguments: "th\":\"a.ts\"}" } }] }),
+      openaiChunk({}, "tool_calls", { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }),
+      "data: [DONE]\n\n",
+    ]), "openai");
+    expect(assembled.content).toBe("Hello world");
+    expect(assembled.reasoningContent).toBe("thinking more");
+    expect(assembled.toolCalls).toEqual([{ id: "call_1", type: "function", function: { name: "read_file", arguments: "{\"path\":\"a.ts\"}" } }]);
+    expect(assembled.finishReason).toBe("tool_calls");
+    expect(assembled.usage).toEqual({ promptTokens: 10, completionTokens: 5, totalTokens: 15 });
+    expect(assembled.empty).toBe(false);
+  });
+
+  it("returns null content for tool-only OpenAI responses and flags empty streams", async () => {
+    const toolOnly = await assembleStream(chunks([
+      openaiChunk({ tool_calls: [{ index: 0, id: "c", type: "function", function: { name: "bash", arguments: "{}" } }] }),
+      openaiChunk({}, "tool_calls"),
+    ]), "openai");
+    expect(toolOnly.content).toBeNull();
+    expect(toolOnly.toolCalls).toHaveLength(1);
+    const empty = await assembleStream(chunks(["data: [DONE]\n\n"]), "openai");
+    expect(empty.empty).toBe(true);
+    expect(empty.content).toBe("");
+  });
+
+  it("assembles Anthropic text, thinking, tool_use blocks with streamed input json, stop reason and usage", async () => {
+    const ev = (type: string, payload: Record<string, unknown>) => `event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`;
+    const assembled = await assembleStream(chunks([
+      ev("message_start", { message: { usage: { input_tokens: 42, output_tokens: 0 } } }),
+      ev("content_block_start", { index: 0, content_block: { type: "thinking", thinking: "" } }),
+      ev("content_block_delta", { index: 0, delta: { type: "thinking_delta", thinking: "hmm" } }),
+      ev("content_block_start", { index: 1, content_block: { type: "text", text: "" } }),
+      ev("content_block_delta", { index: 1, delta: { type: "text_delta", text: "Reading the file." } }),
+      ev("content_block_start", { index: 2, content_block: { type: "tool_use", id: "toolu_1", name: "read_file", input: {} } }),
+      ev("content_block_delta", { index: 2, delta: { type: "input_json_delta", partial_json: "{\"path\":" } }),
+      ev("content_block_delta", { index: 2, delta: { type: "input_json_delta", partial_json: "\"a.ts\"}" } }),
+      ev("message_delta", { delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 17 } }),
+      ev("message_stop", {}),
+    ]), "anthropic");
+    expect(assembled.content).toBe("Reading the file.");
+    expect(assembled.reasoningContent).toBe("hmm");
+    expect(assembled.toolCalls).toEqual([{ type: "tool_use", id: "toolu_1", name: "read_file", input: { path: "a.ts" } }]);
+    expect(assembled.finishReason).toBe("tool_calls");
+    expect(assembled.usage).toEqual({ promptTokens: 42, completionTokens: 17, totalTokens: 59 });
   });
 });
 
