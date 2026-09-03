@@ -414,6 +414,10 @@ function KernelSummaryPanel({
   const repair = kernelTrace?.repair ?? asRecord(continuationPhase?.detail?.["repair"]);
   const checkpoint = kernelTrace?.checkpoint ?? continuationPhase?.detail?.["checkpoint"] === true;
   const ledgerHit = state.caches.find((cache) => cache.kind === "ledger")?.hit;
+  const answerVote = asRecord(consensusPhase?.detail?.["answerVote"]);
+  const voteLeader = asString(answerVote?.["leader"]);
+  const voteShare = asNumber(answerVote?.["leaderShare"]);
+  const voteUnanimous = answerVote?.["unanimous"] === true;
 
   if (turn === undefined && mode === undefined && kernelTrace === undefined) return null;
 
@@ -444,6 +448,12 @@ function KernelSummaryPanel({
         ) : null}
         {continuationSteps !== undefined && continuationSteps > 0 ? <MiniStat label="tool steps" value={`${continuationSteps}`} /> : null}
         {executor !== undefined ? <MiniStat label="executor" value={executor} /> : null}
+        {voteLeader !== undefined ? (
+          <MiniStat
+            label="answer vote"
+            value={`${voteLeader.slice(0, 18)}${voteUnanimous ? " · unanimous" : voteShare !== undefined ? ` · ${Math.round(voteShare * 100)}%` : ""}`}
+          />
+        ) : null}
       </div>
       {agreement !== undefined ? (
         <div className="space-y-1">

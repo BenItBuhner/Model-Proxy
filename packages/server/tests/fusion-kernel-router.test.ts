@@ -456,6 +456,12 @@ describe("Fusion kernel engine", () => {
     expect(captured.verifier).toHaveLength(3);
     expect(captured.synthesis).toHaveLength(1);
     expect(captured.summarizer.length).toBeGreaterThan(0);
+    // Trailing SSE comment carries the kernel summary for harnesses/observability.
+    const traceComment = out.split("\n").find((line) => line.startsWith(": fusion-kernel "));
+    expect(traceComment).toBeDefined();
+    const traceJson = JSON.parse(traceComment!.slice(": fusion-kernel ".length)) as Record<string, unknown>;
+    expect(traceJson["mode"]).toBe("search");
+    expect(traceJson["engine"]).toBe("kernel");
     expect(ctx.streamFusionTrace?.["kernel"]).toBeDefined();
     expect((ctx.streamFusionTrace?.["kernel"] as Record<string, unknown>)["mode"]).toBe("search");
     const session = getOperationalDb().query("SELECT ledger_json FROM fusion_kernel_sessions WHERE conversation_id = ?").get(conversationId) as { ledger_json: string };

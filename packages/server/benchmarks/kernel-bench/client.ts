@@ -31,6 +31,8 @@ interface Assembled {
   content: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
   error?: string;
+  /** Kernel summary from the trailing `: fusion-kernel {...}` SSE comment. */
+  kernel?: Record<string, unknown>;
 }
 
 async function assembleSse(res: Response): Promise<Assembled> {
@@ -41,7 +43,16 @@ async function assembleSse(res: Response): Promise<Assembled> {
   let content = "";
   let usage: Assembled["usage"];
   let error: string | undefined;
+  let kernel: Assembled["kernel"];
   const handle = (event: string) => {
+    const comment = event.split("\n").find((l) => l.startsWith(": fusion-kernel "));
+    if (comment !== undefined) {
+      try {
+        kernel = JSON.parse(comment.slice(": fusion-kernel ".length)) as Record<string, unknown>;
+      } catch {
+        // ignore malformed trace comment
+      }
+    }
     const line = event.split("\n").find((l) => l.startsWith("data:"));
     if (line === undefined) return;
     const payload = line.slice(5).trim();
@@ -71,7 +82,7 @@ async function assembleSse(res: Response): Promise<Assembled> {
     }
   }
   if (buf.trim().length > 0) handle(buf);
-  return { content, usage, error };
+  return { content, usage, error, kernel };
 }
 
 export async function chatCall(
@@ -105,7 +116,7 @@ export async function chatCall(
       const assembled = await assembleSse(res);
       const latencyMs = Math.round(performance.now() - started);
       const ok = assembled.content.length > 0 && assembled.error === undefined;
-      return { ok, content: assembled.content, latencyMs, usage: assembled.usage, error: ok ? undefined : (assembled.error ?? "empty stream"), status: res.status };
+      return { ok, content: assembled.content, latencyMs, usage: assembled.usage, kernel: assembled.kernel, error: ok ? undefined : (assembled.error ?? "empty stream"), status: res.status };
     }
     const latencyMs = Math.round(performance.now() - started);
     const text = await res.text();

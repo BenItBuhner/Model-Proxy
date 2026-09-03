@@ -251,6 +251,7 @@ export class FusionKernel {
       yield* this.streamFastPath(ctx, run);
       this.finalize(ctx, run);
       this.setStreamTrace(ctx, run, false);
+      yield `: fusion-kernel ${JSON.stringify(ctx.kernelTrace ?? {})}\n\n`;
       return;
     }
 
@@ -302,6 +303,9 @@ export class FusionKernel {
     this.recordAnswer(run, answer.content, answer.toolNames.length > 0 ? answer.toolNames : undefined);
     this.finalize(ctx, run);
     this.setStreamTrace(ctx, run, this.searchServedFromCache(run));
+    // Trailing SSE comment with the kernel summary: ignored by every SSE
+    // client, available to harnesses/observability without a second request.
+    yield `: fusion-kernel ${JSON.stringify(ctx.kernelTrace ?? {})}\n\n`;
   }
 
   // ── Preparation / classification ──────────────────────────────────

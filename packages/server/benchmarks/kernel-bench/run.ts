@@ -102,8 +102,9 @@ async function runOne(item: BenchItem, model: string, args: Args): Promise<Model
       timeoutMs: args.timeoutMs,
       reasoningEffort: args.effort,
       maxTokens: args.maxTokens,
-      // Base models must stream (origin timeouts); fusion returns fusion_trace only non-streamed.
-      stream: !model.startsWith("fusion"),
+      // Always stream: base models for origin timeouts, fusion for client idle
+      // timeouts (the kernel appends its trace summary as a trailing SSE comment).
+      stream: true,
     },
     model,
     item.messages,
