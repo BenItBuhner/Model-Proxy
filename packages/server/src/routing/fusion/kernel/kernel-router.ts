@@ -699,6 +699,9 @@ export class FusionKernel {
       continuationSteps: 0,
       totalContinuationSteps: 0,
       lastSearch: undefined,
+      // Execution-derived negatives (tool errors, exhausted repairs) are real
+      // state; a search's own rejected hypotheses are not fed back into it.
+      negatives: run.ledger.negatives.filter((n) => n.kind !== "rejected_hypothesis"),
     };
 
     const proposals: Proposal[] = [];

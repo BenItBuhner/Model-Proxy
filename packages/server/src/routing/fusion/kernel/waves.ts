@@ -284,16 +284,17 @@ export function buildConsensus(proposals: Proposal[], verifications: Verificatio
       note: contradictingIssues[0]?.issue,
     };
 
-    if (contradictingIssues.length > 0 && !multiFamily && !confirmed) {
+    if (allRejected && memberVerifications.length > 0 && !multiFamily && !confirmed) {
+      // Every proposal asserting this single-source claim was rejected outright.
       finding.status = "rejected";
+      finding.note = finding.note ?? memberVerifications.find((v) => v.verdict === "reject")?.issues[0];
       rejected.push(finding);
     } else if (contradictingIssues.length > 0) {
+      // A verifier raised an issue that overlaps this claim: dispute it, never
+      // reject on wording overlap alone (issues often mention a claim while
+      // objecting to its justification, not its truth).
       finding.status = "disputed";
       disputed.push(finding);
-    } else if (allRejected && memberVerifications.length > 0 && !multiFamily) {
-      finding.status = "rejected";
-      finding.note = memberVerifications.find((v) => v.verdict === "reject")?.issues[0];
-      rejected.push(finding);
     } else if (multiFamily || confirmed || anyAccepted) {
       accepted.push(finding);
     } else if (memberVerifications.length === 0 && usable.length === 1) {

@@ -187,17 +187,29 @@ describe("kernel wave parsing and consensus", () => {
     const verifications = [
       verification("v1", "p1", "kimi", "accept", [], ["The answer is 42"]),
       verification("v2", "p2", "deepseek", "revise", ["Memoization is unnecessary here"]),
-      verification("v3", "p3", "glm", "revise", ["The array is not always empty; counterexample [1]"]),
+      verification("v3", "p3", "glm", "reject", ["The array is not always empty; counterexample [1]"]),
     ];
     const consensus = buildConsensus(proposals, verifications);
     expect(consensus.familiesAnswered).toBe(3);
     expect(consensus.accepted.some((f) => /42/.test(f.statement))).toBe(true);
     expect(consensus.accepted.find((f) => /42/.test(f.statement))?.support.length).toBe(3);
+    // Multi-family claims survive even when one asserting proposal was rejected.
     expect(consensus.accepted.some((f) => /binary search/i.test(f.statement))).toBe(true);
+    // A verifier issue overlapping a single-source claim disputes it ...
     expect(consensus.disputed.some((f) => /memoize/i.test(f.statement))).toBe(true);
+    // ... and only an outright reject verdict on a single-source claim rejects it.
     expect(consensus.rejected.some((f) => /always empty/i.test(f.statement))).toBe(true);
     expect(consensus.agreement).toBeGreaterThan(0.4);
     expect(consensus.claimConsensus).toBeGreaterThan(0.5);
+  });
+
+  it("never rejects a claim on verifier wording overlap when the verdict was not reject", () => {
+    const consensus = buildConsensus(
+      [proposal("p1", "glm", ["The final count is 750"])],
+      [verification("v1", "p1", "kimi", "revise", ["The final count 750 is right but the justification skips the n ≡ 2 (mod 4) case"])],
+    );
+    expect(consensus.rejected).toHaveLength(0);
+    expect(consensus.disputed.some((f) => /750/.test(f.statement))).toBe(true);
   });
 
   it("caps single-family agreement so one model cannot self-certify", () => {
