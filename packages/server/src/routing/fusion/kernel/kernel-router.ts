@@ -26,7 +26,7 @@ import type {
   SubagentResult,
 } from "../types.ts";
 import { assembleStream } from "./assemble.ts";
-import { compileCapsule, type Capsule } from "./capsule.ts";
+import { compileCapsule, controlCapsule, type Capsule } from "./capsule.ts";
 import { INTENT_OBJECTIVE, deterministicIntent, mergeModelIntent } from "./intent.ts";
 import { hashMessages, truncateMiddle } from "./messages.ts";
 import { ModelPool, type PoolPick } from "./model-pool.ts";
@@ -1092,22 +1092,28 @@ export class FusionKernel {
         family: pick.family,
         start: async (signal): Promise<Proposal> => {
           const id = `${role}-w${wave}-${i + 1}`;
-          const capsule = compileCapsule({
-            messages: ctx.messages,
-            intent,
-            ledger: ledgerView,
-            role,
-            objective,
-            tokenBudget: kcfg.capsule_tokens,
-            taskStartIndex,
-            strategyNote,
-          });
+          // Control arm: the last first-wave proposer answers the user's
+          // messages verbatim (no kernel framing) so the vote always includes
+          // the plain base-model prior and framing drift becomes visible.
+          const isControl = kcfg.control_proposer && role === "proposer" && wave === 1 && picks.length >= 2 && i === picks.length - 1;
+          const capsule = isControl
+            ? controlCapsule(ctx.messages, taskStartIndex)
+            : compileCapsule({
+                messages: ctx.messages,
+                intent,
+                ledger: ledgerView,
+                role,
+                objective,
+                tokenBudget: kcfg.capsule_tokens,
+                taskStartIndex,
+                strategyNote,
+              });
           const spec: WorkSpec = {
             kind: role,
-            objective,
+            objective: isControl ? "control" : objective,
             readSetHash: capsule.readSetHash,
             modelRouting: pick.routing,
-            strategy: `${role}:wave${wave}`,
+            strategy: isControl ? `${role}:control:wave${wave}` : `${role}:wave${wave}`,
             policyVersion: kcfg.policy_version,
             configFingerprint: run.configFingerprint,
           };

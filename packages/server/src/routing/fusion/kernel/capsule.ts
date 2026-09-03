@@ -9,6 +9,7 @@ import {
   messageRole,
   messageText,
   truncateMiddle,
+  viewMessage,
 } from "./messages.ts";
 
 /**
@@ -87,6 +88,42 @@ Finish with a fenced json block exactly like:
 {"answer_summary": "<progress assessment + remaining plan>", "key_claims": ["<remaining step or risk>", "..."], "assumptions": ["..."], "risks": ["..."], "confidence": 0.0}
 \`\`\``,
 };
+
+/**
+ * Control capsule: the task's messages exactly as the user sent them (system
+ * prompt included, tool payloads flattened to text), with no kernel contract.
+ * One proposer per wave runs on this so the vote contains the plain
+ * base-model prior; the read-set hash covers the verbatim messages.
+ */
+export function controlCapsule(messages: unknown[], taskStartIndex: number): Capsule {
+  const views = messages.map((m, i) => viewMessage(m, i));
+  const out: Array<{ role: "system" | "user"; content: string }> = [];
+  let chars = 0;
+  for (let i = 0; i < views.length; i++) {
+    const v = views[i]!;
+    if (i < taskStartIndex && v.role !== "system") continue;
+    if (v.role === "system") {
+      const text = v.text.trim();
+      if (text.length > 0) out.push({ role: "system", content: text });
+      chars += text.length;
+      continue;
+    }
+    // Assistant and tool turns are folded into user-role context so the
+    // control call stays a plain, single-turn completion for the worker.
+    const label = v.role === "user" ? "" : `[${v.role}] `;
+    const text = `${label}${v.text}`.trim();
+    if (text.length === 0) continue;
+    out.push({ role: "user", content: text });
+    chars += text.length;
+  }
+  if (out.length === 0 || out.every((m) => m.role === "system")) out.push({ role: "user", content: "(no task text)" });
+  return {
+    messages: out,
+    readSetHash: stableHash(`control|${out.map((m) => `${m.role}:${m.content}`).join("\n\u0000")}`),
+    estimatedTokens: estimateTokens(out.map((m) => m.content).join("\n")),
+    stats: { environmentChars: 0, briefChars: 0, excerptChars: 0, tailMessages: out.length, tailTruncated: false, attachmentChars: 0, totalMessages: out.length },
+  };
+}
 
 export function compileCapsule(input: CapsuleInput): Capsule {
   const budgetChars = Math.max(2_000, input.tokenBudget * 4);

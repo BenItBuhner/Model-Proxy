@@ -213,6 +213,12 @@ export const FusionKernelConfigSchema = z
      */
     adaptive_verification: z.boolean().default(true),
     /**
+     * Control proposer: one reasoner per first wave receives the user's
+     * messages verbatim with no kernel framing, so the vote always contains
+     * the plain base-model answer and framing-induced drift is detectable.
+     */
+    control_proposer: z.boolean().default(true),
+    /**
      * `reasoning_effort` forwarded to upstream thinking models per worker role
      * (omitted roles use the model default). Verifiers and intent extraction
      * are terse by contract, so lower effort there cuts latency without

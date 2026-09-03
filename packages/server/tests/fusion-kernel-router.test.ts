@@ -58,6 +58,7 @@ const kernelConfig: FusionConfig = {
     verifier_max_tokens: 1_500,
     pipeline_verification: true,
     adaptive_verification: false,
+    control_proposer: false,
     worker_reasoning_effort: { verifier: "low" },
     worker_timeout_seconds: 30,
     worker_idle_timeout_seconds: 20,
@@ -92,11 +93,12 @@ interface Captured {
   checkpoint: Array<Record<string, unknown>>;
   synthesis: Array<Record<string, unknown>>;
   summarizer: Array<Record<string, unknown>>;
+  control: Array<Record<string, unknown>>;
   models: string[];
 }
 
 function emptyCaptured(): Captured {
-  return { intent: [], proposer: [], verifier: [], repair: [], checkpoint: [], synthesis: [], summarizer: [], models: [] };
+  return { intent: [], proposer: [], verifier: [], repair: [], checkpoint: [], synthesis: [], summarizer: [], control: [], models: [] };
 }
 
 function chatResponse(message: Record<string, unknown>, model: unknown, finishReason = "stop"): Response {
@@ -149,7 +151,7 @@ function proposalText(family: string, wave: number, finalAnswer?: string): strin
   ].join("\n");
 }
 
-function installFetch(captured: Captured, options: { synthesisToolCall?: boolean; finalAnswers?: Record<string, string> } = {}): void {
+function installFetch(captured: Captured, options: { synthesisToolCall?: boolean; finalAnswers?: Record<string, string>; controlAnswer?: string } = {}): void {
   globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     const model = String(body["model"] ?? "");
@@ -182,6 +184,13 @@ function installFetch(captured: Captured, options: { synthesisToolCall?: boolean
     if (system.includes("live reasoning summarizer")) {
       captured.summarizer.push(body);
       return streamResponse(model, ["Examining the middleware and planning the expiry check."]);
+    }
+
+    // Control proposer: a worker call (tool_choice none) with no kernel contract.
+    if (body["tool_choice"] === "none" && !system.includes("fusion kernel") && !system.includes("summarizer")) {
+      captured.control.push(body);
+      const answer = options.controlAnswer ?? "750";
+      return streamResponse(model, [`Plain answer from the base model.\n\nFINAL: ${answer}`]);
     }
 
     // Synthesis / executor.
@@ -517,6 +526,41 @@ describe("Fusion kernel engine", () => {
     // Truncated work is not cached: only glm + kimi proposals (+ intent + verifiers) were stored.
     const cachedProposals = getOperationalDb().query("SELECT model_routing FROM fusion_kernel_work WHERE kind = 'proposer'").all() as Array<{ model_routing: string }>;
     expect(cachedProposals.map((r) => r.model_routing).sort()).toEqual(["glm-5.3", "kimi-k3"]);
+  });
+
+  it("runs one control proposer on the verbatim task and lets its dissent block a decisive vote", async () => {
+    const mathPrompt = [{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }];
+    const controlCfg: FusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true, control_proposer: true } };
+
+    // Framed reasoners agree with the plain base-model answer → decisive, control included in the vote.
+    const agree = emptyCaptured();
+    installFetch(agree, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" }, controlAnswer: "750" });
+    const ctxA = makeCtx(mathPrompt, `conv-control-agree-${Date.now()}`);
+    ctxA.fusionConfig = controlCfg;
+    delete (ctxA.requestData as Record<string, unknown>)["tools"];
+    const a = await router.route(ctxA);
+    expect(agree.control).toHaveLength(1);
+    const controlMessages = agree.control[0]!["messages"] as Array<Record<string, unknown>>;
+    expect(controlMessages.some((m) => m["role"] === "system")).toBe(false);
+    expect(String(controlMessages[0]!["content"])).toBe(mathPrompt[0]!.content);
+    expect(agree.proposer).toHaveLength(2);
+    expect(a.fusionTrace?.kernel?.["settledAnswer"]).toBe("750");
+
+    // Framed reasoners drift to 500 while the plain base model says 750 → NOT decisive: full verification, deep synthesis.
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-control-${Date.now()}`));
+    router = new FusionRouter();
+    const drift = emptyCaptured();
+    installFetch(drift, { finalAnswers: { glm: "500", kimi: "500", deepseek: "500" }, controlAnswer: "750" });
+    const ctxB = makeCtx(mathPrompt, `conv-control-drift-${Date.now()}`);
+    ctxB.fusionConfig = controlCfg;
+    delete (ctxB.requestData as Record<string, unknown>)["tools"];
+    const b = await router.route(ctxB);
+    expect(drift.control).toHaveLength(1);
+    expect(b.fusionTrace?.kernel?.["settledAnswer"]).toBeUndefined();
+    const synth = allText(drift.synthesis[0]!["messages"] as unknown[]);
+    expect(synth).toContain("SPLIT");
+    expect(synth).toContain("750");
   });
 
   it("settles a proposal wave before numeric quorum when two families agree on the final answer and an audit confirmed it", async () => {
