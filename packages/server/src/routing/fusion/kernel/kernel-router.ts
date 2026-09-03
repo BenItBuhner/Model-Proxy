@@ -764,10 +764,22 @@ export class FusionKernel {
         const candidates = waveProposals.filter((p) => p.success && (p.answer.length > 0 || p.claims.length > 0));
         const pending = candidates.filter((p) => !pipelinedCandidateIds.has(p.id));
         const preVote = buildAnswerVote(waveProposals, []);
-        const unanimous = preVote !== undefined && preVote.unanimous && new Set(waveProposals.filter((p) => p.success && p.finalAnswer !== undefined).map((p) => p.family)).size >= 2;
+        const unanimousFamilies = preVote !== undefined && preVote.unanimous
+          ? new Set(waveProposals.filter((p) => p.success && p.finalAnswer !== undefined).map((p) => p.family)).size
+          : 0;
         let toVerify: Proposal[];
-        if (kcfg.adaptive_verification && unanimous) {
-          // Unanimous final answer across families: one audit of the leader is enough.
+        let skipVerification = false;
+        if (kcfg.adaptive_verification && unanimousFamilies >= 3) {
+          // Three independent families reached the same final answer: that is
+          // stronger evidence than one more audit; skip verification entirely.
+          skipVerification = true;
+          toVerify = [];
+          for (const entry of pipelined) entry.cancel();
+          run.cancelledWorkers += pipelined.length;
+          emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "completed", durationMs: 0, detail: { wave, adaptive: "unanimous-3", vote: preVote?.leader?.answer, skipped: true } });
+          await run.narrator.say(`Kernel: ${unanimousFamilies} model families independently reached "${preVote?.leader?.answer ?? ""}"; skipping the verification wave.`);
+        } else if (kcfg.adaptive_verification && unanimousFamilies >= 2) {
+          // Unanimous across two families: one audit of the leader is enough.
           toVerify = pipelinedCandidateIds.size > 0 ? [] : candidates.slice(0, 1);
           emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, adaptive: "unanimous", vote: preVote?.leader?.answer, verifying: toVerify.length + pipelinedCandidateIds.size } });
           await run.narrator.say(`Kernel: all reasoners agree on "${preVote?.leader?.answer ?? ""}"; running a single cross-family audit instead of a full verification wave.`);
@@ -780,7 +792,13 @@ export class FusionKernel {
               : `Kernel: verifying ${toVerify.length} candidate answer(s) with cross-family auditors.`);
           }
         }
-        const entries = [...pipelined, ...(toVerify.length > 0 ? this.launchVerification(ctx, run, intent, searchLedger, toVerify, wave, widths, taskStartIndex) : [])];
+        const entries = skipVerification
+          ? []
+          : [...pipelined, ...(toVerify.length > 0 ? this.launchVerification(ctx, run, intent, searchLedger, toVerify, wave, widths, taskStartIndex) : [])];
+        if (skipVerification && pipelined.length > 0) {
+          // Let cancelled audits settle quietly; their partial output is not used.
+          void Promise.all(pipelined.map((e) => e.promise)).catch(() => undefined);
+        }
         if (entries.length > 0) {
           const waveVerifications = await this.settleWithQuorum(run, entries, Math.min(2, run.pool.proposerFamilyCount), (settled) => this.verdictsAlreadyAccept(settled));
           verifications.push(...waveVerifications);
@@ -1575,6 +1593,7 @@ export class FusionKernel {
       repair: run.repair,
       checkpoint: run.checkpoint === true,
       pool: run.pool.snapshot(),
+      phases: run.steps.filter((s) => s.durationMs > 0).map((s) => `${s.type}:${Math.round(s.durationMs / 1000)}s`),
       totalMs: Math.round(performance.now() - run.startedAt),
     };
   }

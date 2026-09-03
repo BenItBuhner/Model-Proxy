@@ -172,7 +172,8 @@ async function main(): Promise<void> {
           (row.kernel !== undefined
             ? `  kernel=${String(row.kernel["mode"])}/${String(row.kernel["band"])} waves=${String(row.kernel["waves"])} agr=${String(row.kernel["agreement"] ?? "-")} work=${String(row.kernel["cachedWorkItems"])}/${String(row.kernel["workItems"])}` +
               (row.kernel["vote"] !== undefined ? ` vote=${JSON.stringify((row.kernel["vote"] as Record<string, unknown>)["entries"])}` : "") +
-              (row.kernel["settledAnswer"] !== undefined ? " settled" : "")
+              (row.kernel["settledAnswer"] !== undefined ? " settled" : "") +
+              (Array.isArray(row.kernel["phases"]) ? ` phases=${(row.kernel["phases"] as string[]).join(",")}` : "")
             : ""),
       );
     }
