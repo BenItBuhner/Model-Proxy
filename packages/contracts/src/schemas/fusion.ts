@@ -207,6 +207,18 @@ export const FusionKernelConfigSchema = z
     agreement_threshold: z.number().min(0).max(1).default(0.62),
     /** Max concurrent upstream worker calls across all waves. */
     max_concurrency: z.number().int().min(1).max(128).default(12),
+    /**
+     * Fraction of a wave's workers that must finish (across ≥2 families when
+     * available) before stragglers are put on the grace clock. 1 = wait for all.
+     */
+    wave_quorum: z.number().min(0.34).max(1).default(0.67),
+    /** After quorum, stragglers get this long before they are cancelled (partial output ≥ 800 chars is kept). */
+    straggler_grace_seconds: z.number().int().min(0).max(600).default(25),
+    /** Total proposal+verification budget per effort band; when exceeded the search settles with what it has. */
+    search_deadline_seconds: z
+      .object({ F2: z.number().int().positive(), F3: z.number().int().positive(), max: z.number().int().positive() })
+      .strict()
+      .default({ F2: 240, F3: 480, max: 1500 }),
     /** Run a fast LLM intent parse for F2+ fresh tasks (cached by work key). */
     intent_extraction: z.boolean().default(true),
     /** Tool-continuation policy. */

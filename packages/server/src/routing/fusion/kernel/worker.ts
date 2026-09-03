@@ -67,7 +67,12 @@ export interface WorkerResult {
   durationMs: number;
   finishReason?: string;
   attemptedToolCalls: boolean;
+  /** True when the worker was cut off (timeout / quorum cancel) but enough output was kept. */
+  truncated?: boolean;
 }
+
+/** Partial output at least this long is kept when a worker is cut off. */
+const MIN_PARTIAL_CHARS = 800;
 
 /**
  * Run one bounded, streaming worker call. Reasoning/content stream into the
@@ -99,10 +104,12 @@ export async function runWorker(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), req.timeoutMs);
   const onAbort = () => controller.abort();
-  const base = req.signal ?? ctx.signal;
-  if (base !== undefined) {
-    if (base.aborted) controller.abort();
-    else base.addEventListener("abort", onAbort, { once: true });
+  // Both the per-job cancel signal (wave quorum) and the client's abort signal
+  // must stop the worker.
+  const sources = [req.signal, ctx.signal].filter((s): s is AbortSignal => s !== undefined);
+  for (const source of sources) {
+    if (source.aborted) controller.abort();
+    else source.addEventListener("abort", onAbort, { once: true });
   }
 
   let content = "";
@@ -223,11 +230,36 @@ export async function runWorker(
     return { content: cleaned, success: true, durationMs, finishReason, attemptedToolCalls };
   } catch (err) {
     const durationMs = Math.round(performance.now() - started);
-    const error = controller.signal.aborted && base?.aborted !== true
-      ? `worker timed out after ${req.timeoutMs}ms`
+    const cutOff = controller.signal.aborted && ctx.signal?.aborted !== true;
+    const error = cutOff
+      ? req.signal?.aborted === true
+        ? "worker cancelled (wave quorum reached)"
+        : `worker timed out after ${req.timeoutMs}ms`
       : err instanceof Error
         ? err.message
         : String(err);
+    // A cut-off worker that already produced substantial analysis is still
+    // evidence: keep it as a truncated result instead of discarding it.
+    const partial = cutOff ? stripSubagentActionClaims(stripToolCallArtifacts(content)).trim() : "";
+    if (partial.length >= MIN_PARTIAL_CHARS) {
+      flush(true, ctx.fusionConfig.summarizer.segment_chars);
+      log.info("kernel worker cut off; keeping partial output", { id: req.id, routing: req.routing, chars: partial.length, durationMs, reason: error });
+      if (emitEvents) {
+        emitFusion(ctx, {
+          type: "fusion.subagent",
+          at: nowIso(),
+          id: req.id,
+          focus: req.focus,
+          model: req.routing,
+          status: "completed",
+          role: req.role,
+          chars: partial.length,
+          durationMs,
+          detail: { truncated: true, reason: error },
+        });
+      }
+      return { content: partial, success: true, durationMs, finishReason: "length", attemptedToolCalls, truncated: true };
+    }
     log.warn("kernel worker failed", { id: req.id, routing: req.routing, error, durationMs });
     if (emitEvents) {
       emitFusion(ctx, {
@@ -245,7 +277,7 @@ export async function runWorker(
     return { content: "", success: false, error, durationMs, finishReason, attemptedToolCalls };
   } finally {
     clearTimeout(timer);
-    base?.removeEventListener("abort", onAbort);
+    for (const source of sources) source.removeEventListener("abort", onAbort);
     release();
   }
 }

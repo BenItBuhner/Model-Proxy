@@ -3,7 +3,7 @@ import { modelConfigLoader } from "../../../config/model-loader.ts";
 import { createLogger } from "../../../observability/logger.ts";
 import { calculateCosts, resolvePricing } from "../../../observability/pricing.ts";
 import { usageSnapshotFromCounts } from "../../../shared/usage-snapshot.ts";
-import { stableHash } from "../../../shared/utils.ts";
+import { sleep, stableHash } from "../../../shared/utils.ts";
 import type { FallbackRouter } from "../../fallback.ts";
 import { emitFusion, nowIso } from "../fusion-events.ts";
 import {
@@ -92,6 +92,16 @@ interface KernelRun {
   fastRouting: string;
   repair?: { signature: string; attempts: number; exhausted: boolean };
   checkpoint?: boolean;
+  /** Wall-clock deadline (performance.now() units) for proposal/verification waves. */
+  searchDeadlineAt: number;
+  /** Workers cancelled by wave quorum (observability). */
+  cancelledWorkers: number;
+  truncatedWorkers: number;
+}
+
+interface QuorumJob<T> {
+  family: string;
+  start: (signal: AbortSignal) => Promise<T>;
 }
 
 interface CachedProposal {
@@ -322,7 +332,68 @@ export class FusionKernel {
       startedAt,
       executorRouting,
       fastRouting,
+      searchDeadlineAt: startedAt + kcfg.search_deadline_seconds[band] * 1000,
+      cancelledWorkers: 0,
+      truncatedWorkers: 0,
     };
+  }
+
+  /** Remaining wall-clock budget for search waves, in ms (0 when exhausted). */
+  private remainingSearchMs(run: KernelRun): number {
+    return Math.max(0, Math.round(run.searchDeadlineAt - performance.now()));
+  }
+
+  /**
+   * Run a wave of workers in parallel and settle on quorum: once
+   * `wave_quorum` of the jobs (spanning ≥ minFamilies families when the wave
+   * has that many) have finished, stragglers get `straggler_grace_seconds`
+   * and are then cancelled. Cancelled workers return their partial output when
+   * it is substantial (see runWorker), so quorum trades tail latency for at
+   * most a truncated proposal — never for silent data loss.
+   */
+  private async runWithQuorum<T>(run: KernelRun, jobs: QuorumJob<T>[], minFamilies: number): Promise<T[]> {
+    const { kcfg } = run;
+    if (jobs.length === 0) return [];
+    const controllers = jobs.map(() => new AbortController());
+    const results: T[] = new Array<T>(jobs.length);
+    const pending = new Map<number, Promise<{ index: number; value: T }>>();
+    jobs.forEach((job, index) => {
+      pending.set(index, job.start(controllers[index]!.signal).then((value) => ({ index, value })));
+    });
+
+    const distinctFamilies = new Set(jobs.map((j) => j.family)).size;
+    // Round, not ceil: 0.67 × 3 = 2.01 must mean "two of three", not "all three".
+    const quorumCount = kcfg.wave_quorum >= 1
+      ? jobs.length
+      : Math.min(jobs.length, Math.max(1, Math.round(jobs.length * kcfg.wave_quorum)));
+    const familyTarget = Math.min(minFamilies, distinctFamilies);
+    const settledFamilies = new Set<string>();
+    let settledCount = 0;
+    let graceTimer: Promise<{ index: -1; value: undefined }> | undefined;
+
+    while (pending.size > 0) {
+      const racers: Array<Promise<{ index: number; value: T | undefined }>> = [...pending.values()];
+      if (graceTimer !== undefined) racers.push(graceTimer);
+      const outcome = await Promise.race(racers);
+      if (outcome.index === -1) {
+        // Grace expired: cancel stragglers, then collect whatever they salvaged.
+        for (const index of pending.keys()) controllers[index]!.abort();
+        run.cancelledWorkers += pending.size;
+        const rest = await Promise.all(pending.values());
+        for (const r of rest) results[r.index] = r.value;
+        pending.clear();
+        break;
+      }
+      pending.delete(outcome.index);
+      results[outcome.index] = outcome.value as T;
+      settledCount += 1;
+      settledFamilies.add(jobs[outcome.index]!.family);
+      if (graceTimer === undefined && pending.size > 0 && settledCount >= quorumCount && settledFamilies.size >= familyTarget) {
+        const graceMs = Math.min(kcfg.straggler_grace_seconds * 1000, this.remainingSearchMs(run));
+        graceTimer = sleep(graceMs).then(() => ({ index: -1 as const, value: undefined }));
+      }
+    }
+    return results;
   }
 
   private poolFor(kcfg: FusionKernelConfig, fingerprint: string): ModelPool {
@@ -453,13 +524,17 @@ export class FusionKernel {
     const priorFindings = run.classification.kind === "clarification" ? run.ledger.findings : [];
     const taskStartIndex = run.ledger.taskStartIndex;
 
-    // Intent extraction (fast model, cached by work key). Skipped when the
-    // ledger already carries a model-extracted intent (replay / rewind) so the
-    // goal text — and therefore every downstream work key — stays stable.
-    if (kcfg.intent_extraction && run.ledger.intent !== undefined && run.ledger.intent.extractedBy !== "model") {
-      await this.extractIntent(ctx, run);
-    }
-    const intent = run.ledger.intent!;
+    // Intent extraction (fast model, cached by work key) runs in parallel with
+    // proposal wave 1 so it never sits on the critical path. Proposers always
+    // see the deterministic intent (stable across replays); verifiers and the
+    // synthesizer see the merged model intent. Skipped when the ledger already
+    // carries a model-extracted intent (replay / rewind).
+    const baseIntent = run.ledger.intent!;
+    const proposerIntent = deterministicIntent(baseIntent.goal.split("\n(Kernel restatement:")[0]!, baseIntent.sourceMessageIndex);
+    const intentPromise =
+      kcfg.intent_extraction && baseIntent.extractedBy !== "model"
+        ? this.extractIntent(ctx, run).catch((err) => log.warn("intent extraction failed; using deterministic intent", { error: String(err) }))
+        : Promise.resolve();
     const widths = widthsFor(kcfg, run.band, run.pool.proposerFamilyCount);
     await run.narrator.say(
       `Kernel: new task (${run.band}). Launching ${widths.proposals} independent reasoners across ${run.pool.familyNames.join(", ")}, then cross-family verification.`,
@@ -486,9 +561,11 @@ export class FusionKernel {
 
     for (let wave = 1; wave <= widths.maxWaves; wave++) {
       run.waves = wave;
-      const waveProposals = await this.proposalWave(ctx, run, intent, searchLedger, wave, widths, taskStartIndex, strategyNote);
+      const waveProposals = await this.proposalWave(ctx, run, proposerIntent, searchLedger, wave, widths, taskStartIndex, strategyNote);
       proposals.push(...waveProposals);
-      if (widths.verifiersPerCandidate > 0) {
+      await intentPromise;
+      const intent = run.ledger.intent ?? baseIntent;
+      if (widths.verifiersPerCandidate > 0 && this.remainingSearchMs(run) > 10_000) {
         const waveVerifications = await this.verificationWave(ctx, run, intent, searchLedger, waveProposals, wave, widths, taskStartIndex);
         verifications.push(...waveVerifications);
       }
@@ -498,7 +575,7 @@ export class FusionKernel {
       const novel = wave === 1 ? acceptedNow.length : novelClaimCount(previousAccepted, acceptedNow);
       previousAccepted = acceptedNow;
 
-      const decision = decideEscalation({
+      let decision = decideEscalation({
         consensus,
         wave,
         widths,
@@ -506,6 +583,9 @@ export class FusionKernel {
         novelClaimsLastWave: novel,
         familyCount: run.pool.proposerFamilyCount,
       });
+      if (decision.escalate && this.remainingSearchMs(run) < 30_000) {
+        decision = { escalate: false, reason: `search deadline reached (${kcfg.search_deadline_seconds[run.band]}s); settling with agreement ${consensus.agreement}` };
+      }
       emitFusion(ctx, {
         type: "fusion.phase",
         at: nowIso(),
@@ -541,6 +621,7 @@ export class FusionKernel {
       strategyNote = escalationStrategyNote(consensus, wave + 1);
     }
 
+    await intentPromise;
     const finalConsensus = consensus ?? buildConsensus(proposals, verifications);
     this.applyConsensusToLedger(run, finalConsensus, priorFindings);
     run.ledger.lastSearch = {
@@ -663,61 +744,73 @@ export class FusionKernel {
       })),
     });
 
-    const results = await Promise.all(
-      picks.map(async (pick, i): Promise<Proposal> => {
-        const id = `${role}-w${wave}-${i + 1}`;
-        const capsule = compileCapsule({
-          messages: ctx.messages,
-          intent,
-          ledger: ledgerView,
-          role,
-          objective,
-          tokenBudget: kcfg.capsule_tokens,
-          taskStartIndex,
-          strategyNote,
-        });
-        const spec: WorkSpec = {
-          kind: role,
-          objective,
-          readSetHash: capsule.readSetHash,
-          modelRouting: pick.routing,
-          strategy: `${role}:wave${wave}`,
-          policyVersion: kcfg.policy_version,
-          configFingerprint: run.configFingerprint,
-        };
-        const workKey = computeWorkKey(spec);
-        const cached = this.work.get<CachedProposal>(workKey);
-        if (cached !== undefined && cached.status === "completed") {
-          this.noteWork(ctx, run, workKey, true, id, pick, role);
-          const parsed = parseProposal(cached.result.content);
-          return { id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: cached.result.content, workKey, cached: true, durationMs: 0, success: true };
-        }
-        const result = await runWorker(ctx, this.fallbackRouter, {
-          id,
-          role,
-          focus: `${role} · ${pick.family}`,
-          routing: pick.routing,
-          messages: capsule.messages,
-          maxTokens: kcfg.worker_max_tokens,
-          timeoutMs: kcfg.worker_timeout_seconds * 1000,
-          onSegment: run.narrator.segment,
-          semaphore: run.semaphore,
-        });
-        run.pool.recordOutcome(pick.routing, result.success, result.durationMs);
-        this.accountWorker(run, pick.routing, capsule, result.content);
-        this.noteWork(ctx, run, workKey, false, id, pick, role);
-        if (!result.success) {
-          return { id, family: pick.family, routing: pick.routing, wave, answer: "", claims: [], assumptions: [], risks: [], confidence: undefined, raw: "", workKey, cached: false, durationMs: result.durationMs, success: false, error: result.error };
-        }
-        this.work.put(workKey, spec, { content: result.content, durationMs: result.durationMs } satisfies CachedProposal, "completed", run.ledger.conversationId);
-        const parsed = parseProposal(result.content);
-        return { id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: result.content, workKey, cached: false, durationMs: result.durationMs, success: true };
-      }),
+    const timeoutMs = Math.max(15_000, Math.min(kcfg.worker_timeout_seconds * 1000, this.remainingSearchMs(run)));
+    const results = await this.runWithQuorum<Proposal>(
+      run,
+      picks.map((pick, i) => ({
+        family: pick.family,
+        start: async (signal): Promise<Proposal> => {
+          const id = `${role}-w${wave}-${i + 1}`;
+          const capsule = compileCapsule({
+            messages: ctx.messages,
+            intent,
+            ledger: ledgerView,
+            role,
+            objective,
+            tokenBudget: kcfg.capsule_tokens,
+            taskStartIndex,
+            strategyNote,
+          });
+          const spec: WorkSpec = {
+            kind: role,
+            objective,
+            readSetHash: capsule.readSetHash,
+            modelRouting: pick.routing,
+            strategy: `${role}:wave${wave}`,
+            policyVersion: kcfg.policy_version,
+            configFingerprint: run.configFingerprint,
+          };
+          const workKey = computeWorkKey(spec);
+          const cached = this.work.get<CachedProposal>(workKey);
+          if (cached !== undefined && cached.status === "completed") {
+            this.noteWork(ctx, run, workKey, true, id, pick, role);
+            const parsed = parseProposal(cached.result.content);
+            return { id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: cached.result.content, workKey, cached: true, durationMs: 0, success: true };
+          }
+          const result = await runWorker(ctx, this.fallbackRouter, {
+            id,
+            role,
+            focus: `${role} · ${pick.family}`,
+            routing: pick.routing,
+            messages: capsule.messages,
+            maxTokens: kcfg.worker_max_tokens,
+            timeoutMs,
+            onSegment: run.narrator.segment,
+            semaphore: run.semaphore,
+            signal,
+          });
+          run.pool.recordOutcome(pick.routing, result.success, result.durationMs);
+          this.accountWorker(run, pick.routing, capsule, result.content);
+          this.noteWork(ctx, run, workKey, false, id, pick, role);
+          if (result.truncated === true) run.truncatedWorkers += 1;
+          if (!result.success) {
+            return { id, family: pick.family, routing: pick.routing, wave, answer: "", claims: [], assumptions: [], risks: [], confidence: undefined, raw: "", workKey, cached: false, durationMs: result.durationMs, success: false, error: result.error };
+          }
+          // Truncated output is usable evidence for this turn but is not
+          // cached: a replay should get the chance to finish it.
+          if (result.truncated !== true) {
+            this.work.put(workKey, spec, { content: result.content, durationMs: result.durationMs } satisfies CachedProposal, "completed", run.ledger.conversationId);
+          }
+          const parsed = parseProposal(result.content);
+          return { id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: result.content, workKey, cached: false, durationMs: result.durationMs, success: true };
+        },
+      })),
+      Math.min(2, run.pool.proposerFamilyCount),
     );
 
     const durationMs = Math.round(performance.now() - started);
     const succeeded = results.filter((r) => r.success).length;
-    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase, status: "completed", durationMs, detail: { wave, total: results.length, succeeded, cached: results.filter((r) => r.cached).length } });
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase, status: "completed", durationMs, detail: { wave, total: results.length, succeeded, cached: results.filter((r) => r.cached).length, cancelled: run.cancelledWorkers, truncated: run.truncatedWorkers } });
     run.steps.push({
       type: phase,
       label: role === "proposer" ? `Proposal Wave ${wave}` : role === "repair" ? "Repair Wave" : "Checkpoint Wave",
@@ -756,66 +849,76 @@ export class FusionKernel {
     emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, count: jobs.length, candidates: candidates.length } });
     await run.narrator.say(`Kernel: verifying ${candidates.length} candidate answer(s) with ${jobs.length} cross-family auditor(s).`);
 
-    const results = await Promise.all(
-      jobs.map(async ({ candidate, pick, id }): Promise<Verification> => {
-        const objective = `Audit candidate ${candidate.id} (produced by another model family) against the goal. Try hard to falsify it: check every key claim, the arithmetic/logic, the completeness against the deliverables, and the safety of any recommended actions.`;
-        const capsule = compileCapsule({
-          messages: ctx.messages,
-          intent,
-          ledger: ledgerView,
-          role: "verifier",
-          objective,
-          tokenBudget: kcfg.capsule_tokens,
-          taskStartIndex,
-          attachments: [
-            { title: `Candidate ${candidate.id} answer`, text: truncateMiddle(candidate.answer, 16_000, "candidate trimmed") },
-            { title: "Candidate key claims", text: candidate.claims.map((c, i) => `${i + 1}. ${c}`).join("\n") || "(none extracted)" },
-          ],
-        });
-        const spec: WorkSpec = {
-          kind: "verifier",
-          objective: `${objective}|${candidate.workKey}`,
-          readSetHash: capsule.readSetHash,
-          modelRouting: pick.routing,
-          strategy: `verify:wave${wave}`,
-          policyVersion: kcfg.policy_version,
-          configFingerprint: run.configFingerprint,
-        };
-        const workKey = computeWorkKey(spec);
-        const cached = this.work.get<CachedVerification>(workKey);
-        if (cached !== undefined && cached.status === "completed") {
-          this.noteWork(ctx, run, workKey, true, id, pick, "verifier");
-          const parsed = parseVerdict(cached.result.content);
-          return { id, proposalId: candidate.id, family: pick.family, routing: pick.routing, ...parsed, raw: cached.result.content, workKey, cached: true, durationMs: 0, success: true };
-        }
-        const result = await runWorker(ctx, this.fallbackRouter, {
-          id,
-          role: "verifier",
-          focus: `verifier · ${pick.family} → ${candidate.family}`,
-          routing: pick.routing,
-          messages: capsule.messages,
-          maxTokens: Math.min(kcfg.worker_max_tokens, 4_000),
-          timeoutMs: kcfg.worker_timeout_seconds * 1000,
-          onSegment: run.narrator.segment,
-          semaphore: run.semaphore,
-          temperature: 0.2,
-        });
-        run.pool.recordOutcome(pick.routing, result.success, result.durationMs);
-        this.accountWorker(run, pick.routing, capsule, result.content);
-        this.noteWork(ctx, run, workKey, false, id, pick, "verifier");
-        if (!result.success) {
-          return { id, proposalId: candidate.id, family: pick.family, routing: pick.routing, verdict: "revise", issues: [], correctClaims: [], confidence: undefined, raw: "", workKey, cached: false, durationMs: result.durationMs, success: false, error: result.error };
-        }
-        this.work.put(workKey, spec, { content: result.content, durationMs: result.durationMs } satisfies CachedVerification, "completed", run.ledger.conversationId);
-        const parsed = parseVerdict(result.content);
-        return { id, proposalId: candidate.id, family: pick.family, routing: pick.routing, ...parsed, raw: result.content, workKey, cached: false, durationMs: result.durationMs, success: true };
-      }),
+    const timeoutMs = Math.max(15_000, Math.min(kcfg.worker_timeout_seconds * 1000, this.remainingSearchMs(run)));
+    const results = await this.runWithQuorum<Verification>(
+      run,
+      jobs.map(({ candidate, pick, id }) => ({
+        family: pick.family,
+        start: async (signal): Promise<Verification> => {
+          const objective = `Audit candidate ${candidate.id} (produced by another model family) against the goal. Try hard to falsify it: check every key claim, the arithmetic/logic, the completeness against the deliverables, and the safety of any recommended actions.`;
+          const capsule = compileCapsule({
+            messages: ctx.messages,
+            intent,
+            ledger: ledgerView,
+            role: "verifier",
+            objective,
+            tokenBudget: kcfg.capsule_tokens,
+            taskStartIndex,
+            attachments: [
+              { title: `Candidate ${candidate.id} answer`, text: truncateMiddle(candidate.answer, 16_000, "candidate trimmed") },
+              { title: "Candidate key claims", text: candidate.claims.map((c, i) => `${i + 1}. ${c}`).join("\n") || "(none extracted)" },
+            ],
+          });
+          const spec: WorkSpec = {
+            kind: "verifier",
+            objective: `${objective}|${candidate.workKey}`,
+            readSetHash: capsule.readSetHash,
+            modelRouting: pick.routing,
+            strategy: `verify:wave${wave}`,
+            policyVersion: kcfg.policy_version,
+            configFingerprint: run.configFingerprint,
+          };
+          const workKey = computeWorkKey(spec);
+          const cached = this.work.get<CachedVerification>(workKey);
+          if (cached !== undefined && cached.status === "completed") {
+            this.noteWork(ctx, run, workKey, true, id, pick, "verifier");
+            const parsed = parseVerdict(cached.result.content);
+            return { id, proposalId: candidate.id, family: pick.family, routing: pick.routing, ...parsed, raw: cached.result.content, workKey, cached: true, durationMs: 0, success: true };
+          }
+          const result = await runWorker(ctx, this.fallbackRouter, {
+            id,
+            role: "verifier",
+            focus: `verifier · ${pick.family} → ${candidate.family}`,
+            routing: pick.routing,
+            messages: capsule.messages,
+            maxTokens: Math.min(kcfg.worker_max_tokens, 4_000),
+            timeoutMs,
+            onSegment: run.narrator.segment,
+            semaphore: run.semaphore,
+            temperature: 0.2,
+            signal,
+          });
+          run.pool.recordOutcome(pick.routing, result.success, result.durationMs);
+          this.accountWorker(run, pick.routing, capsule, result.content);
+          this.noteWork(ctx, run, workKey, false, id, pick, "verifier");
+          if (result.truncated === true) run.truncatedWorkers += 1;
+          if (!result.success) {
+            return { id, proposalId: candidate.id, family: pick.family, routing: pick.routing, verdict: "revise", issues: [], correctClaims: [], confidence: undefined, raw: "", workKey, cached: false, durationMs: result.durationMs, success: false, error: result.error };
+          }
+          if (result.truncated !== true) {
+            this.work.put(workKey, spec, { content: result.content, durationMs: result.durationMs } satisfies CachedVerification, "completed", run.ledger.conversationId);
+          }
+          const parsed = parseVerdict(result.content);
+          return { id, proposalId: candidate.id, family: pick.family, routing: pick.routing, ...parsed, raw: result.content, workKey, cached: false, durationMs: result.durationMs, success: true };
+        },
+      })),
+      Math.min(2, run.pool.proposerFamilyCount),
     );
 
     const durationMs = Math.round(performance.now() - started);
     const verdicts = { accept: 0, revise: 0, reject: 0 };
     for (const v of results) if (v.success) verdicts[v.verdict] += 1;
-    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "completed", durationMs, detail: { wave, total: results.length, ...verdicts, cached: results.filter((r) => r.cached).length } });
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "completed", durationMs, detail: { wave, total: results.length, ...verdicts, cached: results.filter((r) => r.cached).length, cancelled: run.cancelledWorkers, truncated: run.truncatedWorkers } });
     run.steps.push({
       type: "verification",
       label: `Verification Wave ${wave}`,
@@ -1134,6 +1237,9 @@ export class FusionKernel {
       agreement: run.agreement,
       workItems: run.totalWork,
       cachedWorkItems: run.cachedWork,
+      cancelledWorkers: run.cancelledWorkers,
+      truncatedWorkers: run.truncatedWorkers,
+      searchBudgetSeconds: run.kcfg.search_deadline_seconds[run.band],
       continuationSteps: run.ledger.continuationSteps,
       totalContinuationSteps: run.ledger.totalContinuationSteps,
       findings: run.ledger.findings.length,

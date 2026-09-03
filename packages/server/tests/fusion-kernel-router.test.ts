@@ -61,6 +61,9 @@ const kernelConfig: FusionConfig = {
     max_waves: { F2: 2, F3: 2, max: 3 },
     agreement_threshold: 0.6,
     max_concurrency: 8,
+    wave_quorum: 1,
+    straggler_grace_seconds: 5,
+    search_deadline_seconds: { F2: 60, F3: 60, max: 60 },
     intent_extraction: true,
     continuation: { enabled: true, max_steps_before_replan: 3, repair_on_error: true, max_repairs_per_signature: 1 },
     policy_version: 1,
@@ -452,6 +455,50 @@ describe("Fusion kernel engine", () => {
     const session = getOperationalDb().query("SELECT ledger_json FROM fusion_kernel_sessions WHERE conversation_id = ?").get(conversationId) as { ledger_json: string };
     const ledger = JSON.parse(session.ledger_json) as { lastAnswerSummary?: string };
     expect(ledger.lastAnswerSummary).toContain("Final synthesized answer");
+  });
+
+  it("settles a wave on quorum, cancels the straggler after grace, and keeps its partial output as truncated evidence", async () => {
+    const conversationId = `conv-quorum-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    let hangingAborted = false;
+    // The deepseek proposer streams a substantial partial proposal, then hangs until aborted.
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      if (String(body["model"]) === "up-deepseek" && system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        const partial = `Deepseek partial proposal: ${"the middleware must validate API key expiry before authorizing the request. ".repeat(14)}`;
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ id: "s", object: "chat.completion.chunk", created: 1, model: body["model"], choices: [{ index: 0, delta: { content: partial }, finish_reason: null }] })}\n\n`));
+            init?.signal?.addEventListener("abort", () => {
+              hangingAborted = true;
+              controller.error(new DOMException("Aborted", "AbortError"));
+            }, { once: true });
+          },
+        });
+        return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([SYSTEM, { role: "user", content: GOAL }], conversationId);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, wave_quorum: 0.67, straggler_grace_seconds: 1 } };
+    const started = performance.now();
+    const result = await router.route(ctx);
+    const elapsed = performance.now() - started;
+
+    expect(hangingAborted).toBe(true);
+    expect(elapsed).toBeLessThan(15_000);
+    expect(result.fusionTrace?.kernel?.["cancelledWorkers"]).toBe(1);
+    expect(result.fusionTrace?.kernel?.["truncatedWorkers"]).toBe(1);
+    // The truncated deepseek proposal still reached synthesis as a candidate note.
+    expect(result.subagentResults.some((n) => n.subTask.focus_area.includes("deepseek"))).toBe(true);
+    // Truncated work is not cached: only glm + kimi proposals (+ intent + verifiers) were stored.
+    const cachedProposals = getOperationalDb().query("SELECT model_routing FROM fusion_kernel_work WHERE kind = 'proposer'").all() as Array<{ model_routing: string }>;
+    expect(cachedProposals.map((r) => r.model_routing).sort()).toEqual(["glm-5.3", "kimi-k3"]);
   });
 
   it("uses the fast path for trivial fresh requests and still records the ledger for later continuation", async () => {
