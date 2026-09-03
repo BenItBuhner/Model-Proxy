@@ -8,7 +8,17 @@
  *   bun run benchmarks/kernel-bench/report.ts --in /tmp/kernel-bench/results.jsonl --out report.txt --json report.json
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { gradeMc, gradeNumeric, gradeYesNo } from "./graders.ts";
 import { RUN_VERSION, type ModelRun } from "./types.ts";
+
+/** Re-grade text-answer rows from stored content so grader fixes apply retroactively (code rows keep their executed result). */
+function regrade(row: ModelRun): ModelRun {
+  if (!row.ok || row.expected === undefined || row.content.length === 0) return row;
+  if (row.kind === "numeric") { const g = gradeNumeric(row.content, row.expected); return { ...row, predicted: g.predicted, correct: g.correct }; }
+  if (row.kind === "mc") { const g = gradeMc(row.content, row.expected); return { ...row, predicted: g.predicted, correct: g.correct }; }
+  if (row.kind === "yesno") { const g = gradeYesNo(row.content, row.expected); return { ...row, predicted: g.predicted, correct: g.correct }; }
+  return row;
+}
 
 interface Args { in: string; out?: string; json?: string; fusion: string; alias: Map<string, string> }
 
@@ -62,7 +72,7 @@ function main(): void {
       const parsed = JSON.parse(line) as ModelRun;
       if (parsed.version !== RUN_VERSION) continue;
       const row = args.alias.has(parsed.model) ? { ...parsed, model: args.alias.get(parsed.model)! } : parsed;
-      latest.set(`${row.itemId}|${row.model}`, row);
+      latest.set(`${row.itemId}|${row.model}`, regrade(row));
     }
   }
   const rows = [...latest.values()].filter((r) => r.kind !== "open");

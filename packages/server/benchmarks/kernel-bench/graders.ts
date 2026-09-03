@@ -37,6 +37,8 @@ function lastBoxed(text: string): string | undefined {
 export function normalizeMathAnswer(raw: string): string {
   let s = raw.trim();
   s = s.replace(/^\$+|\$+$/g, "").trim();
+  s = s.replace(/^\\[(\[]\s*|\s*\\[)\]]$/g, "").trim();
+  s = s.replace(/^\$+|\$+$/g, "").trim();
   s = s.replace(/\\boxed\{([\s\S]*)\}/, "$1");
   s = s.replace(/\\text\{([^}]*)\}/g, "$1");
   s = s.replace(/\\(?:left|right|,|!|;|quad|qquad|displaystyle)/g, "");
