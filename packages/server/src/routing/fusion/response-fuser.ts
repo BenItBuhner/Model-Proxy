@@ -328,6 +328,9 @@ export class ResponseFuser {
         modelRouting: fusionModel,
         detail: { error: String(err) },
       });
+      // The kernel never wants internal notes shown to the user; it retries on
+      // another routing and falls back to the best verified candidate itself.
+      if (ctx.kernelSynthesisFailFast === true) throw err;
       if (wireProtocol === "anthropic") {
         yield* this.anthropicTextStream(ctx, fusionModel, appendedContent || "[Fusion synthesis failed]", "end_turn");
       } else {

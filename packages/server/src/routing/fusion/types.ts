@@ -81,6 +81,12 @@ export interface FusionRequestContext {
   kernelSynthesisRouting?: string;
   /** Kernel engine: reasoning_effort forwarded to the synthesis/executor call. */
   kernelSynthesisReasoningEffort?: "low" | "medium" | "high";
+  /**
+   * Kernel engine: on synthesis failure throw instead of emitting the legacy
+   * advisory-note concatenation; the kernel owns fallback (alternate routing,
+   * then the best verified candidate).
+   */
+  kernelSynthesisFailFast?: boolean;
   /** Kernel engine: compact summary attached to the fusion trace. */
   kernelTrace?: Record<string, unknown>;
 }

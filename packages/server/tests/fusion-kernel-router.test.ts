@@ -529,6 +529,37 @@ describe("Fusion kernel engine", () => {
     expect(cachedProposals.map((r) => r.model_routing).sort()).toEqual(["glm-5.3", "kimi-k3"]);
   });
 
+  it("falls back to another family's synthesizer when the primary fails, and never leaks advisory notes", async () => {
+    const captured = emptyCaptured();
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const baseFetch = globalThis.fetch;
+    const synthesisModels: string[] = [];
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      if (system.includes("final model of a multi-model fusion kernel")) {
+        synthesisModels.push(String(body["model"]));
+        // The primary synthesizer (glm) is down; the alternate must take over.
+        if (String(body["model"]) === "up-glm") {
+          return new Response(JSON.stringify({ error: { message: "synthesizer unavailable" } }), { status: 503, headers: { "content-type": "application/json" } });
+        }
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-synth-fallback-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, control_proposer: false } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(synthesisModels.length).toBeGreaterThanOrEqual(2);
+    expect(synthesisModels[0]).toBe("up-glm");
+    expect(new Set(synthesisModels).size).toBeGreaterThanOrEqual(2);
+    expect(result.content).toContain("Final synthesized answer");
+    expect(result.content).not.toContain("Advisory note");
+    expect(result.fusedByModelRouting).not.toBe("glm-5.3");
+  });
+
   it("retries a failed audit with another family instead of settling a two-family answer on an upstream error", async () => {
     // Fresh storage: identical candidates from earlier tests would otherwise serve the audit from the work cache.
     closeOperationalDbForTests();

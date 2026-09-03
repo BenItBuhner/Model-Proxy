@@ -204,6 +204,74 @@ export class FusionKernel {
   }
 
   /**
+   * Synthesis with a fallback chain the kernel owns: the configured synthesis
+   * routing first, then the other families' primary routings; if every model
+   * fails before producing content, the best verified candidate's own answer
+   * is returned. Internal notes are never shown to the user.
+   */
+  private async *synthesisStream(ctx: FusionRequestContext, run: KernelRun): AsyncGenerator<string, void, unknown> {
+    const primary = ctx.kernelSynthesisRouting ?? run.executorRouting;
+    const alternates = run.kcfg.families
+      .map((f) => f.routing)
+      .filter((r) => r !== primary && !this.isFusionModel(r));
+    const chain = [primary, ...alternates];
+    const failFastCtx: FusionRequestContext = { ...ctx, kernelSynthesisFailFast: true };
+    for (let i = 0; i < chain.length; i++) {
+      const routing = chain[i]!;
+      let yieldedContent = false;
+      try {
+        const probe = { content: "", toolNames: [] as string[] };
+        for await (const chunk of this.responseFuser.fuseStream({ ...failFastCtx, kernelSynthesisRouting: routing }, run.notes)) {
+          this.observeAnswerChunk(ctx, chunk, probe);
+          if (probe.content.length > 0 || probe.toolNames.length > 0) yieldedContent = true;
+          yield chunk;
+        }
+        if (routing !== primary) run.executorRouting = routing;
+        return;
+      } catch (err) {
+        log.warn("kernel synthesis failed", { routing, attempt: i + 1, of: chain.length, yieldedContent, error: String(err).slice(0, 300) });
+        if (yieldedContent) break; // partial answer already visible: do not restart on another model
+        if (i + 1 < chain.length) await run.narrator.say(`Kernel: synthesis on ${routing} failed; switching to ${chain[i + 1]}.`);
+      }
+    }
+    // Every synthesizer failed (or one failed mid-answer): fall back to the
+    // strongest candidate the search produced rather than leaking notes.
+    const fallback = this.bestCandidateAnswer(run);
+    run.steps.push({ type: "synthesis", label: "Response Synthesis (candidate fallback)", startedAt: nowIso(), durationMs: 0, modelRouting: "kernel", details: { fallback: true } });
+    yield* this.textAsStream(ctx, fallback);
+  }
+
+  /** The vote leader's proposal when there is one, else the best-verified accepted candidate, else the first candidate note. */
+  private bestCandidateAnswer(run: KernelRun): string {
+    const candidates = run.notes.filter((n) => n.subTask.focus_area.startsWith("candidate answer"));
+    if (candidates.length === 0) return "[The fusion kernel could not synthesize a final answer for this request.]";
+    const leaderKey = run.lastVote?.leader?.key;
+    if (leaderKey !== undefined) {
+      const match = candidates.find((n) => {
+        const final = /\**\s*FINAL\s*(?:ANSWER)?\s*:\s*\**\s*([^\n]+)/i.exec(n.content)?.[1];
+        return final !== undefined && normalizeFinalAnswer(final) === leaderKey;
+      });
+      if (match !== undefined) return match.content;
+    }
+    const accepted = candidates.find((n) => /verdicts:.*accept/.test(n.subTask.focus_area));
+    return (accepted ?? candidates[0]!).content;
+  }
+
+  /** Emit plain text as a single terminal chunk in the client's wire protocol. */
+  private async *textAsStream(ctx: FusionRequestContext, text: string): AsyncGenerator<string, void, unknown> {
+    const chunk = {
+      id: `chatcmpl-kernel-${Date.now()}`,
+      object: "chat.completion.chunk",
+      created: Math.floor(Date.now() / 1000),
+      model: ctx.logicalModel,
+      choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: "stop" }],
+    };
+    const openai = (async function* () { yield `data: ${JSON.stringify(chunk)}\n\n`; })();
+    if (ctx.clientProtocol === "anthropic") yield* this.responseFuser.convertOpenAIStreamToAnthropic(ctx, openai);
+    else yield* openai;
+  }
+
+  /**
    * Non-streaming clients still get a streamed upstream synthesis: the stream
    * is assembled into a complete response here. Long thinking generations
    * behind a 100s origin timeout only survive when bytes keep flowing.
@@ -216,7 +284,7 @@ export class FusionKernel {
       ...ctx,
       fusionConfig: { ...ctx.fusionConfig, summarizer: { ...ctx.fusionConfig.summarizer, enabled: false } },
     };
-    const assembled = await assembleStream(this.responseFuser.fuseStream(quietCtx, run.notes), ctx.clientProtocol);
+    const assembled = await assembleStream(this.synthesisStream(quietCtx, run), ctx.clientProtocol);
     const durationMs = Math.round(performance.now() - started);
     run.steps.push({
       type: "synthesis",
@@ -309,7 +377,7 @@ export class FusionKernel {
 
     this.applySynthesisContext(ctx, run);
     const answer = { content: "", toolNames: [] as string[] };
-    for await (const chunk of this.responseFuser.fuseStream(ctx, run.notes)) {
+    for await (const chunk of this.synthesisStream(ctx, run)) {
       this.observeAnswerChunk(ctx, chunk, answer);
       yield chunk;
     }
