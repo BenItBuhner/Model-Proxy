@@ -56,12 +56,14 @@ export function mergeModelIntent(base: KernelIntent, raw: string): KernelIntent 
       : [];
   const modelGoal = typeof json["goal"] === "string" ? (json["goal"] as string).trim() : "";
   const domains = list(json["domains"], 6).map((d) => d.toLowerCase());
+  const verbatimGoal = base.goal.split("\n(Kernel restatement:")[0]!;
   return {
     ...base,
-    // Keep the user's verbatim goal for hashing/continuation; append the model's restatement for workers.
-    goal: modelGoal.length > 0 && modelGoal.length <= 2_000 && modelGoal.toLowerCase() !== base.goal.toLowerCase()
-      ? `${base.goal}\n(Kernel restatement: ${modelGoal})`
-      : base.goal,
+    // Keep the user's verbatim goal for hashing/continuation; append the model's
+    // restatement for workers (idempotent: never stack restatements).
+    goal: modelGoal.length > 0 && modelGoal.length <= 2_000 && modelGoal.toLowerCase() !== verbatimGoal.toLowerCase()
+      ? `${verbatimGoal}\n(Kernel restatement: ${modelGoal})`
+      : verbatimGoal,
     constraints: dedupe([...base.constraints, ...list(json["constraints"])]).slice(0, 10),
     deliverables: list(json["deliverables"]),
     acceptance: list(json["acceptance"]),

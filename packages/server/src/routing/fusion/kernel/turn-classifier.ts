@@ -73,11 +73,14 @@ export function classifyTurn(
   const historyRewritten = storedHashes.length > 0 && commonPrefix < Math.min(storedHashes.length, ledger.taskStartIndex + 1);
   const sameGoal = lastUser.index >= 0 && lastUserHash === intent.goalHash;
 
-  if (deltaCount === 0 && storedHashes.length === messages.length) {
+  // Every current message matches the stored prefix: either an exact replay of
+  // the last turn (client retry) or a rewind to an earlier point of the same
+  // task. Both reproduce prior work instead of continuing from a later state.
+  if (deltaCount === 0 && sameGoal) {
     return {
       ...base,
       kind: "replay",
-      reason: "identical message list replayed",
+      reason: storedHashes.length === messages.length ? "identical message list replayed" : "conversation rewound to an earlier point of the same task",
       historyRewritten: false,
       replan: { needed: false, reasons: [] },
     };
@@ -116,8 +119,19 @@ export function classifyTurn(
   const delta = messages.slice(Math.min(commonPrefix, messages.length));
   const replan = evaluateReplan(delta, ledger, options);
   const deltaHasToolTraffic = delta.some((m) => isToolResultMessage(m) || hasToolCalls(m) || messageRole(m) === "assistant");
-  const deltaUserAck = delta.some((m) => messageRole(m) === "user" && !isToolResultMessage(m) && isAcknowledgment(messageText(m)));
+  const last = delta[delta.length - 1];
+  const endsWithUserAck =
+    last !== undefined && messageRole(last) === "user" && !isToolResultMessage(last) && isAcknowledgment(messageText(last));
 
+  if (endsWithUserAck) {
+    return {
+      ...base,
+      kind: "trivial_ack",
+      reason: "user acknowledgment / continue nudge",
+      historyRewritten,
+      replan,
+    };
+  }
   if (deltaHasToolTraffic) {
     return {
       ...base,
@@ -125,15 +139,6 @@ export function classifyTurn(
       reason: historyRewritten
         ? "same goal after client history rewrite; continuing plan"
         : "only tool calls/results appended since the task started",
-      historyRewritten,
-      replan,
-    };
-  }
-  if (deltaUserAck) {
-    return {
-      ...base,
-      kind: "trivial_ack",
-      reason: "user acknowledgment / continue nudge",
       historyRewritten,
       replan,
     };

@@ -70,8 +70,9 @@ export class WorkCache {
             created_at: string;
             hit_count: number;
           }
+        | null
         | undefined;
-      if (row === undefined) return undefined;
+      if (row === undefined || row === null) return undefined;
       getOperationalDb()
         .query(`UPDATE fusion_kernel_work SET hit_count = hit_count + 1, last_hit_at = $now WHERE work_key = $work_key`)
         .run({ $work_key: workKey, $now: new Date().toISOString() });
@@ -141,6 +142,7 @@ export class WorkCache {
           )
           ON CONFLICT(conversation_id, signature) DO UPDATE SET
             attempts = fusion_kernel_negatives.attempts + 1,
+            kind = excluded.kind,
             detail_json = excluded.detail_json,
             updated_at = excluded.updated_at`,
         )
@@ -175,8 +177,9 @@ export class WorkCache {
             created_at: string;
             updated_at: string;
           }
+        | null
         | undefined;
-      if (row === undefined) return undefined;
+      if (row === undefined || row === null) return undefined;
       return {
         signature: row.signature,
         conversationId: row.conversation_id,

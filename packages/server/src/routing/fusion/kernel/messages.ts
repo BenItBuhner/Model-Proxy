@@ -211,11 +211,12 @@ export function detectToolError(text: string): { signature: string; excerpt: str
   const line = match[0].trim();
   if (TRIVIAL_ERROR_CONTEXT.test(line)) return undefined;
   const excerpt = line.length > 240 ? `${line.slice(0, 237)}...` : line;
-  // Signature ignores digits/paths so repeated variants of the same failure collapse.
+  // Signature ignores paths, then digits, so repeated variants of the same
+  // failure (different file, line number, pid) collapse to one signature.
   const normalized = excerpt
     .toLowerCase()
+    .replace(/[\w./\\-]*[\\/][\w./\\-]+/g, "<path>")
     .replace(/[0-9]+/g, "#")
-    .replace(/[\w./\\-]+[\\/][\w./\\-]+/g, "<path>")
     .replace(/\s+/g, " ")
     .trim();
   return { signature: stableHash(normalized).slice(0, 24), excerpt };

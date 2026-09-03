@@ -453,8 +453,10 @@ export class FusionKernel {
     const priorFindings = run.classification.kind === "clarification" ? run.ledger.findings : [];
     const taskStartIndex = run.ledger.taskStartIndex;
 
-    // Intent extraction (fast model, cached by work key).
-    if (kcfg.intent_extraction && run.ledger.intent !== undefined) {
+    // Intent extraction (fast model, cached by work key). Skipped when the
+    // ledger already carries a model-extracted intent (replay / rewind) so the
+    // goal text — and therefore every downstream work key — stays stable.
+    if (kcfg.intent_extraction && run.ledger.intent !== undefined && run.ledger.intent.extractedBy !== "model") {
       await this.extractIntent(ctx, run);
     }
     const intent = run.ledger.intent!;
@@ -471,6 +473,9 @@ export class FusionKernel {
       plan: [],
       disagreements: [],
       lastAnswerSummary: undefined,
+      continuationSteps: 0,
+      totalContinuationSteps: 0,
+      lastSearch: undefined,
     };
 
     const proposals: Proposal[] = [];

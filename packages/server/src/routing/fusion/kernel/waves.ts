@@ -87,8 +87,14 @@ function confidenceOf(value: unknown): number | undefined {
 
 /** Body text with the trailing structured block removed. */
 export function stripTrailingJson(text: string): string {
-  const withoutFence = text.replace(/```(?:json)?\s*\{[\s\S]*?\}\s*```\s*$/i, "").trimEnd();
-  if (withoutFence.length < text.length) return withoutFence;
+  const fences = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
+  const lastFence = fences[fences.length - 1];
+  if (lastFence !== undefined && lastFence.index !== undefined) {
+    const after = text.slice(lastFence.index + lastFence[0].length);
+    if (after.trim().length === 0 && tryParseObject(lastFence[1] ?? "") !== undefined) {
+      return text.slice(0, lastFence.index).trimEnd();
+    }
+  }
   const lastOpen = text.lastIndexOf("{");
   if (lastOpen > 0 && tryParseObject(text.slice(lastOpen)) !== undefined) return text.slice(0, lastOpen).trimEnd();
   return text;

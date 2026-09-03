@@ -32,8 +32,9 @@ export class SessionLedgerStore {
         )
         .get({ $conversation_id: conversationId }) as
         | { ledger_json: string; message_hashes_json: string }
+        | null
         | undefined;
-      if (row === undefined) return undefined;
+      if (row === undefined || row === null) return undefined;
       const ledger = JSON.parse(row.ledger_json) as KernelLedger;
       if (ledger.version !== 1) return undefined;
       const messageHashes = JSON.parse(row.message_hashes_json) as string[];

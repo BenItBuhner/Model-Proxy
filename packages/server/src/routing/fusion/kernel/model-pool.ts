@@ -15,13 +15,16 @@ interface RoutingStats {
  * Model family pool. No permanent hierarchy: every family proposes and every
  * family verifies work produced by other families. Alternate routings of a
  * family (`glm-5.3-alt`) widen parallel sampling without adding correlated
- * error channels; extra width beyond the family count is distributed by
- * weight, penalizing routings with recent failures.
+ * error channels.
+ *
+ * Selection is deterministic for a given pool state so that an identical turn
+ * compiles identical (routing, objective) work items and hits the work cache.
+ * Empirical reliability only reorders a family's routings after a routing has
+ * actually failed — never on success alone.
  */
 export class ModelPool {
   private readonly families: FusionKernelFamily[];
   private readonly stats = new Map<string, RoutingStats>();
-  private rotation = 0;
 
   constructor(families: FusionKernelFamily[]) {
     if (families.length === 0) throw new Error("kernel model pool requires at least one family");
@@ -36,21 +39,17 @@ export class ModelPool {
     return this.families.filter((f) => f.propose).length || this.families.length;
   }
 
-  /** Choose `width` proposers: one per proposing family first, then weighted extras across alt routings. */
+  /** Choose `width` proposers: one per proposing family first, then extras cycling by weight across alt routings. */
   proposers(width: number): PoolPick[] {
     const eligible = this.families.filter((f) => f.propose);
     const pool = eligible.length > 0 ? eligible : this.families;
     const picks: PoolPick[] = [];
     const perFamilyUse = new Map<string, number>();
-    const start = this.rotation++ % pool.length;
 
-    // Round 1: every family exactly once, rotated so the same family does not
-    // always lead the wave.
     for (let i = 0; i < pool.length && picks.length < width; i++) {
-      const family = pool[(start + i) % pool.length]!;
+      const family = pool[i]!;
       picks.push({ family: family.name, routing: this.nextRouting(family, perFamilyUse) });
     }
-    // Extra width: weighted by config weight and by empirical reliability.
     while (picks.length < width) {
       const family = this.pickWeighted(pool, perFamilyUse);
       picks.push({ family: family.name, routing: this.nextRouting(family, perFamilyUse) });
@@ -58,17 +57,23 @@ export class ModelPool {
     return picks;
   }
 
-  /** Choose `count` verifiers from families other than `candidateFamily` (falls back to same family alternates). */
+  /**
+   * Choose `count` verifiers from families other than `candidateFamily`,
+   * walking the family ring from the candidate's successor so assignments are
+   * balanced and stable (glm→kimi, kimi→deepseek, deepseek→glm, …).
+   */
   verifiersFor(candidateFamily: string, count: number, exclude: Set<string> = new Set()): PoolPick[] {
     const eligible = this.families.filter((f) => f.verify);
     const pool = eligible.length > 0 ? eligible : this.families;
-    const others = pool.filter((f) => f.name !== candidateFamily && !exclude.has(f.name));
-    const ordered = others.length > 0 ? others : pool;
+    const candidateIndex = Math.max(0, this.families.findIndex((f) => f.name === candidateFamily));
+    const ring = [...this.families.slice(candidateIndex + 1), ...this.families.slice(0, candidateIndex + 1)]
+      .filter((f) => pool.includes(f));
+    const others = ring.filter((f) => f.name !== candidateFamily && !exclude.has(f.name));
+    const ordered = others.length > 0 ? others : ring.length > 0 ? ring : pool;
     const picks: PoolPick[] = [];
     const perFamilyUse = new Map<string, number>();
-    const start = this.rotation++ % ordered.length;
     for (let i = 0; i < count; i++) {
-      const family = ordered[(start + i) % ordered.length]!;
+      const family = ordered[i % ordered.length]!;
       picks.push({ family: family.name, routing: this.nextRouting(family, perFamilyUse) });
     }
     return picks;
@@ -85,8 +90,9 @@ export class ModelPool {
   reliability(routing: string): number {
     const stats = this.stats.get(routing);
     if (stats === undefined || stats.calls === 0) return 1;
-    // Laplace-smoothed success rate so one failure does not zero a routing.
-    return (stats.calls - stats.failures + 1) / (stats.calls + 2);
+    // Successes never lower a routing below an untested one; one failure does
+    // not zero it either (1 failure → 0.5, 1 failure in 3 → 0.75).
+    return (stats.calls - stats.failures + 1) / (stats.calls + 1);
   }
 
   snapshot(): Record<string, { calls: number; failures: number; avgLatencyMs: number }> {
@@ -118,9 +124,9 @@ export class ModelPool {
     for (const family of pool) {
       const used = perFamilyUse.get(family.name) ?? 0;
       const capacity = 1 + family.alt_routings.length;
-      const reliability = this.reliability(family.routing);
-      // Favor families with spare alternate routings and fewer uses so far.
-      const score = (family.weight * reliability * capacity) / (used + 1);
+      // Favor families with spare alternate routings and fewer uses so far;
+      // strictly greater keeps ties on the first family in config order.
+      const score = (family.weight * capacity) / (used + 1);
       if (score > bestScore) {
         bestScore = score;
         best = family;
