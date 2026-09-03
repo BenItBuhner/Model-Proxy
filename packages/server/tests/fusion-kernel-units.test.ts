@@ -9,16 +9,17 @@ import {
   buildConsensus,
   claimSimilarity,
   extractTrailingJson,
+  isDecisiveVote,
   normalizeFinalAnswer,
   novelClaimCount,
   parseProposal,
   parseVerdict,
 } from "../src/routing/fusion/kernel/waves.ts";
-import { decideEscalation, effortBandFor, parseRequestedKernelEffort, widthsFor } from "../src/routing/fusion/kernel/scheduler.ts";
+import { decideEscalation, effortBandFor, escalationStrategyNote, parseRequestedKernelEffort, widthsFor } from "../src/routing/fusion/kernel/scheduler.ts";
 import { ModelPool } from "../src/routing/fusion/kernel/model-pool.ts";
 import { computeWorkKey } from "../src/routing/fusion/kernel/work-cache.ts";
 import { assembleStream } from "../src/routing/fusion/kernel/assemble.ts";
-import type { KernelLedger, Proposal, Verification } from "../src/routing/fusion/kernel/types.ts";
+import type { KernelLedger, Proposal, Verdict, Verification } from "../src/routing/fusion/kernel/types.ts";
 import type { FusionKernelConfig } from "@model-proxy/contracts/schemas/fusion.ts";
 
 const CLASSIFY_OPTS = { maxStepsBeforeReplan: 5, repairOnError: true };
@@ -259,6 +260,60 @@ describe("kernel wave parsing and consensus", () => {
     expect(decisive.agreement).toBeGreaterThanOrEqual(0.8);
     const single = buildConsensus([p("p1", "glm", "750")], []);
     expect(single.agreement).toBeLessThanOrEqual(0.5);
+  });
+
+  it("treats a family as one voice: strong majorities and unanimous answers are decisive; verifier-echoed junk is cleaned", () => {
+    const p = (id: string, family: string, finalAnswer: string, claim: string): Proposal => ({ ...proposal(id, family, [claim]), finalAnswer });
+    const judged = (id: string, proposalId: string, family: string, verdict: Verdict, ok?: boolean): Verification =>
+      ({ ...verification(id, proposalId, family, verdict), finalAnswerCorrect: ok });
+
+    // Live failure mmlu-law:932 wave 1: E from glm+kimi (+glm audit confirms), F from deepseek only,
+    // and deepseek's own verifier rejects E. That rejection is not independent → decisive for E.
+    const majority = buildAnswerVote(
+      [p("p1", "glm", "E", "a"), p("p2", "kimi", "E", "b"), p("p3", "deepseek", "F", "c")],
+      [judged("v1", "p1", "glm", "revise", true), judged("v2", "p2", "deepseek", "reject", false), judged("v3", "p3", "kimi", "reject", false)],
+    );
+    expect(majority?.leader?.key).toBe("e");
+    expect(isDecisiveVote(majority, [])).toBe(true);
+    // Same split but an INDEPENDENT family (kimi) rejects E → not decisive.
+    const contested = buildAnswerVote(
+      [p("p1", "glm", "E", "a"), p("p2", "kimi", "E", "b"), p("p3", "deepseek", "F", "c")],
+      [judged("v2", "p1", "kimi", "reject", false)],
+    );
+    expect(isDecisiveVote(contested, [])).toBe(false);
+
+    // Live failure mmlu-law:919 wave 2: E unanimous across 3 families; verifiers reject on
+    // presentation grounds (no final-answer judgment) and one explicitly disputes → decisive.
+    const unanimousVerifs = [judged("v1", "p1", "glm", "reject"), judged("v2", "p2", "kimi", "reject"), judged("v3", "p3", "deepseek", "reject"), judged("v4", "p4", "kimi", "reject", false)];
+    const unanimous = buildAnswerVote(
+      [p("p1", "glm", "E", "a"), p("p2", "kimi", "E", "b"), p("p3", "deepseek", "E", "c"), p("p4", "glm", "E", "d")],
+      unanimousVerifs,
+    );
+    expect(unanimous?.unanimous).toBe(true);
+    expect(isDecisiveVote(unanimous, unanimousVerifs)).toBe(true);
+    expect(buildConsensus([p("p1", "glm", "E", "a"), p("p2", "kimi", "E", "b"), p("p3", "deepseek", "E", "c")], unanimousVerifs.slice(0, 3)).agreement).toBeGreaterThanOrEqual(0.8);
+
+    // Instruction echoes and placeholders in final_answer declarations.
+    const parsedEcho = parseProposal("...\n```json\n{\"answer_summary\":\"s\",\"final_answer\":\"A as the very last line. That way the last line matches the task exactly, and JSON is present.\",\"key_claims\":[\"a\"]}\n```");
+    expect(parsedEcho.finalAnswer).toBe("A");
+    const parsedTick = parseProposal("...\n```json\n{\"answer_summary\":\"s\",\"final_answer\":\"699` on its own line.\",\"key_claims\":[\"a\"]}\n```");
+    expect(parsedTick.finalAnswer).toBe("699");
+    const parsedPlaceholder = parseProposal("Reasoning only, no FINAL line.\n```json\n{\"answer_summary\":\"s\",\"final_answer\":\"<letter>` containing only the option letter.\",\"key_claims\":[\"a\"]}\n```");
+    expect(parsedPlaceholder.finalAnswer).toBeUndefined();
+    const parsedSqrt = parseProposal("...\n```json\n{\"answer_summary\":\"s\",\"final_answer\":\"2\\\\sqrt{106}. Nothing after.\",\"key_claims\":[\"a\"]}\n```");
+    expect(parsedSqrt.finalAnswer).toBe("2\\sqrt{106}");
+
+    // Escalation note for a split vote presents camps neutrally and never lists a bare
+    // "answer is X" rejection as refuted.
+    const split = buildConsensus(
+      [p("p1", "glm", "E", "the answer is E"), p("p2", "kimi", "E", "the answer is E"), p("p3", "deepseek", "F", "the answer is F")],
+      [{ ...verification("v1", "p1", "deepseek", "reject"), issues: ["the answer is E"], finalAnswerCorrect: false }],
+    );
+    const note = escalationStrategyNote(split, 2);
+    expect(note).toContain("split on the final answer");
+    expect(note).toContain("\"E\" (glm, kimi)");
+    expect(note).toContain("Re-derive the answer independently");
+    expect(note).not.toContain("Claims already refuted");
   });
 
   it("never rejects a claim on verifier wording overlap when the verdict was not reject", () => {

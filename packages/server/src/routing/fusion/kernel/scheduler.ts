@@ -88,19 +88,35 @@ export function decideEscalation(args: {
 
 /** Guidance injected into escalation-wave proposers so they do not resample the same reasoning. */
 export function escalationStrategyNote(consensus: Consensus, wave: number): string {
+  const vote = consensus.answerVote;
   const lines: string[] = [
     `This is proposal wave ${wave}. Earlier independent reasoners disagreed; do not simply restate a generic answer.`,
-    "Take a materially different approach where the earlier reasoning was disputed, resolve the disputed points explicitly, and state which side is right and why.",
   ];
+  if (vote !== undefined && vote.entries.filter((e) => e.weight > 0).length > 1) {
+    // Short-answer split: present the camps neutrally. Prior verdicts on the
+    // final answer are NOT evidence — a single noisy audit must not herd this
+    // wave away from the right answer.
+    const camps = vote.entries.filter((e) => e.weight > 0).slice(0, 4).map((e) => `"${e.answer}" (${e.families.filter((f) => !f.startsWith("verifier:")).join(", ") || "audit correction"})`);
+    lines.push(`Earlier reasoners split on the final answer: ${camps.join(" vs ")}.`);
+    lines.push("Re-derive the answer independently from first principles. Do not defer to either camp or to earlier verdicts (they may be wrong). Identify the exact step where the camps diverge, work it out carefully, and state which answer is right and precisely why the other fails.");
+  } else {
+    lines.push("Take a materially different approach where the earlier reasoning was disputed, resolve the disputed points explicitly, and state which side is right and why.");
+  }
   if (consensus.disputed.length > 0) {
-    lines.push("Disputed points to resolve:");
+    lines.push(vote !== undefined ? "Disputed points (verifier opinions — check them yourself):" : "Disputed points to resolve:");
     for (const finding of consensus.disputed.slice(0, 8)) {
       lines.push(`  - ${finding.statement}${finding.note !== undefined ? ` (verifier: ${finding.note})` : ""}`);
     }
   }
-  if (consensus.rejected.length > 0) {
+  // For voted tasks a rejected claim is usually "the answer is X" as judged by
+  // one verifier; presenting it as refuted would bias the wave. Only surface
+  // refutations that come with a concrete counterexample.
+  const refuted = vote !== undefined
+    ? consensus.rejected.filter((f) => f.note !== undefined && /counterexample|contradict|violates|fails (?:for|when|at)/i.test(f.note))
+    : consensus.rejected;
+  if (refuted.length > 0) {
     lines.push("Claims already refuted (avoid repeating them):");
-    for (const finding of consensus.rejected.slice(0, 6)) {
+    for (const finding of refuted.slice(0, 6)) {
       lines.push(`  - ${finding.statement}${finding.note !== undefined ? ` — ${finding.note}` : ""}`);
     }
   }

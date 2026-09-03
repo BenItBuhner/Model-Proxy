@@ -27,8 +27,15 @@ export interface ParsedVerdict {
 function optionalAnswer(value: unknown): string | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   if (typeof value !== "string") return undefined;
-  const trimmed = value.trim().replace(/^[`"'\s]+|[`"'\s]+$/g, "");
+  let trimmed = value.trim().replace(/^[`"'\s]+|[`"'\s]+$/g, "");
   if (trimmed.length === 0 || /^(null|none|n\/a|undefined)$/i.test(trimmed)) return undefined;
+  // Template placeholders echoed from the task ("<letter>", "<answer>") are not answers.
+  if (/^<[^>]{1,20}>/.test(trimmed)) return undefined;
+  // Strip instruction echoes appended to a short answer: "A as the very last
+  // line…", "699` on its own line.", "1736 as the last line, and put nothing after".
+  const echo = trimmed.match(/^(.{1,40}?)(?:`|\s+(?:as|on|then|which|that way|so that)\b|[.,;]\s+(?:nothing|that|the|and|put|do)\b)/i);
+  if (echo?.[1] !== undefined && echo[1].trim().length > 0 && trimmed.length > echo[1].length + 8) trimmed = echo[1].trim();
+  trimmed = trimmed.replace(/^[`"'\s]+|[`"'\s.]+$/g, "");
   return trimmed.length > 200 ? `${trimmed.slice(0, 197)}...` : trimmed;
 }
 
@@ -234,12 +241,33 @@ function rawHasAnswerPrefix(raw: string, key: string): boolean {
  * synthesis to presentation mode regardless of how poorly prose claims cluster.
  */
 export function isDecisiveVote(vote: AnswerVote | undefined, verifications: Verification[]): boolean {
-  if (vote === undefined || !vote.unanimous || vote.voters < 2) return false;
-  const usable = verifications.filter((v) => v.success);
-  const confirms = usable.filter((v) => v.finalAnswerCorrect === true || (v.verdict === "accept" && v.finalAnswerCorrect !== false)).length;
-  const rejects = usable.filter((v) => v.finalAnswerCorrect === false || v.verdict === "reject").length;
-  if (usable.length === 0) return vote.voters >= 3;
-  return confirms > rejects && (confirms >= 1);
+  if (vote === undefined || vote.leader === undefined || vote.voters < 2) return false;
+  const leader = vote.leader;
+  const proposerFamilies = (e: AnswerVoteEntry) => e.families.filter((f) => !f.startsWith("verifier:"));
+  const leaderFamilies = proposerFamilies(leader);
+  if (vote.unanimous) {
+    // Only explicit judgments of the final answer count; a "reject" verdict on
+    // presentation grounds is not evidence that the answer is wrong.
+    const usable = verifications.filter((v) => v.success);
+    const explicit = usable.filter((v) => v.finalAnswerCorrect !== undefined);
+    const confirms = explicit.filter((v) => v.finalAnswerCorrect === true).length + usable.filter((v) => v.finalAnswerCorrect === undefined && v.verdict === "accept").length;
+    const rejects = explicit.filter((v) => v.finalAnswerCorrect === false).length;
+    if (confirms === 0 && rejects === 0) return vote.voters >= 3 || leaderFamilies.length >= 2;
+    if (confirms > rejects) return true;
+    // Three independent families agreeing outweigh a single dissenting audit.
+    return leaderFamilies.length >= 3 && rejects <= 1;
+  }
+  // Strong majority: the leader is backed by ≥2 families with ≥70% of the
+  // weight, every dissenting answer comes from ONE family, and no family
+  // outside that dissenting camp rejected the leader. A family that proposed
+  // the minority answer gets no second vote through its verifier.
+  const others = vote.entries.filter((e) => e !== leader && e.weight > 0);
+  const dissentFamilies = new Set(others.flatMap(proposerFamilies));
+  if (leaderFamilies.length < 2 || vote.leaderShare < 0.7 || dissentFamilies.size > 1) return false;
+  const independentRejects = leader.rejectFamilies.filter((f) => !dissentFamilies.has(f));
+  if (independentRejects.length > 0) return false;
+  const independentConfirms = leader.confirmFamilies.filter((f) => !dissentFamilies.has(f));
+  return independentConfirms.length >= 1 || leaderFamilies.length >= 3;
 }
 
 /**
@@ -250,14 +278,21 @@ export function isDecisiveVote(vote: AnswerVote | undefined, verifications: Veri
  */
 export function buildAnswerVote(proposals: Proposal[], verifications: Verification[]): AnswerVote | undefined {
   const entries = new Map<string, AnswerVoteEntry>();
-  const bump = (raw: string, weight: number, family?: string, confirm = 0, reject = 0) => {
+  const bump = (raw: string, weight: number, family?: string, judge?: { family: string; confirm: boolean }) => {
     const key = normalizeFinalAnswer(raw);
     if (key.length === 0) return;
-    const entry = entries.get(key) ?? { key, answer: raw, weight: 0, families: [], verifierConfirms: 0, verifierRejects: 0 };
+    const entry = entries.get(key) ?? { key, answer: raw, weight: 0, families: [], verifierConfirms: 0, verifierRejects: 0, confirmFamilies: [], rejectFamilies: [] };
     entry.weight += weight;
     if (family !== undefined && !entry.families.includes(family)) entry.families.push(family);
-    entry.verifierConfirms += confirm;
-    entry.verifierRejects += reject;
+    if (judge !== undefined) {
+      if (judge.confirm) {
+        entry.verifierConfirms += 1;
+        if (!entry.confirmFamilies.includes(judge.family)) entry.confirmFamilies.push(judge.family);
+      } else {
+        entry.verifierRejects += 1;
+        if (!entry.rejectFamilies.includes(judge.family)) entry.rejectFamilies.push(judge.family);
+      }
+    }
     entries.set(key, entry);
   };
   let voters = 0;
@@ -272,9 +307,9 @@ export function buildAnswerVote(proposals: Proposal[], verifications: Verificati
     if (!v.success || v.finalAnswerCorrect === undefined) continue;
     const candidate = byId.get(v.proposalId);
     if (candidate?.finalAnswer === undefined) continue;
-    if (v.finalAnswerCorrect) bump(candidate.finalAnswer, 0.5, undefined, 1, 0);
+    if (v.finalAnswerCorrect) bump(candidate.finalAnswer, 0.5, undefined, { family: v.family, confirm: true });
     else {
-      bump(candidate.finalAnswer, -0.5, undefined, 0, 1);
+      bump(candidate.finalAnswer, -0.5, undefined, { family: v.family, confirm: false });
       if (v.correctedFinalAnswer !== undefined) bump(v.correctedFinalAnswer, 0.5, `verifier:${v.family}`);
     }
   }
@@ -293,6 +328,8 @@ export function buildAnswerVote(proposals: Proposal[], verifications: Verificati
     target.verifierConfirms += source.verifierConfirms;
     target.verifierRejects += source.verifierRejects;
     for (const f of source.families) if (!target.families.includes(f)) target.families.push(f);
+    for (const f of source.confirmFamilies) if (!target.confirmFamilies.includes(f)) target.confirmFamilies.push(f);
+    for (const f of source.rejectFamilies) if (!target.rejectFamilies.includes(f)) target.rejectFamilies.push(f);
     entries.delete(longer);
   }
   const list = [...entries.values()].map((e) => ({ ...e, weight: Math.max(0, Math.round(e.weight * 100) / 100) })).sort((a, b) => b.weight - a.weight);

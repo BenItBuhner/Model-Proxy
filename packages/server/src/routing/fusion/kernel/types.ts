@@ -169,6 +169,9 @@ export interface AnswerVoteEntry {
   families: string[];
   verifierConfirms: number;
   verifierRejects: number;
+  /** Families whose verifier confirmed / rejected this answer (for independence checks). */
+  confirmFamilies: string[];
+  rejectFamilies: string[];
 }
 
 export interface AnswerVote {
