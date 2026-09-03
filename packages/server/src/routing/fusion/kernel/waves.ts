@@ -257,13 +257,13 @@ export function isDecisiveVote(vote: AnswerVote | undefined, verifications: Veri
     // Three independent families agreeing outweigh a single dissenting audit.
     return leaderFamilies.length >= 3 && rejects <= 1;
   }
-  // Strong majority: the leader is backed by ≥2 families with ≥70% of the
+  // Strong majority: the leader is backed by ≥2 families with ≥66% of the
   // weight, every dissenting answer comes from ONE family, and no family
   // outside that dissenting camp rejected the leader. A family that proposed
   // the minority answer gets no second vote through its verifier.
   const others = vote.entries.filter((e) => e !== leader && e.weight > 0);
   const dissentFamilies = new Set(others.flatMap(proposerFamilies));
-  if (leaderFamilies.length < 2 || vote.leaderShare < 0.7 || dissentFamilies.size > 1) return false;
+  if (leaderFamilies.length < 2 || vote.leaderShare < 0.66 || dissentFamilies.size > 1) return false;
   const independentRejects = leader.rejectFamilies.filter((f) => !dissentFamilies.has(f));
   if (independentRejects.length > 0) return false;
   // An independent confirmation comes from a family that neither proposed the
