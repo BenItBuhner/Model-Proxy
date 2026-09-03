@@ -125,6 +125,8 @@ export interface Proposal {
   assumptions: string[];
   risks: string[];
   confidence: number | undefined;
+  /** The single final answer when the task has one (number, option letter, yes/no, short phrase). */
+  finalAnswer?: string;
   raw: string;
   workKey: string;
   cached: boolean;
@@ -145,6 +147,10 @@ export interface Verification {
   counterexample?: string;
   /** Claims the verifier explicitly confirmed. */
   correctClaims: string[];
+  /** Verifier's judgment of the candidate's final answer (undefined = not assessed / no final answer). */
+  finalAnswerCorrect?: boolean;
+  /** Verifier's own final answer when it disagrees with the candidate. */
+  correctedFinalAnswer?: string;
   confidence: number | undefined;
   raw: string;
   workKey: string;
@@ -152,6 +158,27 @@ export interface Verification {
   durationMs: number;
   success: boolean;
   error?: string;
+}
+
+export interface AnswerVoteEntry {
+  /** Normalized answer key used for tallying. */
+  key: string;
+  /** Representative raw answer text. */
+  answer: string;
+  weight: number;
+  families: string[];
+  verifierConfirms: number;
+  verifierRejects: number;
+}
+
+export interface AnswerVote {
+  entries: AnswerVoteEntry[];
+  leader?: AnswerVoteEntry;
+  /** Leader weight / total weight (0-1). */
+  leaderShare: number;
+  unanimous: boolean;
+  /** Proposals that declared a final answer. */
+  voters: number;
 }
 
 export interface ConsensusFinding {
@@ -166,6 +193,8 @@ export interface Consensus {
   agreement: number;
   claimConsensus: number;
   verifierAcceptRate: number;
+  /** Present when at least one proposal declared a final answer. */
+  answerVote?: AnswerVote;
   accepted: ConsensusFinding[];
   disputed: ConsensusFinding[];
   rejected: ConsensusFinding[];

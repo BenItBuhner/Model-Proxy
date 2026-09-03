@@ -5,9 +5,11 @@ import { newLedger, beginTask } from "../src/routing/fusion/kernel/session-ledge
 import { deterministicIntent, mergeModelIntent } from "../src/routing/fusion/kernel/intent.ts";
 import { compileCapsule } from "../src/routing/fusion/kernel/capsule.ts";
 import {
+  buildAnswerVote,
   buildConsensus,
   claimSimilarity,
   extractTrailingJson,
+  normalizeFinalAnswer,
   novelClaimCount,
   parseProposal,
   parseVerdict,
@@ -201,6 +203,45 @@ describe("kernel wave parsing and consensus", () => {
     expect(consensus.rejected.some((f) => /always empty/i.test(f.statement))).toBe(true);
     expect(consensus.agreement).toBeGreaterThan(0.4);
     expect(consensus.claimConsensus).toBeGreaterThan(0.5);
+  });
+
+  it("parses final answers from the json block or a FINAL:/boxed fallback and normalizes them for voting", () => {
+    expect(parseProposal("...\n```json\n{\"answer_summary\":\"s\",\"final_answer\":\"\\\\frac{3}{4}\",\"key_claims\":[\"a\"],\"confidence\":0.9}\n```").finalAnswer).toBe("\\frac{3}{4}");
+    expect(parseProposal("Therefore FINAL: 042\n```json\n{\"answer_summary\":\"s\",\"key_claims\":[\"a\"]}\n```").finalAnswer).toBe("042");
+    expect(parseProposal("The result is $\\boxed{750}$.").finalAnswer).toBe("750");
+    expect(normalizeFinalAnswer("(C)")).toBe("c");
+    expect(normalizeFinalAnswer("**042**")).toBe("42");
+    expect(normalizeFinalAnswer("$\\frac{3}{4}$")).toBe("3/4");
+    expect(normalizeFinalAnswer("Yes.")).toBe("yes");
+    expect(normalizeFinalAnswer("1,000")).toBe("1000");
+    const verdict = parseVerdict("```json\n{\"verdict\":\"revise\",\"issues\":[\"x\"],\"candidate_final_answer_correct\":false,\"corrected_final_answer\":\"751\",\"confidence\":0.7}\n```");
+    expect(verdict.finalAnswerCorrect).toBe(false);
+    expect(verdict.correctedFinalAnswer).toBe("751");
+  });
+
+  it("tallies a weighted final-answer vote and folds it into agreement", () => {
+    const p = (id: string, family: string, finalAnswer: string): Proposal =>
+      ({ ...proposal(id, family, [`the answer is ${finalAnswer}`]), finalAnswer });
+    const v = (id: string, proposalId: string, family: string, ok: boolean, corrected?: string): Verification =>
+      ({ ...verification(id, proposalId, family, ok ? "accept" : "revise"), finalAnswerCorrect: ok, correctedFinalAnswer: corrected });
+
+    const unanimous = buildAnswerVote([p("p1", "glm", "750"), p("p2", "kimi", "750"), p("p3", "deepseek", "$750$")], [v("v1", "p1", "kimi", true)]);
+    expect(unanimous?.unanimous).toBe(true);
+    expect(unanimous?.leader?.key).toBe("750");
+    expect(unanimous?.leader?.weight).toBe(3.5);
+    expect(unanimous?.leaderShare).toBe(1);
+
+    const split = buildAnswerVote([p("p1", "glm", "750"), p("p2", "kimi", "500"), p("p3", "deepseek", "750")], [v("v2", "p2", "deepseek", false, "750")]);
+    expect(split?.unanimous).toBe(false);
+    expect(split?.leader?.key).toBe("750");
+    expect(split?.entries.find((e) => e.key === "500")?.weight).toBe(0.5);
+    expect(split?.leader?.weight).toBe(2.5);
+
+    const consensus = buildConsensus([p("p1", "glm", "750"), p("p2", "kimi", "750")], []);
+    expect(consensus.answerVote?.unanimous).toBe(true);
+    expect(consensus.agreement).toBeGreaterThanOrEqual(0.75);
+    const single = buildConsensus([p("p1", "glm", "750")], []);
+    expect(single.agreement).toBeLessThanOrEqual(0.5);
   });
 
   it("never rejects a claim on verifier wording overlap when the verdict was not reject", () => {

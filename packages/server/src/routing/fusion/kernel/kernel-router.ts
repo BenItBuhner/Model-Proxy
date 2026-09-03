@@ -794,6 +794,9 @@ export class FusionKernel {
           agreement: consensus.agreement,
           claimConsensus: consensus.claimConsensus,
           verifierAcceptRate: consensus.verifierAcceptRate,
+          answerVote: consensus.answerVote !== undefined
+            ? { leader: consensus.answerVote.leader?.answer, leaderShare: consensus.answerVote.leaderShare, unanimous: consensus.answerVote.unanimous, voters: consensus.answerVote.voters, entries: consensus.answerVote.entries.slice(0, 5).map((e) => ({ answer: e.answer, weight: e.weight, families: e.families })) }
+            : undefined,
           accepted: consensus.accepted.length,
           disputed: consensus.disputed.length,
           rejected: consensus.rejected.length,
@@ -1199,6 +1202,22 @@ export class FusionKernel {
       content,
       durationMs,
     });
+    const vote = consensus.answerVote;
+    if (vote !== undefined && vote.leader !== undefined) {
+      const lines = vote.entries.filter((e) => e.weight > 0).map((e, i) =>
+        `${i + 1}. "${e.answer}" — weight ${e.weight.toFixed(1)}; asserted by ${e.families.length > 0 ? e.families.join(", ") : "(verifier correction only)"}${e.verifierConfirms > 0 ? `; confirmed by ${e.verifierConfirms} verifier(s)` : ""}${e.verifierRejects > 0 ? `; rejected by ${e.verifierRejects} verifier(s)` : ""}`,
+      );
+      const verdict = vote.unanimous
+        ? `UNANIMOUS: every reasoner reached "${vote.leader.answer}".`
+        : `SPLIT (leader share ${(vote.leaderShare * 100).toFixed(0)}%): re-derive the decisive step yourself before committing.`;
+      notes.push(mk(
+        "answer-vote",
+        vote.unanimous ? "FINAL ANSWER VOTE — unanimous" : "FINAL ANSWER VOTE — split",
+        "Weighted vote over the final answers declared by independent reasoners and verifiers",
+        "kernel",
+        `${verdict}\n${lines.join("\n")}`,
+      ));
+    }
     if (consensus.accepted.length > 0) {
       notes.push(mk(
         "consensus",
@@ -1257,6 +1276,11 @@ export class FusionKernel {
       "- Notes labelled VERIFIED CONSENSUS are supported by ≥2 model families or confirmed by a verifier: treat them as reliable and build the answer on them.",
       "- Notes labelled DISPUTED need your own judgment; resolve them explicitly and state residual uncertainty where it remains. REJECTED items were refuted: do not use them.",
       "- Candidate answers are full independent attempts ranked by verifier verdicts; merge the best specifics (exact values, code, steps) rather than averaging prose.",
+      consensus.answerVote !== undefined
+        ? consensus.answerVote.unanimous
+          ? "- The FINAL ANSWER VOTE is unanimous: your final answer must match it unless you find a concrete error in every derivation. Present it in exactly the format the user requested."
+          : "- The FINAL ANSWER VOTE is split: do not pick by popularity or persuasiveness alone — locate the step where the derivations diverge, work it out yourself, then commit to one answer in exactly the format the user requested."
+        : "",
       "- Produce ONE complete, final, user-facing answer for the goal. If the correct next step is an action in the user's environment and tools are available, emit structured tool calls instead of describing them.",
       consensus.agreement < kcfg.agreement_threshold
         ? "- Agreement stayed below threshold: be explicit about what is uncertain and why, and prefer verifiable statements."

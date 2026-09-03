@@ -1,4 +1,4 @@
-import type { Consensus, ConsensusFinding, Proposal, Verdict, Verification } from "./types.ts";
+import type { AnswerVote, AnswerVoteEntry, Consensus, ConsensusFinding, Proposal, Verdict, Verification } from "./types.ts";
 
 /**
  * Wave post-processing: lenient structured-output parsing, claim clustering,
@@ -11,6 +11,7 @@ export interface ParsedProposal {
   assumptions: string[];
   risks: string[];
   confidence: number | undefined;
+  finalAnswer?: string;
 }
 
 export interface ParsedVerdict {
@@ -18,7 +19,42 @@ export interface ParsedVerdict {
   issues: string[];
   counterexample?: string;
   correctClaims: string[];
+  finalAnswerCorrect?: boolean;
+  correctedFinalAnswer?: string;
   confidence: number | undefined;
+}
+
+function optionalAnswer(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || /^(null|none|n\/a|undefined)$/i.test(trimmed)) return undefined;
+  return trimmed.length > 200 ? `${trimmed.slice(0, 197)}...` : trimmed;
+}
+
+/**
+ * Normalize a final answer for vote tallying: case/whitespace-insensitive,
+ * LaTeX wrappers and trivial punctuation removed, option letters and yes/no
+ * canonicalized, integers with leading zeros equalized.
+ */
+export function normalizeFinalAnswer(raw: string): string {
+  let s = raw.trim();
+  s = s.replace(/^\**|\**$/g, "").trim();
+  s = s.replace(/^(?:final\s*answer|answer|final)\s*[:=]\s*/i, "");
+  s = s.replace(/^\$+|\$+$/g, "");
+  s = s.replace(/\\boxed\{([\s\S]*)\}/, "$1");
+  s = s.replace(/\\text\{([^}]*)\}/g, "$1");
+  s = s.replace(/\\d?frac\s*\{([^}]*)\}\s*\{([^}]*)\}/g, "$1/$2");
+  s = s.replace(/\\(?:left|right|,|!|;)/g, "");
+  s = s.replace(/[\s,]/g, "");
+  s = s.replace(/[.。]$/, "");
+  s = s.toLowerCase();
+  const letter = s.match(/^\(?([a-j])\)?$/);
+  if (letter !== null) return letter[1]!;
+  if (/^(yes|true)$/.test(s)) return "yes";
+  if (/^(no|false)$/.test(s)) return "no";
+  if (/^-?\d+$/.test(s)) return String(Number(s));
+  return s;
 }
 
 const MAX_CLAIMS = 12;
@@ -111,7 +147,28 @@ export function parseProposal(raw: string): ParsedProposal {
     assumptions: stringList(json?.["assumptions"], 8),
     risks: stringList(json?.["risks"], 8),
     confidence: confidenceOf(json?.["confidence"]),
+    finalAnswer: optionalAnswer(json?.["final_answer"]) ?? fallbackFinalAnswer(body),
   };
+}
+
+/** When the structured block lacks a final answer, honor an explicit FINAL:/boxed answer in the body. */
+function fallbackFinalAnswer(body: string): string | undefined {
+  const finalLine = [...body.matchAll(/\**\s*FINAL\s*(?:ANSWER)?\s*:\s*\**\s*([^\n]+?)\s*\**\s*(?=\n|$)/gi)];
+  const last = finalLine[finalLine.length - 1]?.[1]?.trim();
+  if (last !== undefined && last.length > 0) return last.length > 200 ? `${last.slice(0, 197)}...` : last;
+  const boxed = body.lastIndexOf("\\boxed{");
+  if (boxed >= 0) {
+    const start = boxed + "\\boxed{".length;
+    let depth = 1;
+    for (let i = start; i < body.length; i++) {
+      if (body[i] === "{") depth++;
+      else if (body[i] === "}") {
+        depth--;
+        if (depth === 0) return body.slice(start, i).trim();
+      }
+    }
+  }
+  return undefined;
 }
 
 /** When a worker omits the structured block, mine bullet/numbered lines as claims. */
@@ -143,12 +200,69 @@ export function parseVerdict(raw: string): ParsedVerdict {
     typeof counterexampleRaw === "string" && counterexampleRaw.trim().length > 0 && !/^(null|none|n\/a)$/i.test(counterexampleRaw.trim())
       ? counterexampleRaw.trim()
       : undefined;
+  const finalCorrectRaw = json?.["candidate_final_answer_correct"];
+  const finalAnswerCorrect =
+    typeof finalCorrectRaw === "boolean"
+      ? finalCorrectRaw
+      : typeof finalCorrectRaw === "string" && /^(true|false)$/i.test(finalCorrectRaw.trim())
+        ? finalCorrectRaw.trim().toLowerCase() === "true"
+        : undefined;
   return {
     verdict,
     issues: stringList(json?.["issues"], 10),
     counterexample,
     correctClaims: stringList(json?.["correct_claims"] ?? json?.["confirmed"], 12),
+    finalAnswerCorrect,
+    correctedFinalAnswer: optionalAnswer(json?.["corrected_final_answer"]),
     confidence: confidenceOf(json?.["confidence"]),
+  };
+}
+
+/**
+ * Weighted final-answer vote. Each proposal with a final answer casts 1 vote;
+ * a verifier confirming the candidate's answer adds +0.5 to it, a verifier
+ * rejecting it subtracts 0.5 and (when it supplies a corrected answer) adds
+ * +0.5 to the corrected one. Weights are clamped at 0.
+ */
+export function buildAnswerVote(proposals: Proposal[], verifications: Verification[]): AnswerVote | undefined {
+  const entries = new Map<string, AnswerVoteEntry>();
+  const bump = (raw: string, weight: number, family?: string, confirm = 0, reject = 0) => {
+    const key = normalizeFinalAnswer(raw);
+    if (key.length === 0) return;
+    const entry = entries.get(key) ?? { key, answer: raw, weight: 0, families: [], verifierConfirms: 0, verifierRejects: 0 };
+    entry.weight += weight;
+    if (family !== undefined && !entry.families.includes(family)) entry.families.push(family);
+    entry.verifierConfirms += confirm;
+    entry.verifierRejects += reject;
+    entries.set(key, entry);
+  };
+  let voters = 0;
+  for (const p of proposals) {
+    if (!p.success || p.finalAnswer === undefined) continue;
+    voters += 1;
+    bump(p.finalAnswer, 1, p.family);
+  }
+  if (voters === 0) return undefined;
+  const byId = new Map(proposals.map((p) => [p.id, p]));
+  for (const v of verifications) {
+    if (!v.success || v.finalAnswerCorrect === undefined) continue;
+    const candidate = byId.get(v.proposalId);
+    if (candidate?.finalAnswer === undefined) continue;
+    if (v.finalAnswerCorrect) bump(candidate.finalAnswer, 0.5, undefined, 1, 0);
+    else {
+      bump(candidate.finalAnswer, -0.5, undefined, 0, 1);
+      if (v.correctedFinalAnswer !== undefined) bump(v.correctedFinalAnswer, 0.5, `verifier:${v.family}`);
+    }
+  }
+  const list = [...entries.values()].map((e) => ({ ...e, weight: Math.max(0, Math.round(e.weight * 100) / 100) })).sort((a, b) => b.weight - a.weight);
+  const total = list.reduce((s, e) => s + e.weight, 0);
+  const leader = list[0];
+  return {
+    entries: list,
+    leader,
+    leaderShare: total > 0 && leader !== undefined ? Math.round((leader.weight / total) * 1000) / 1000 : 0,
+    unanimous: list.filter((e) => e.weight > 0).length === 1 && voters >= 2,
+    voters,
   };
 }
 
@@ -322,14 +436,28 @@ export function buildConsensus(proposals: Proposal[], verifications: Verificatio
     successfulVerifications.flatMap((v) => v.issues).filter((issue) => !attachedIssues.has(issue)),
   )].slice(0, 12);
 
-  const agreement = successfulVerifications.length === 0
-    ? claimConsensus
-    : 0.55 * claimConsensus + 0.45 * verifierAcceptRate;
+  const answerVote = buildAnswerVote(usable, verifications);
+  let agreement: number;
+  if (answerVote !== undefined && answerVote.voters >= 2) {
+    // Short-answer tasks: the answer vote is the strongest signal of agreement.
+    // A single voter cannot certify itself (share capped at 0.5).
+    const answerConsensus = answerVote.leaderShare;
+    agreement = successfulVerifications.length === 0
+      ? 0.5 * claimConsensus + 0.5 * answerConsensus
+      : 0.35 * claimConsensus + 0.3 * verifierAcceptRate + 0.35 * answerConsensus;
+  } else if (answerVote !== undefined) {
+    agreement = Math.min(0.5, successfulVerifications.length === 0 ? claimConsensus : 0.55 * claimConsensus + 0.45 * verifierAcceptRate);
+  } else {
+    agreement = successfulVerifications.length === 0
+      ? claimConsensus
+      : 0.55 * claimConsensus + 0.45 * verifierAcceptRate;
+  }
 
   return {
     agreement: round3(agreement),
     claimConsensus: round3(claimConsensus),
     verifierAcceptRate: round3(verifierAcceptRate),
+    answerVote,
     accepted: accepted.sort((a, b) => b.support.length - a.support.length),
     disputed,
     rejected,
