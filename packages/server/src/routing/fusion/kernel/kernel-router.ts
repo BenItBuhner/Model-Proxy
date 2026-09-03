@@ -41,6 +41,7 @@ import {
 import { SessionLedgerStore, beginTask, newLedger } from "./session-ledger.ts";
 import { classifyTurn } from "./turn-classifier.ts";
 import type {
+  AnswerVote,
   Consensus,
   EffortBand,
   KernelFinding,
@@ -103,6 +104,8 @@ interface KernelRun {
   earlySettles: number;
   /** Final answer agreed unanimously and confirmed; synthesis runs in presentation mode. */
   settledAnswer?: string;
+  /** Answer vote from the last settled wave (trace). */
+  lastVote?: AnswerVote;
 }
 
 interface QuorumJob<T> {
@@ -831,6 +834,22 @@ export class FusionKernel {
           reason: decision.reason,
         },
       });
+      log.info("kernel wave settled", {
+        conversationId: run.ledger.conversationId,
+        wave,
+        agreement: consensus.agreement,
+        claimConsensus: consensus.claimConsensus,
+        verifierAcceptRate: consensus.verifierAcceptRate,
+        vote: consensus.answerVote !== undefined
+          ? { leader: consensus.answerVote.leader?.answer, share: consensus.answerVote.leaderShare, unanimous: consensus.answerVote.unanimous, voters: consensus.answerVote.voters, entries: consensus.answerVote.entries.slice(0, 4).map((e) => `${e.answer}=${e.weight}(${e.families.join("+")})`) }
+          : undefined,
+        proposals: proposals.filter((p) => p.success).length,
+        verifications: verifications.filter((v) => v.success).length,
+        verdicts: verifications.filter((v) => v.success).map((v) => `${v.family}:${v.verdict}${v.finalAnswerCorrect === undefined ? "" : v.finalAnswerCorrect ? "/✓" : "/✗"}`),
+        escalate: decision.escalate,
+        reason: decision.reason,
+      });
+      run.lastVote = consensus.answerVote;
       run.steps.push({
         type: "escalation",
         label: decision.escalate ? `Escalation Decision (wave ${wave} → ${wave + 1})` : `Search Settled (wave ${wave})`,
@@ -1544,6 +1563,9 @@ export class FusionKernel {
       truncatedWorkers: run.truncatedWorkers,
       earlySettles: run.earlySettles,
       settledAnswer: run.settledAnswer,
+      vote: run.lastVote !== undefined
+        ? { leader: run.lastVote.leader?.answer, share: run.lastVote.leaderShare, unanimous: run.lastVote.unanimous, voters: run.lastVote.voters, entries: run.lastVote.entries.slice(0, 4).map((e) => ({ answer: e.answer, weight: e.weight, families: e.families })) }
+        : undefined,
       searchBudgetSeconds: run.kcfg.search_deadline_seconds[run.band],
       continuationSteps: run.ledger.continuationSteps,
       totalContinuationSteps: run.ledger.totalContinuationSteps,

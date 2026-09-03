@@ -169,7 +169,11 @@ async function main(): Promise<void> {
         `[${completed}/${jobs.length}] ${mark} ${row.model.padEnd(22)} ${row.itemId.padEnd(34)} ${String(row.latencyMs).padStart(7)}ms` +
           (row.predicted !== undefined ? `  pred=${String(row.predicted).slice(0, 24)} exp=${String(row.expected ?? "").slice(0, 24)}` : "") +
           (row.error !== undefined ? `  err=${row.error.slice(0, 80).replace(/\n/g, " ")}` : "") +
-          (row.kernel !== undefined ? `  kernel=${String(row.kernel["mode"])}/${String(row.kernel["band"])} agr=${String(row.kernel["agreement"] ?? "-")} work=${String(row.kernel["cachedWorkItems"])}/${String(row.kernel["workItems"])}` : ""),
+          (row.kernel !== undefined
+            ? `  kernel=${String(row.kernel["mode"])}/${String(row.kernel["band"])} waves=${String(row.kernel["waves"])} agr=${String(row.kernel["agreement"] ?? "-")} work=${String(row.kernel["cachedWorkItems"])}/${String(row.kernel["workItems"])}` +
+              (row.kernel["vote"] !== undefined ? ` vote=${JSON.stringify((row.kernel["vote"] as Record<string, unknown>)["entries"])}` : "") +
+              (row.kernel["settledAnswer"] !== undefined ? " settled" : "")
+            : ""),
       );
     }
   };
