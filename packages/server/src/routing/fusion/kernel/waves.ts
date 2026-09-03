@@ -535,6 +535,10 @@ export function buildConsensus(proposals: Proposal[], verifications: Verificatio
   // Math/MC prose clusters poorly even when every reasoner reached the same
   // answer; a decisive vote must not be dragged below threshold by that.
   if (isDecisiveVote(answerVote, verifications)) agreement = Math.max(agreement, 0.8);
+  // Conversely, a genuinely split final answer (leader below 2/3 of the weight,
+  // not decisive) must not clear the threshold on prose overlap alone: the
+  // disagreement is the whole point, so keep the wave escalating.
+  else if (answerVote !== undefined && answerVote.voters >= 2 && answerVote.leaderShare < 0.66) agreement = Math.min(agreement, 0.55);
 
   return {
     agreement: round3(agreement),

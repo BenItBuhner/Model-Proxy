@@ -318,6 +318,15 @@ describe("kernel wave parsing and consensus", () => {
     const parsedSqrt = parseProposal("...\n```json\n{\"answer_summary\":\"s\",\"final_answer\":\"2\\\\sqrt{106}. Nothing after.\",\"key_claims\":[\"a\"]}\n```");
     expect(parsedSqrt.finalAnswer).toBe("2\\sqrt{106}");
 
+    // Live failure mmlu-law:948 (v11): F 2.5 vs A 2 with identical prose claims — high claim
+    // consensus must not let a split, non-decisive vote clear the escalation threshold.
+    const splitHighProse = buildConsensus(
+      [p("p1", "glm", "F", "the buyer tendered payment and the seller refused"), p("p2", "deepseek", "F", "the buyer tendered payment and the seller refused"), p("p3", "kimi", "A", "the buyer tendered payment and the seller refused"), p("p4", "glm", "A", "the buyer tendered payment and the seller refused")],
+      [judged("v1", "p1", "kimi", "accept", true)],
+    );
+    expect(splitHighProse.answerVote?.leaderShare).toBeLessThan(0.66);
+    expect(splitHighProse.agreement).toBeLessThanOrEqual(0.55);
+
     // Escalation note for a split vote presents camps neutrally and never lists a bare
     // "answer is X" rejection as refuted.
     const split = buildConsensus(
