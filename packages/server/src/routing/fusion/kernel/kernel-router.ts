@@ -1525,9 +1525,12 @@ export class FusionKernel {
 
   private applySynthesisContext(ctx: FusionRequestContext, run: KernelRun): void {
     ctx.kernelSynthesisRouting = run.executorRouting;
-    ctx.kernelSynthesisReasoningEffort = run.settledAnswer !== undefined
-      ? (run.kcfg.synthesis_reasoning_effort ?? "low")
-      : run.kcfg.synthesis_reasoning_effort;
+    // Settled answers only need presentation (low). Contested searches get real
+    // but bounded thinking (medium): the synthesizer resolves the split from
+    // rich evidence rather than re-solving the task open-endedly for many
+    // minutes after the search already spent its budget.
+    ctx.kernelSynthesisReasoningEffort = run.kcfg.synthesis_reasoning_effort
+      ?? (run.settledAnswer !== undefined ? "low" : run.mode === "search" ? "medium" : undefined);
     if (ctx.kernelBrief === undefined) ctx.kernelBrief = "KERNEL BRIEF\nAnswer the current request from the conversation context.";
   }
 

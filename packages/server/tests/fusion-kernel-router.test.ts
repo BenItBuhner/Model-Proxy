@@ -641,8 +641,8 @@ describe("Fusion kernel engine", () => {
     expect(synthB).toContain("SPLIT");
     expect(synthB).toContain("500");
     expect(synthB).toContain("asserted by kimi");
-    // Split vote → full-depth synthesis (model default effort).
-    expect(split.synthesis[0]!["reasoning_effort"]).toBeUndefined();
+    // Split vote → bounded deep synthesis (medium), never open-ended default thinking.
+    expect(split.synthesis[0]!["reasoning_effort"]).toBe("medium");
   });
 
   it("uses the fast path for trivial fresh requests and still records the ledger for later continuation", async () => {
