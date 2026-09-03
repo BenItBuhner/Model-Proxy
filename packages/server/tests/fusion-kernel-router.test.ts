@@ -577,6 +577,11 @@ describe("Fusion kernel engine", () => {
     expect(synthA).toContain("UNANIMOUS");
     expect(a.fusionTrace?.kernel?.["agreement"] as number).toBeGreaterThanOrEqual(0.7);
 
+    // Fresh storage + router: the work cache is content-addressed, so identical
+    // glm/deepseek proposals from the unanimous run would otherwise be reused.
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-split-${Date.now()}`));
+    router = new FusionRouter();
     const split = emptyCaptured();
     installFetch(split, { finalAnswers: { glm: "750", kimi: "500", deepseek: "750" } });
     const ctxB = makeCtx(mathPrompt, `conv-vote-split-${Date.now()}`);
@@ -587,7 +592,8 @@ describe("Fusion kernel engine", () => {
     expect(split.verifier).toHaveLength(3);
     const synthB = allText(split.synthesis[0]!["messages"] as unknown[]);
     expect(synthB).toContain("SPLIT");
-    expect(synthB).toContain("\"500\"");
+    expect(synthB).toContain("500");
+    expect(synthB).toContain("asserted by kimi");
   });
 
   it("uses the fast path for trivial fresh requests and still records the ledger for later continuation", async () => {
