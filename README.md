@@ -166,17 +166,29 @@ re-plans when the state actually changed.
 | Tool continuation | Single executor call carrying the ledger brief — no decomposition, no subagents. A tool error triggers one bounded cross-family **repair** wave per failure signature; a step budget triggers a **checkpoint** wave. |
 | Replay / rewind | Every worker call is a content-addressed work item (objective + capsule read-set + model + strategy + policy version), so identical work is served from the work cache with zero upstream calls. |
 
+Short-answer tasks (math, multiple choice, yes/no) add an **answer vote**: every
+proposer declares a `final_answer`, verifiers judge it explicitly, and the kernel
+tallies a weighted, family-aware vote (one voice per family; a control proposer
+always answers the verbatim task with no kernel framing). A decisive vote —
+unanimous, or a ≥2-family majority confirmed by an uncommitted family — settles
+the wave, skips redundant verification, blocks escalation, and switches synthesis
+to presentation mode (low effort); split votes get full verification, a
+de-herded escalation wave, and bounded (medium) synthesis.
+
 Latency controls: proposal/verification waves settle on `wave_quorum` and cancel
-stragglers after `straggler_grace_seconds` (or immediately once two families already
-agree); verification is pipelined per candidate; per-band output budgets
-(`worker_max_tokens_by_band`) and `search_deadline_seconds` bound each effort band.
-Upstream calls always stream (also for non-streaming clients) so long generations
-survive origin timeouts. Clients pick width with `reasoning_effort`,
+stragglers after `straggler_grace_seconds` (or immediately once two families agree
+and an audit confirms); verification is pipelined per candidate; per-band output
+and time budgets (`worker_max_tokens_by_band`, `worker_timeout_seconds_by_band`,
+`search_deadline_seconds`) bound each effort band. Upstream calls always stream
+(also for non-streaming clients) so long generations survive origin timeouts, and
+streamed responses end with a `: fusion-kernel {...}` SSE comment carrying the
+kernel summary. Clients pick width with `reasoning_effort` (`high` → F3),
 `fusion_effort`, or `{"fusion": {"effort": "max"}}`.
 
 ```bash
-# Materialize a data dir with a techlitnow provider, hedged glm-5.3 / kimi-k3 /
-# deepseek-v4-pro-0813 logical models, and the fusion-max kernel model:
+# Materialize a data dir with a techlitnow provider, glm-5.3 / kimi-k3 /
+# deepseek-v4-pro-0813 logical models (alt upstream as sequential fallback;
+# --hedge races them), and the fusion-max kernel model:
 bun run scripts/bootstrap-fusion-max.ts --data-dir ~/.model-proxy \
   --base-url https://infer.techlitnow.com/v1 --api-key-env TECHLITNOW_API_KEY
 # On a server that already exposes those logical models, only add fusion-max:
@@ -185,6 +197,20 @@ bun run scripts/bootstrap-fusion-max.ts --data-dir ~/.model-proxy --skip-upstrea
 
 The template lives in `config/templates/fusion_max_template.json`; the legacy
 divider → subagents → synthesis pipeline remains the default (`engine: "legacy"`).
+
+Benchmarking (`packages/server/benchmarks/kernel-bench/`): public-dataset loaders
+(MATH-500, AIME 2024/2025, MMLU-Pro categories, HumanEval with executed tests,
+LegalBench), graders, a resumable runner that evaluates any model through the
+proxy, a per-domain report, and a blind position-swapped pairwise judge for
+open-ended writing.
+
+```bash
+cd packages/server
+bun run benchmarks/kernel-bench/run.ts --suites math500,aime24,mmlu-law,humaneval --n 5 \
+  --models glm-5.3,kimi-k3,deepseek-v4-pro-0813,fusion-max --out /tmp/kb/results.jsonl
+bun run benchmarks/kernel-bench/report.ts --in /tmp/kb/results.jsonl --fusion fusion-max
+bun run benchmarks/kernel-bench/judge.ts --n 6 --fusion fusion-max --out /tmp/kb/creative.jsonl
+```
 
 ### Context window resolution (`GET /v1/models`)
 
