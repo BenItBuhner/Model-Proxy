@@ -53,7 +53,7 @@ import type {
   WaveWidths,
   WorkerRole,
 } from "./types.ts";
-import { buildAnswerVote, buildConsensus, novelClaimCount, parseProposal, parseVerdict } from "./waves.ts";
+import { buildAnswerVote, buildConsensus, normalizeFinalAnswer, novelClaimCount, parseProposal, parseVerdict } from "./waves.ts";
 import { WorkCache, computeWorkKey, type WorkSpec } from "./work-cache.ts";
 import { Semaphore, runWorker } from "./worker.ts";
 
@@ -106,6 +106,8 @@ interface KernelRun {
   settledAnswer?: string;
   /** Answer vote from the last settled wave (trace). */
   lastVote?: AnswerVote;
+  /** Normalized final answers confirmed by a pipelined verifier this run (enables evidence-based early settle). */
+  confirmedAnswerKeys: Set<string>;
 }
 
 interface QuorumJob<T> {
@@ -417,6 +419,7 @@ export class FusionKernel {
       truncatedWorkers: 0,
       earlySettles: 0,
       settledAnswer: undefined,
+      confirmedAnswerKeys: new Set<string>(),
     };
   }
 
@@ -424,6 +427,11 @@ export class FusionKernel {
   private proposalsAlreadyAgree(run: KernelRun, settled: Proposal[]): boolean {
     const usable = settled.filter((p) => p.success && p.claims.length > 0);
     if (new Set(usable.map((p) => p.family)).size < 2) return false;
+    // Evidence-based settle for short-answer tasks: two families share the
+    // same final answer AND an independent (pipelined) audit already confirmed
+    // it. Waiting for a third proposer would not change the decision.
+    const vote = buildAnswerVote(usable, []);
+    if (vote?.leader !== undefined && vote.unanimous && vote.leader.families.length >= 2 && run.confirmedAnswerKeys.has(vote.leader.key)) return true;
     const pre = buildConsensus(usable, []);
     return pre.claimConsensus >= run.kcfg.agreement_threshold;
   }
@@ -751,7 +759,18 @@ export class FusionKernel {
               emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, pipelined: true } });
               await run.narrator.say(`Kernel: first candidate landed; starting cross-family verification while the other reasoners finish.`);
             }
-            pipelined.push(...this.launchVerification(ctx, run, intent, searchLedger, [proposal], wave, widths, taskStartIndex));
+            const launched = this.launchVerification(ctx, run, intent, searchLedger, [proposal], wave, widths, taskStartIndex);
+            pipelined.push(...launched);
+            // Record confirmations as they land so the proposal wave can settle
+            // on "two families agree + one independent audit confirms".
+            if (proposal.finalAnswer !== undefined) {
+              const key = normalizeFinalAnswer(proposal.finalAnswer);
+              for (const entry of launched) {
+                void entry.promise.then((v) => {
+                  if (v.success && (v.finalAnswerCorrect === true || (v.verdict === "accept" && v.finalAnswerCorrect !== false))) run.confirmedAnswerKeys.add(key);
+                }).catch(() => undefined);
+              }
+            }
           }
         : undefined;
 
