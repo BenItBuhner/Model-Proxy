@@ -204,6 +204,22 @@ export const FusionKernelConfigSchema = z
     verifier_max_tokens: z.number().int().min(256).max(32_768).default(2_500),
     /** Start verifying each candidate as soon as it lands instead of after the whole proposal wave settles. */
     pipeline_verification: z.boolean().default(true),
+    /**
+     * `reasoning_effort` forwarded to upstream thinking models per worker role
+     * (omitted roles use the model default). Verifiers and intent extraction
+     * are terse by contract, so lower effort there cuts latency without
+     * touching proposal depth.
+     */
+    worker_reasoning_effort: z
+      .object({
+        proposer: z.enum(["low", "medium", "high"]).optional(),
+        verifier: z.enum(["low", "medium", "high"]).optional(),
+        intent: z.enum(["low", "medium", "high"]).optional(),
+        repair: z.enum(["low", "medium", "high"]).optional(),
+        checkpoint: z.enum(["low", "medium", "high"]).optional(),
+      })
+      .strict()
+      .default({}),
     /** Per-worker hard wall clock cap (also bounded by the band's search deadline). */
     worker_timeout_seconds: z.number().int().positive().default(300),
     /** Abort a worker whose upstream stream has produced no bytes (content or reasoning) for this long. */

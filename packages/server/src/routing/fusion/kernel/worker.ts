@@ -56,6 +56,8 @@ export interface WorkerRequest {
   /** Abort when no upstream bytes arrive for this long (stalled socket / dead upstream). */
   idleTimeoutMs?: number;
   temperature?: number;
+  /** Forwarded to upstream thinking models when set. */
+  reasoningEffort?: "low" | "medium" | "high";
   onSegment?: (segment: SummarySegment) => void;
   signal?: AbortSignal;
   semaphore?: Semaphore;
@@ -181,6 +183,7 @@ export async function runWorker(
         stream: true,
         tool_choice: "none",
         ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+        ...(req.reasoningEffort !== undefined ? { reasoning_effort: req.reasoningEffort } : {}),
       },
       targetProtocol: "openai",
       signal: controller.signal,

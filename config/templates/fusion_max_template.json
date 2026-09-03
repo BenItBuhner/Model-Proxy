@@ -35,6 +35,7 @@
       "worker_max_tokens_by_band": { "F2": 2500, "F3": 5000, "max": 8000 },
       "verifier_max_tokens": 1800,
       "pipeline_verification": true,
+      "worker_reasoning_effort": { "verifier": "low", "intent": "low", "repair": "medium", "checkpoint": "medium" },
       "worker_timeout_seconds": 300,
       "worker_idle_timeout_seconds": 60,
       "proposal_width": { "F2": 3, "F3": 4, "max": 6 },

@@ -57,6 +57,7 @@ const kernelConfig: FusionConfig = {
     worker_max_tokens: 2_000,
     verifier_max_tokens: 1_500,
     pipeline_verification: true,
+    worker_reasoning_effort: { verifier: "low" },
     worker_timeout_seconds: 30,
     worker_idle_timeout_seconds: 20,
     proposal_width: { F2: 3, F3: 3, max: 6 },
@@ -306,6 +307,9 @@ describe("Fusion kernel engine", () => {
       expect(w["stream"]).toBe(true);
       expect(w["max_tokens"]).toBeLessThanOrEqual(2_000);
     }
+    // Per-role reasoning effort: verifiers run low, proposers keep the model default.
+    for (const v of captured.verifier) expect(v["reasoning_effort"]).toBe("low");
+    for (const p of captured.proposer) expect(p["reasoning_effort"]).toBeUndefined();
     // Synthesis received consensus notes and the kernel brief.
     const synthText = allText(captured.synthesis[0]!["messages"] as unknown[]);
     expect(synthText).toContain("KERNEL SYNTHESIS BRIEF");
