@@ -51,7 +51,10 @@ export interface WorkerRequest {
   routing: string;
   messages: unknown[];
   maxTokens: number;
+  /** Hard wall-clock cap. */
   timeoutMs: number;
+  /** Abort when no upstream bytes arrive for this long (stalled socket / dead upstream). */
+  idleTimeoutMs?: number;
   temperature?: number;
   onSegment?: (segment: SummarySegment) => void;
   signal?: AbortSignal;
@@ -102,7 +105,17 @@ export async function runWorker(
   }
 
   const controller = new AbortController();
+  let idleAborted = false;
+  let lastActivity = performance.now();
   const timer = setTimeout(() => controller.abort(), req.timeoutMs);
+  const idleTimer = req.idleTimeoutMs !== undefined && req.idleTimeoutMs > 0
+    ? setInterval(() => {
+        if (performance.now() - lastActivity > req.idleTimeoutMs!) {
+          idleAborted = true;
+          controller.abort();
+        }
+      }, Math.min(5_000, Math.max(500, Math.floor(req.idleTimeoutMs / 4))))
+    : undefined;
   const onAbort = () => controller.abort();
   // Both the per-job cancel signal (wave quorum) and the client's abort signal
   // must stop the worker.
@@ -113,6 +126,7 @@ export async function runWorker(
   }
 
   let content = "";
+  let reasoning = "";
   let unsummarized = "";
   let streamedChars = 0;
   let finishReason: string | undefined;
@@ -174,6 +188,7 @@ export async function runWorker(
       extraHeaders: ctx.extraHeaders,
     });
     for await (const raw of stream) {
+      lastActivity = performance.now();
       for (const event of splitSseEvents(raw)) {
         const parsed = parseOpenAIDelta(event);
         if (parsed === null) continue;
@@ -185,6 +200,7 @@ export async function runWorker(
           streamedChars += parsed.content.length;
         }
         if (parsed.reasoning.length > 0) {
+          if (reasoning.length < 60_000) reasoning += parsed.reasoning;
           unsummarized += parsed.reasoning;
           streamedChars += parsed.reasoning.length;
         }
@@ -234,13 +250,26 @@ export async function runWorker(
     const error = cutOff
       ? req.signal?.aborted === true
         ? "worker cancelled (wave quorum reached)"
-        : `worker timed out after ${req.timeoutMs}ms`
+        : idleAborted
+          ? `worker idle for ${req.idleTimeoutMs}ms (stalled upstream)`
+          : `worker timed out after ${req.timeoutMs}ms`
       : err instanceof Error
         ? err.message
         : String(err);
     // A cut-off worker that already produced substantial analysis is still
-    // evidence: keep it as a truncated result instead of discarding it.
-    const partial = cutOff ? stripSubagentActionClaims(stripToolCallArtifacts(content)).trim() : "";
+    // evidence: keep it as a truncated result instead of discarding it. A
+    // thinking model cut off before its answer leaves only its reasoning
+    // trace; the tail of that trace is kept, clearly labelled, so the
+    // synthesizer can weigh it rather than losing the work entirely.
+    const cleanContent = cutOff ? stripSubagentActionClaims(stripToolCallArtifacts(content)).trim() : "";
+    const cleanReasoning = cutOff && cleanContent.length < MIN_PARTIAL_CHARS
+      ? stripSubagentActionClaims(stripToolCallArtifacts(reasoning)).trim()
+      : "";
+    const partial = cleanContent.length >= MIN_PARTIAL_CHARS
+      ? cleanContent
+      : cleanReasoning.length >= MIN_PARTIAL_CHARS * 2
+        ? `[worker was cut off while still reasoning; no final answer was produced. Partial reasoning trace (tail) follows — treat as unverified working notes]\n${cleanReasoning.slice(-8_000)}`
+        : "";
     if (partial.length >= MIN_PARTIAL_CHARS) {
       flush(true, ctx.fusionConfig.summarizer.segment_chars);
       log.info("kernel worker cut off; keeping partial output", { id: req.id, routing: req.routing, chars: partial.length, durationMs, reason: error });
@@ -277,6 +306,7 @@ export async function runWorker(
     return { content: "", success: false, error, durationMs, finishReason, attemptedToolCalls };
   } finally {
     clearTimeout(timer);
+    if (idleTimer !== undefined) clearInterval(idleTimer);
     for (const source of sources) source.removeEventListener("abort", onAbort);
     release();
   }

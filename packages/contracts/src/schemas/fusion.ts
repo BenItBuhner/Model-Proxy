@@ -204,8 +204,10 @@ export const FusionKernelConfigSchema = z
     verifier_max_tokens: z.number().int().min(256).max(32_768).default(2_500),
     /** Start verifying each candidate as soon as it lands instead of after the whole proposal wave settles. */
     pipeline_verification: z.boolean().default(true),
-    /** Per-worker wall clock budget. */
-    worker_timeout_seconds: z.number().int().positive().default(180),
+    /** Per-worker hard wall clock cap (also bounded by the band's search deadline). */
+    worker_timeout_seconds: z.number().int().positive().default(300),
+    /** Abort a worker whose upstream stream has produced no bytes (content or reasoning) for this long. */
+    worker_idle_timeout_seconds: z.number().int().positive().default(60),
     /** Parallel proposals per wave, by effort band. */
     proposal_width: EffortWidthSchema.default({ F2: 3, F3: 6, max: 9 }),
     /** Cross-family verifiers per surviving candidate, by effort band. */
@@ -227,7 +229,7 @@ export const FusionKernelConfigSchema = z
     search_deadline_seconds: z
       .object({ F2: z.number().int().positive(), F3: z.number().int().positive(), max: z.number().int().positive() })
       .strict()
-      .default({ F2: 240, F3: 480, max: 1500 }),
+      .default({ F2: 300, F3: 600, max: 1800 }),
     /** Run a fast LLM intent parse for F2+ fresh tasks (cached by work key). */
     intent_extraction: z.boolean().default(true),
     /** Tool-continuation policy. */

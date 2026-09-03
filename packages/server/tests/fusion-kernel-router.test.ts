@@ -58,6 +58,7 @@ const kernelConfig: FusionConfig = {
     verifier_max_tokens: 1_500,
     pipeline_verification: true,
     worker_timeout_seconds: 30,
+    worker_idle_timeout_seconds: 20,
     proposal_width: { F2: 3, F3: 3, max: 6 },
     verifiers_per_candidate: { F2: 1, F3: 1, max: 2 },
     max_waves: { F2: 2, F3: 2, max: 3 },
