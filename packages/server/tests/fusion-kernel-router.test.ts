@@ -518,6 +518,50 @@ describe("Fusion kernel engine", () => {
     expect(cachedProposals.map((r) => r.model_routing).sort()).toEqual(["glm-5.3", "kimi-k3"]);
   });
 
+  it("settles a proposal wave before numeric quorum when two families agree on the final answer and an audit confirmed it", async () => {
+    const conversationId = `conv-evidence-settle-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const baseFetch = globalThis.fetch;
+    let glmAborted = false;
+    // The glm proposer only emits keep-alive comments (a silently thinking model) until aborted.
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      if (String(body["model"]) === "up-glm" && system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            const tick = setInterval(() => controller.enqueue(new TextEncoder().encode(": keep-alive\n\n")), 100);
+            init?.signal?.addEventListener("abort", () => {
+              clearInterval(tick);
+              glmAborted = true;
+              controller.error(new DOMException("Aborted", "AbortError"));
+            }, { once: true });
+          },
+        });
+        return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], conversationId);
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    // Quorum needs all three; grace is long: only the evidence-based settle can end the wave quickly.
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true, wave_quorum: 1, straggler_grace_seconds: 30, worker_timeout_seconds: 120 } };
+    const started = performance.now();
+    const result = await router.route(ctx);
+    const elapsed = performance.now() - started;
+
+    expect(glmAborted).toBe(true);
+    expect(elapsed).toBeLessThan(8_000);
+    expect(result.fusionTrace?.kernel?.["earlySettles"] as number).toBeGreaterThanOrEqual(1);
+    expect(result.fusionTrace?.kernel?.["cancelledWorkers"] as number).toBeGreaterThanOrEqual(1);
+    expect(result.fusionTrace?.kernel?.["settledAnswer"]).toBe("750");
+    // Exactly one pipelined audit ran; kimi + deepseek agreement plus that audit settled the wave.
+    expect(captured.verifier).toHaveLength(1);
+  });
+
   it("serves Anthropic-protocol clients: fast path converts the request and emits Anthropic events; search synthesizes through the fuser", async () => {
     const conversationId = `conv-anthropic-${Date.now()}`;
     const captured = emptyCaptured();

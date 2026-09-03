@@ -108,6 +108,17 @@ interface KernelRun {
   lastVote?: AnswerVote;
   /** Normalized final answers confirmed by a pipelined verifier this run (enables evidence-based early settle). */
   confirmedAnswerKeys: Set<string>;
+  /** Wakes wave settlement loops when new evidence (e.g. an audit confirmation) arrives. */
+  evidenceWaiters: Array<() => void>;
+}
+
+function notifyEvidence(run: KernelRun): void {
+  const waiters = run.evidenceWaiters.splice(0);
+  for (const wake of waiters) wake();
+}
+
+function waitForEvidence(run: KernelRun): Promise<void> {
+  return new Promise<void>((resolve) => run.evidenceWaiters.push(resolve));
 }
 
 interface QuorumJob<T> {
@@ -420,18 +431,22 @@ export class FusionKernel {
       earlySettles: 0,
       settledAnswer: undefined,
       confirmedAnswerKeys: new Set<string>(),
+      evidenceWaiters: [],
     };
   }
 
   /** Proposal-wave early settle: ≥2 families already agree above threshold. */
-  private proposalsAlreadyAgree(run: KernelRun, settled: Proposal[]): boolean {
+  private proposalsAlreadyAgree(run: KernelRun, settled: Proposal[], quorumReached: boolean): boolean {
     const usable = settled.filter((p) => p.success && p.claims.length > 0);
     if (new Set(usable.map((p) => p.family)).size < 2) return false;
     // Evidence-based settle for short-answer tasks: two families share the
     // same final answer AND an independent (pipelined) audit already confirmed
-    // it. Waiting for a third proposer would not change the decision.
+    // it. Waiting for more proposers would not change the decision, so this
+    // applies even before the numeric quorum (e.g. when the remaining
+    // proposers are all from one slow family).
     const vote = buildAnswerVote(usable, []);
     if (vote?.leader !== undefined && vote.unanimous && vote.leader.families.length >= 2 && run.confirmedAnswerKeys.has(vote.leader.key)) return true;
+    if (!quorumReached) return false;
     const pre = buildConsensus(usable, []);
     return pre.claimConsensus >= run.kcfg.agreement_threshold;
   }
@@ -475,22 +490,23 @@ export class FusionKernel {
     run: KernelRun,
     jobs: QuorumJob<T>[],
     minFamilies: number,
-    earlySettle?: (settled: T[]) => boolean,
+    earlySettle?: (settled: T[], quorumReached: boolean) => boolean,
   ): Promise<T[]> {
     return this.settleWithQuorum(run, this.launchJobs(jobs), minFamilies, earlySettle);
   }
 
   /**
-   * `earlySettle(settled)` is consulted once quorum is reached: when the
-   * already-settled results make the remaining workers unable to change the
-   * decision (e.g. two families already agree above threshold), stragglers are
-   * cancelled immediately instead of after the grace period.
+   * `earlySettle(settled, quorumReached)` is consulted whenever at least the
+   * family target has settled: when the already-settled results make the
+   * remaining workers unable to change the decision (two families agree and an
+   * audit confirmed, or claim consensus above threshold once quorum is
+   * reached), stragglers are cancelled immediately instead of after grace.
    */
   private async settleWithQuorum<T>(
     run: KernelRun,
     entries: QuorumEntry<T>[],
     minFamilies: number,
-    earlySettle?: (settled: T[]) => boolean,
+    earlySettle?: (settled: T[], quorumReached: boolean) => boolean,
   ): Promise<T[]> {
     const { kcfg } = run;
     if (entries.length === 0) return [];
@@ -521,22 +537,29 @@ export class FusionKernel {
     while (pending.size > 0) {
       const racers: Array<Promise<{ index: number; value: T | undefined }>> = [...pending.values()];
       if (graceTimer !== undefined) racers.push(graceTimer);
+      // New evidence (an audit confirming an answer) can make the settled
+      // subset decisive without any new worker result, so wake on it too.
+      if (earlySettle !== undefined && settledFamilies.size >= familyTarget) {
+        racers.push(waitForEvidence(run).then(() => ({ index: -2 as const, value: undefined })));
+      }
       const outcome = await Promise.race(racers);
       if (outcome.index === -1) {
         await cancelStragglers();
         break;
       }
-      pending.delete(outcome.index);
-      results[outcome.index] = outcome.value as T;
-      settledValues.push(outcome.value as T);
-      settledFamilies.add(entries[outcome.index]!.family);
+      if (outcome.index !== -2) {
+        pending.delete(outcome.index);
+        results[outcome.index] = outcome.value as T;
+        settledValues.push(outcome.value as T);
+        settledFamilies.add(entries[outcome.index]!.family);
+      }
       const quorumReached = settledValues.length >= quorumCount && settledFamilies.size >= familyTarget;
+      if (pending.size > 0 && settledFamilies.size >= familyTarget && earlySettle !== undefined && earlySettle(settledValues, quorumReached)) {
+        run.earlySettles += 1;
+        await cancelStragglers();
+        break;
+      }
       if (pending.size > 0 && quorumReached) {
-        if (earlySettle !== undefined && earlySettle(settledValues)) {
-          run.earlySettles += 1;
-          await cancelStragglers();
-          break;
-        }
         if (graceTimer === undefined) {
           const graceMs = Math.min(kcfg.straggler_grace_seconds * 1000, this.remainingSearchMs(run));
           graceTimer = sleep(graceMs).then(() => ({ index: -1 as const, value: undefined }));
@@ -767,7 +790,10 @@ export class FusionKernel {
               const key = normalizeFinalAnswer(proposal.finalAnswer);
               for (const entry of launched) {
                 void entry.promise.then((v) => {
-                  if (v.success && (v.finalAnswerCorrect === true || (v.verdict === "accept" && v.finalAnswerCorrect !== false))) run.confirmedAnswerKeys.add(key);
+                  if (v.success && (v.finalAnswerCorrect === true || (v.verdict === "accept" && v.finalAnswerCorrect !== false))) {
+                    run.confirmedAnswerKeys.add(key);
+                    notifyEvidence(run);
+                  }
                 }).catch(() => undefined);
               }
             }
@@ -1108,7 +1134,7 @@ export class FusionKernel {
         },
       })),
       Math.min(2, run.pool.proposerFamilyCount),
-      role === "proposer" ? (settled) => this.proposalsAlreadyAgree(run, settled) : undefined,
+      role === "proposer" ? (settled, quorumReached) => this.proposalsAlreadyAgree(run, settled, quorumReached) : undefined,
     );
     await Promise.all(hooks);
 
