@@ -39,11 +39,20 @@ async function hfRows(params: { dataset: string; config: string; split: string; 
   if (params.where !== undefined) url.searchParams.set("where", params.where);
   url.searchParams.set("offset", String(params.offset ?? 0));
   url.searchParams.set("length", String(Math.min(100, params.length)));
-  const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
-  if (!res.ok) throw new Error(`HF ${endpoint} ${params.dataset}/${params.config} failed: ${res.status} ${await res.text()}`);
-  const body = (await res.json()) as { rows: HfRow[] };
-  writeFileSync(cachePath, JSON.stringify(body.rows), "utf8");
-  return body.rows;
+  // Large filtered datasets return transient 500s while the server builds its index.
+  let lastError = "";
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const res = await fetch(url, { signal: AbortSignal.timeout(90_000) });
+    if (res.ok) {
+      const body = (await res.json()) as { rows: HfRow[] };
+      writeFileSync(cachePath, JSON.stringify(body.rows), "utf8");
+      return body.rows;
+    }
+    lastError = `${res.status} ${(await res.text()).slice(0, 200)}`;
+    if (res.status < 500) break;
+    await new Promise((r) => setTimeout(r, 5_000 * (attempt + 1)));
+  }
+  throw new Error(`HF ${endpoint} ${params.dataset}/${params.config} failed: ${lastError}`);
 }
 
 /** Deterministic sample of `n` rows (seeded shuffle) so reruns and models see the same items. */
@@ -119,6 +128,47 @@ export async function loadAime2025(n: number): Promise<BenchItem[]> {
       answer: String(r.row["answer"]),
     }),
   );
+}
+
+/** MathArena competition sets (fresh, uncontaminated relative to older public sets). Answers may be LaTeX expressions. */
+async function loadMathArena(suite: string, dataset: string, n: number, hint: string): Promise<BenchItem[]> {
+  const rows = await hfRows({ dataset, config: "default", split: "train", length: 100 });
+  return sample(rows, n, suite).map((r) =>
+    item({
+      suite,
+      index: String(r.row["problem_idx"] ?? r.row_idx),
+      domain: "math",
+      kind: "numeric",
+      user: `${String(r.row["problem"])}\n\n${NUMERIC_INSTRUCTION}${hint}`,
+      answer: String(r.row["answer"]),
+      meta: { problem_type: r.row["problem_type"] },
+    }),
+  );
+}
+
+export const loadAime2026 = (n: number) => loadMathArena("aime26", "MathArena/aime_2026", n, " (AIME answers are integers from 000 to 999.)");
+export const loadHmmtFeb2025 = (n: number) => loadMathArena("hmmt25", "MathArena/hmmt_feb_2025", n, "");
+export const loadHmmtFeb2026 = (n: number) => loadMathArena("hmmt26", "MathArena/hmmt_feb_2026", n, "");
+export const loadBrumo2025 = (n: number) => loadMathArena("brumo25", "MathArena/brumo_2025", n, "");
+
+// ── SuperGPQA (graduate-level MC, hard difficulty, science fields) ───────
+
+export async function loadSuperGpqa(field: "Physics" | "Chemistry" | "Biology", n: number): Promise<BenchItem[]> {
+  const rows = await hfRows({ dataset: "m-a-p/SuperGPQA", config: "default", split: "train", where: `"difficulty"='hard' AND "field"='${field}'`, length: 100 });
+  const suite = `supergpqa-${field.toLowerCase()}`;
+  return sample(rows, n, suite).map((r) => {
+    const options = (r.row["options"] as string[]) ?? [];
+    const lettered = options.map((opt, i) => `${String.fromCharCode(65 + i)}. ${opt}`).join("\n");
+    return item({
+      suite,
+      index: String(r.row["uuid"] ?? r.row_idx).slice(0, 12),
+      domain: "science",
+      kind: "mc",
+      user: `${String(r.row["question"])}\n\nOptions:\n${lettered}\n\n${MC_INSTRUCTION}`,
+      answer: String(r.row["answer_letter"]),
+      meta: { field, subfield: r.row["subfield"], difficulty: r.row["difficulty"] },
+    });
+  });
 }
 
 // ── MMLU-Pro (science / finance / legal / cs) ─────────────────────────
@@ -232,6 +282,13 @@ export type SuiteName =
   | "math500"
   | "aime24"
   | "aime25"
+  | "aime26"
+  | "hmmt25"
+  | "hmmt26"
+  | "brumo25"
+  | "supergpqa-physics"
+  | "supergpqa-chemistry"
+  | "supergpqa-biology"
   | "mmlu-physics"
   | "mmlu-chemistry"
   | "mmlu-biology"
@@ -245,7 +302,8 @@ export type SuiteName =
   | "creative";
 
 export const ALL_SUITES: SuiteName[] = [
-  "math500", "aime24", "aime25",
+  "math500", "aime24", "aime25", "aime26", "hmmt25", "hmmt26", "brumo25",
+  "supergpqa-physics", "supergpqa-chemistry", "supergpqa-biology",
   "mmlu-physics", "mmlu-chemistry", "mmlu-biology",
   "mmlu-law", "mmlu-business", "mmlu-economics", "mmlu-computer_science",
   "humaneval", "legalbench-hearsay", "legalbench-contract_qa", "creative",
@@ -256,6 +314,13 @@ export async function loadSuite(name: SuiteName, n: number): Promise<BenchItem[]
     case "math500": return loadMath500(n);
     case "aime24": return loadAime2024(n);
     case "aime25": return loadAime2025(n);
+    case "aime26": return loadAime2026(n);
+    case "hmmt25": return loadHmmtFeb2025(n);
+    case "hmmt26": return loadHmmtFeb2026(n);
+    case "brumo25": return loadBrumo2025(n);
+    case "supergpqa-physics": return loadSuperGpqa("Physics", n);
+    case "supergpqa-chemistry": return loadSuperGpqa("Chemistry", n);
+    case "supergpqa-biology": return loadSuperGpqa("Biology", n);
     case "mmlu-physics": return loadMmluPro("physics", n);
     case "mmlu-chemistry": return loadMmluPro("chemistry", n);
     case "mmlu-biology": return loadMmluPro("biology", n);
