@@ -151,6 +151,41 @@ CLIENT_API_KEY=... MODEL_PROXY_BASE=http://127.0.0.1:9876/v1 \
 For a native provider, configure `endpoints.responses` and optionally
 `endpoints.responses_streaming` in addition to the normal completion paths.
 
+### Fusion Kernel (`fusion.engine: "kernel"`)
+
+Fusion models orchestrate several upstream models behind one logical id. The
+`kernel` engine is a deterministic coordinator for long-running agentic work
+(OpenCode-style tool loops, math, research, SWE): it owns a durable
+per-conversation **ledger** (intent, plan, verified findings, negative results),
+dispatches ephemeral **bounded-context workers** across model families, and only
+re-plans when the state actually changed.
+
+| Turn | What the kernel does |
+|------|----------------------|
+| Fresh task | Blind proposal wave (one worker per family + extras on `alt_routings`), cross-family adversarial verification, claim clustering into accepted / disputed / rejected findings, escalation wave only if agreement < threshold and the last wave was still producing novel claims, then synthesis. |
+| Tool continuation | Single executor call carrying the ledger brief — no decomposition, no subagents. A tool error triggers one bounded cross-family **repair** wave per failure signature; a step budget triggers a **checkpoint** wave. |
+| Replay / rewind | Every worker call is a content-addressed work item (objective + capsule read-set + model + strategy + policy version), so identical work is served from the work cache with zero upstream calls. |
+
+Latency controls: proposal/verification waves settle on `wave_quorum` and cancel
+stragglers after `straggler_grace_seconds` (or immediately once two families already
+agree); verification is pipelined per candidate; per-band output budgets
+(`worker_max_tokens_by_band`) and `search_deadline_seconds` bound each effort band.
+Upstream calls always stream (also for non-streaming clients) so long generations
+survive origin timeouts. Clients pick width with `reasoning_effort`,
+`fusion_effort`, or `{"fusion": {"effort": "max"}}`.
+
+```bash
+# Materialize a data dir with a techlitnow provider, hedged glm-5.3 / kimi-k3 /
+# deepseek-v4-pro-0813 logical models, and the fusion-max kernel model:
+bun run scripts/bootstrap-fusion-max.ts --data-dir ~/.model-proxy \
+  --base-url https://infer.techlitnow.com/v1 --api-key-env TECHLITNOW_API_KEY
+# On a server that already exposes those logical models, only add fusion-max:
+bun run scripts/bootstrap-fusion-max.ts --data-dir ~/.model-proxy --skip-upstreams
+```
+
+The template lives in `config/templates/fusion_max_template.json`; the legacy
+divider → subagents → synthesis pipeline remains the default (`engine: "legacy"`).
+
 ### Context window resolution (`GET /v1/models`)
 
 For each logical model (primary route `model_routings[0]`):

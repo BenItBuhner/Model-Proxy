@@ -269,7 +269,9 @@ export class FusionKernel {
         throw err;
       })
       .finally(() => {
-        if (pump !== undefined) pump.finish();
+        // Never let a slow summarizer backlog delay the answer: drop segments
+        // that have not started summarizing and move on to synthesis.
+        if (pump !== undefined) pump.finish({ discardQueued: true });
         else out.close();
       });
     // Surface rejections through the awaited promise below, not as unhandled.
@@ -420,6 +422,14 @@ export class FusionKernel {
   /** Remaining wall-clock budget for search waves, in ms (0 when exhausted). */
   private remainingSearchMs(run: KernelRun): number {
     return Math.max(0, Math.round(run.searchDeadlineAt - performance.now()));
+  }
+
+  /** Expected duration of one more worker call: the slowest successful routing observed this run (default 90s). */
+  private expectedWorkerMs(run: KernelRun): number {
+    const observed = Object.values(run.pool.snapshot())
+      .filter((s) => s.calls > s.failures)
+      .map((s) => s.avgLatencyMs);
+    return observed.length > 0 ? Math.max(...observed) : 90_000;
   }
 
   /**
@@ -748,8 +758,17 @@ export class FusionKernel {
         novelClaimsLastWave: novel,
         familyCount: run.pool.proposerFamilyCount,
       });
-      if (decision.escalate && this.remainingSearchMs(run) < 30_000) {
-        decision = { escalate: false, reason: `search deadline reached (${kcfg.search_deadline_seconds[run.band]}s); settling with agreement ${consensus.agreement}` };
+      if (decision.escalate) {
+        // Another wave only makes sense if a worker call can realistically
+        // finish inside the remaining budget; use this run's observed latency.
+        const expectedWorkerMs = this.expectedWorkerMs(run);
+        const needed = Math.round(expectedWorkerMs * 1.2) + 15_000;
+        if (this.remainingSearchMs(run) < needed) {
+          decision = {
+            escalate: false,
+            reason: `search budget (${kcfg.search_deadline_seconds[run.band]}s) cannot fit another wave (~${Math.round(needed / 1000)}s needed, ${Math.round(this.remainingSearchMs(run) / 1000)}s left); settling with agreement ${consensus.agreement}`,
+          };
+        }
       }
       emitFusion(ctx, {
         type: "fusion.phase",
@@ -1414,6 +1433,21 @@ export class FusionKernel {
 
   private finalize(ctx: FusionRequestContext, run: KernelRun): void {
     if (run.persist) this.ledgers.save(run.ledger, run.hashes, run.kcfg.policy_version);
+    log.info("kernel turn complete", {
+      conversationId: run.ledger.conversationId,
+      turn: run.classification.kind,
+      mode: run.mode,
+      band: run.band,
+      waves: run.waves,
+      agreement: run.agreement,
+      workItems: run.totalWork,
+      cachedWorkItems: run.cachedWork,
+      cancelledWorkers: run.cancelledWorkers,
+      earlySettles: run.earlySettles,
+      continuationSteps: run.ledger.totalContinuationSteps,
+      executor: run.executorRouting,
+      totalMs: Math.round(performance.now() - run.startedAt),
+    });
     ctx.kernelTrace = {
       engine: "kernel",
       turn: run.classification.kind,
