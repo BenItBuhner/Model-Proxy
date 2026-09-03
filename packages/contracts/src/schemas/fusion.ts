@@ -151,6 +151,85 @@ export const FusionSchedulerConfigSchema = z
 
 export type FusionSchedulerConfig = z.infer<typeof FusionSchedulerConfigSchema>;
 
+// ── Fusion Kernel (engine: "kernel") ───────────────────────────────────
+
+/**
+ * One model family in the kernel's pool. `routing` is an existing logical
+ * model; `alt_routings` are same-family alternates used to widen parallel
+ * sampling (e.g. `glm-5.3-alt`). Verifiers are always drawn from a different
+ * family than the candidate they audit.
+ */
+export const FusionKernelFamilySchema = z
+  .object({
+    name: z.string().min(1),
+    routing: z.string().min(1),
+    alt_routings: z.array(z.string().min(1)).default([]),
+    /** Relative share of extra sampling width when the wave is wider than the family count. */
+    weight: z.number().positive().default(1),
+    /** Exclude this family from proposing (verify/synthesize only). */
+    propose: z.boolean().default(true),
+    /** Exclude this family from verifying (propose only). */
+    verify: z.boolean().default(true),
+  })
+  .strict();
+
+export type FusionKernelFamily = z.infer<typeof FusionKernelFamilySchema>;
+
+const EffortWidthSchema = z
+  .object({
+    F2: z.number().int().min(1).max(64),
+    F3: z.number().int().min(1).max(64),
+    max: z.number().int().min(1).max(128),
+  })
+  .strict();
+
+export const FusionKernelConfigSchema = z
+  .object({
+    /** Model families that participate in proposal/verification waves. */
+    families: z.array(FusionKernelFamilySchema).min(1),
+    /** Final synthesis / executor routing. Defaults to `fusion.model_routing`. */
+    synthesis_routing: z.string().min(1).optional(),
+    /** Fast, cheap routing for intent extraction and light structured passes. Defaults to the summarizer routing. */
+    fast_routing: z.string().min(1).optional(),
+    /** Target input tokens per worker context capsule (hard cap for proposers/verifiers). */
+    capsule_tokens: z.number().int().min(2_000).max(200_000).default(24_000),
+    /** Max output tokens for proposal/verification workers. */
+    worker_max_tokens: z.number().int().min(256).max(65_536).default(6_000),
+    /** Per-worker wall clock budget. */
+    worker_timeout_seconds: z.number().int().positive().default(180),
+    /** Parallel proposals per wave, by effort band. */
+    proposal_width: EffortWidthSchema.default({ F2: 3, F3: 6, max: 9 }),
+    /** Cross-family verifiers per surviving candidate, by effort band. */
+    verifiers_per_candidate: EffortWidthSchema.default({ F2: 1, F3: 2, max: 3 }),
+    /** Maximum proposal waves (escalations) before synthesis, by effort band. */
+    max_waves: EffortWidthSchema.default({ F2: 2, F3: 3, max: 4 }),
+    /** Agreement score (0-1) at or above which the search stops escalating. */
+    agreement_threshold: z.number().min(0).max(1).default(0.62),
+    /** Max concurrent upstream worker calls across all waves. */
+    max_concurrency: z.number().int().min(1).max(128).default(12),
+    /** Run a fast LLM intent parse for F2+ fresh tasks (cached by work key). */
+    intent_extraction: z.boolean().default(true),
+    /** Tool-continuation policy. */
+    continuation: z
+      .object({
+        /** Reuse the plan for tool-continuation turns instead of re-searching. */
+        enabled: z.boolean().default(true),
+        /** Force a bounded replan after this many continuation steps. */
+        max_steps_before_replan: z.number().int().min(1).max(200).default(14),
+        /** Run a bounded repair wave when a tool result carries an error signal. */
+        repair_on_error: z.boolean().default(true),
+        /** Identical failure signatures get at most this many repair waves. */
+        max_repairs_per_signature: z.number().int().min(0).max(5).default(1),
+      })
+      .strict()
+      .default({}),
+    /** Bump to invalidate every cached work item produced under older prompts/policies. */
+    policy_version: z.number().int().min(1).default(1),
+  })
+  .strict();
+
+export type FusionKernelConfig = z.infer<typeof FusionKernelConfigSchema>;
+
 // ── Top-level Fusion Config ───────────────────────────────────────────
 
 export const FusionConfigSchema = z
@@ -184,7 +263,21 @@ export const FusionConfigSchema = z
 
     // Bounded scheduler controls for optional nested Fusion.
     scheduler: FusionSchedulerConfigSchema.default({}),
+
+    /**
+     * Orchestration engine. `legacy` is the divider → sealed subagents →
+     * synthesis pipeline. `kernel` is the epistemic kernel: durable per-
+     * conversation ledger, tool-continuation without re-decomposition,
+     * content-addressed work cache, bounded capsules, and cross-family
+     * proposal/verification waves. `kernel` requires the `kernel` block.
+     */
+    engine: z.enum(["legacy", "kernel"]).default("legacy"),
+    kernel: FusionKernelConfigSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (val) => val.engine !== "kernel" || val.kernel !== undefined,
+    { message: "fusion.kernel is required when fusion.engine is \"kernel\"", path: ["kernel"] },
+  );
 
 export type FusionConfig = z.infer<typeof FusionConfigSchema>;

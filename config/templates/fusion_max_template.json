@@ -1,0 +1,51 @@
+{
+  "logical_name": "fusion-max",
+  "timeout_seconds": 600,
+  "default_cooldown_seconds": 0,
+  "context_window": 1000000,
+  "model_routings": [
+    { "provider": "fusion", "model": "fusion-max-placeholder", "wire_protocol": "openai", "context_window": 1000000 }
+  ],
+  "fallback_model_routings": [],
+  "fusion": {
+    "enabled": true,
+    "engine": "kernel",
+    "context_window": 10000000,
+    "complexity_scoring": { "effort_1_threshold": 0.15, "effort_2_threshold": 0.45 },
+    "task_divider": { "model_routing": "glm-5.3", "timeout_seconds": 90, "max_subtasks": 8 },
+    "effort_levels": {
+      "1": { "model_routing": "glm-5.3" },
+      "2": { "subagent_count": { "min": 2, "max": 4 }, "model_routings": ["glm-5.3", "kimi-k3", "deepseek-v4-pro-0813"] },
+      "3": { "subagent_count": { "min": 3, "max": 8 }, "model_routings": ["glm-5.3", "kimi-k3", "deepseek-v4-pro-0813"] }
+    },
+    "fusion": { "model_routing": "glm-5.3", "strategy": "sequential_append", "wire_protocol": "openai" },
+    "summarizer": { "enabled": true, "model_routing": "turbo", "segment_chars": 1400, "max_summary_tokens": 256 },
+    "cache": { "enabled": true, "scope": "permanent" },
+    "scheduler": { "allow_nested_fusion": false, "max_depth": 0, "max_leaf_calls": 64, "max_wall_ms": 1800000 },
+    "kernel": {
+      "families": [
+        { "name": "glm", "routing": "glm-5.3", "alt_routings": ["glm-5.3-alt"], "weight": 1 },
+        { "name": "kimi", "routing": "kimi-k3", "alt_routings": ["kimi-k3-alt"], "weight": 1 },
+        { "name": "deepseek", "routing": "deepseek-v4-pro-0813", "alt_routings": ["deepseek-v4-pro"], "weight": 1 }
+      ],
+      "synthesis_routing": "glm-5.3",
+      "fast_routing": "glm-5.3-flash",
+      "capsule_tokens": 24000,
+      "worker_max_tokens": 6000,
+      "worker_timeout_seconds": 180,
+      "proposal_width": { "F2": 3, "F3": 6, "max": 9 },
+      "verifiers_per_candidate": { "F2": 1, "F3": 2, "max": 3 },
+      "max_waves": { "F2": 2, "F3": 3, "max": 4 },
+      "agreement_threshold": 0.62,
+      "max_concurrency": 12,
+      "intent_extraction": true,
+      "continuation": {
+        "enabled": true,
+        "max_steps_before_replan": 14,
+        "repair_on_error": true,
+        "max_repairs_per_signature": 1
+      },
+      "policy_version": 1
+    }
+  }
+}

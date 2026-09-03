@@ -72,6 +72,15 @@ export interface FusionRequestContext {
   hadImages?: boolean;
   /** Descriptions produced by the vision model (kimi-k3) for any images in the request. */
   imageDescriptions?: string[];
+  /**
+   * Kernel engine: brief appended to the synthesis system prompt (consensus
+   * semantics for a search turn, or the ledger for a continuation turn).
+   */
+  kernelBrief?: string;
+  /** Kernel engine: synthesis/executor routing override for this turn. */
+  kernelSynthesisRouting?: string;
+  /** Kernel engine: compact summary attached to the fusion trace. */
+  kernelTrace?: Record<string, unknown>;
 }
 
 export interface FusionExecutionContext {
@@ -171,7 +180,23 @@ export interface ReasoningSummaryEvent {
  */
 export interface FusionStep {
   /** Step type identifier. */
-  type: "complexity_scoring" | "task_division" | "subagent_execution" | "synthesis" | "effort_1_fast_path" | "image_preprocessing" | "cache_lookup";
+  type:
+    | "complexity_scoring"
+    | "task_division"
+    | "subagent_execution"
+    | "synthesis"
+    | "effort_1_fast_path"
+    | "image_preprocessing"
+    | "cache_lookup"
+    // Kernel engine steps
+    | "turn_classification"
+    | "intent"
+    | "proposal"
+    | "verification"
+    | "escalation"
+    | "continuation"
+    | "repair"
+    | "checkpoint";
   /** The step label for display. */
   label: string;
   /** When this step started (ISO timestamp). */
@@ -264,6 +289,8 @@ export interface FusionTrace {
   fusedByModelRouting: string;
   /** Full request ID for cross-referencing with admin logs. */
   requestId?: string;
+  /** Kernel engine summary (turn kind, mode, waves, agreement, work cache stats). */
+  kernel?: Record<string, unknown>;
 }
 
 // ── Fusion Result ─────────────────────────────────────────────────────
