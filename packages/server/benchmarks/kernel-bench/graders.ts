@@ -34,6 +34,62 @@ function lastBoxed(text: string): string | undefined {
   return undefined;
 }
 
+/** Replace every `\frac{a}{b}` / `\dfrac` / `\tfrac` with `(a)/(b)`, honoring nested braces. */
+function convertFracs(input: string): string {
+  let s = input;
+  for (;;) {
+    const m = /\\[dt]?frac\s*\{/.exec(s);
+    if (m === null) return s;
+    const start = m.index;
+    const readGroup = (from: number): { text: string; end: number } | undefined => {
+      if (s[from] !== "{") return undefined;
+      let depth = 0;
+      for (let i = from; i < s.length; i++) {
+        if (s[i] === "{") depth++;
+        else if (s[i] === "}") {
+          depth--;
+          if (depth === 0) return { text: s.slice(from + 1, i), end: i + 1 };
+        }
+      }
+      return undefined;
+    };
+    const num = readGroup(start + m[0].length - 1);
+    if (num === undefined) return s;
+    let j = num.end;
+    while (s[j] === " ") j++;
+    const den = readGroup(j);
+    if (den === undefined) return s;
+    s = `${s.slice(0, start)}(${num.text})/(${den.text})${s.slice(den.end)}`;
+  }
+}
+
+/**
+ * Evaluate a normalized math answer numerically when it is a closed-form
+ * expression over integers, fractions, sqrt, pi and + - * / ^. Returns
+ * undefined for anything else (variables, sets, intervals, text).
+ */
+export function evaluateMathAnswer(normalized: string): number | undefined {
+  let s = normalized;
+  if (s.length === 0 || s.length > 200) return undefined;
+  s = s.replace(/[{]/g, "(").replace(/[}]/g, ")");
+  s = s.replace(/sqrt\(([^()]*)\)/g, "Math.sqrt($1)");
+  s = s.replace(/sqrt(\d+(?:\.\d+)?)/g, "Math.sqrt($1)");
+  s = s.replace(/\bpi\b/g, "Math.PI");
+  s = s.replace(/\^/g, "**");
+  // Implicit multiplication: 2Math.sqrt(...), 3Math.PI, )(, 2(  →  insert *
+  s = s.replace(/(\d)(Math\.)/g, "$1*$2");
+  s = s.replace(/\)(\d|Math\.|\()/g, ")*$1");
+  s = s.replace(/(\d)\(/g, "$1*(");
+  if (!/^[0-9+\-*/().\s]*(Math\.(sqrt|PI)[0-9+\-*/().\s]*)*$/.test(s.replace(/Math\.(sqrt|PI)/g, ""))) return undefined;
+  if (/[a-zA-Z]/.test(s.replace(/Math\.sqrt|Math\.PI/g, ""))) return undefined;
+  try {
+    const value = Function(`"use strict"; return (${s});`)() as unknown;
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function normalizeMathAnswer(raw: string): string {
   let s = raw.trim();
   s = s.replace(/^\$+|\$+$/g, "").trim();
@@ -42,8 +98,7 @@ export function normalizeMathAnswer(raw: string): string {
   s = s.replace(/\\boxed\{([\s\S]*)\}/, "$1");
   s = s.replace(/\\text\{([^}]*)\}/g, "$1");
   s = s.replace(/\\(?:left|right|,|!|;|quad|qquad|displaystyle)/g, "");
-  s = s.replace(/\\d?frac\s*\{([^}]*)\}\s*\{([^}]*)\}/g, "($1)/($2)");
-  s = s.replace(/\\tfrac\s*\{([^}]*)\}\s*\{([^}]*)\}/g, "($1)/($2)");
+  s = convertFracs(s);
   s = s.replace(/\^\s*\{?\\circ\}?|°/g, "");
   s = s.replace(/\\%|%/g, "");
   s = s.replace(/\\cdot|\\times/g, "*");
@@ -52,7 +107,9 @@ export function normalizeMathAnswer(raw: string): string {
   s = s.replace(/\\pi/g, "pi");
   s = s.replace(/\\infty/g, "inf");
   s = s.replace(/(?:dollars?|units?|cm|km|m|kg|degrees?|inches|feet|meters?)\b\.?$/i, "");
-  s = s.replace(/[\s,]/g, "");
+  // Thousands separators only; list/tuple commas are significant.
+  s = s.replace(/(\d),(?=\d{3}(?!\d))/g, "$1");
+  s = s.replace(/\s/g, "");
   s = s.replace(/\.$/, "");
   s = s.replace(/^\((-?[\d./]+)\)$/, "$1");
   // Unwrap parentheses around single tokens produced by \frac conversion: (pi)/(2) -> pi/2
@@ -88,8 +145,8 @@ export function gradeNumeric(text: string, expected: string): { predicted: strin
   const p = normalizeMathAnswer(raw);
   const e = normalizeMathAnswer(expected);
   if (p === e) return { predicted: raw, correct: true };
-  const pv = numericValue(p);
-  const ev = numericValue(e);
+  const pv = numericValue(p) ?? evaluateMathAnswer(p);
+  const ev = numericValue(e) ?? evaluateMathAnswer(e);
   if (pv !== undefined && ev !== undefined && Number.isFinite(pv) && Number.isFinite(ev)) {
     const tol = Math.max(1e-6, Math.abs(ev) * 1e-6);
     return { predicted: raw, correct: Math.abs(pv - ev) <= tol };
