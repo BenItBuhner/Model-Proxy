@@ -52,7 +52,7 @@ import type {
   WaveWidths,
   WorkerRole,
 } from "./types.ts";
-import { buildConsensus, novelClaimCount, parseProposal, parseVerdict } from "./waves.ts";
+import { buildAnswerVote, buildConsensus, novelClaimCount, parseProposal, parseVerdict } from "./waves.ts";
 import { WorkCache, computeWorkKey, type WorkSpec } from "./work-cache.ts";
 import { Semaphore, runWorker } from "./worker.ts";
 
@@ -725,11 +725,19 @@ export class FusionKernel {
       // Pipelined verification: each candidate's verifiers launch the moment
       // the candidate lands, overlapping with slower proposers.
       const pipelined: QuorumEntry<Verification>[] = [];
+      const pipelinedCandidateIds = new Set<string>();
       let verificationStarted = false;
+      // With adaptive verification only the FIRST landed candidate is verified
+      // eagerly; the rest wait for the wave so the answer vote can decide how
+      // much verification is worth buying.
       const onProposal = verifyCandidates && kcfg.pipeline_verification
         ? async (proposal: Proposal): Promise<void> => {
             if (!proposal.success || (proposal.answer.length === 0 && proposal.claims.length === 0)) return;
             if (this.remainingSearchMs(run) <= 10_000) return;
+            if (kcfg.adaptive_verification && pipelinedCandidateIds.size >= 1) return;
+            // Reserve the slot synchronously: hooks for simultaneously landing
+            // candidates must not all pass the check before the first awaits.
+            pipelinedCandidateIds.add(proposal.id);
             await intentPromise;
             const intent = run.ledger.intent ?? baseIntent;
             if (!verificationStarted) {
@@ -747,15 +755,26 @@ export class FusionKernel {
       const intent = run.ledger.intent ?? baseIntent;
       if (verifyCandidates && this.remainingSearchMs(run) > 10_000) {
         const verifyStarted = performance.now();
-        let entries = pipelined;
-        if (!kcfg.pipeline_verification) {
-          const candidates = waveProposals.filter((p) => p.success && (p.answer.length > 0 || p.claims.length > 0));
-          if (candidates.length > 0) {
-            emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, candidates: candidates.length } });
-            await run.narrator.say(`Kernel: verifying ${candidates.length} candidate answer(s) with cross-family auditors.`);
-            entries = this.launchVerification(ctx, run, intent, searchLedger, candidates, wave, widths, taskStartIndex);
+        const candidates = waveProposals.filter((p) => p.success && (p.answer.length > 0 || p.claims.length > 0));
+        const pending = candidates.filter((p) => !pipelinedCandidateIds.has(p.id));
+        const preVote = buildAnswerVote(waveProposals, []);
+        const unanimous = preVote !== undefined && preVote.unanimous && new Set(waveProposals.filter((p) => p.success && p.finalAnswer !== undefined).map((p) => p.family)).size >= 2;
+        let toVerify: Proposal[];
+        if (kcfg.adaptive_verification && unanimous) {
+          // Unanimous final answer across families: one audit of the leader is enough.
+          toVerify = pipelinedCandidateIds.size > 0 ? [] : candidates.slice(0, 1);
+          emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, adaptive: "unanimous", vote: preVote?.leader?.answer, verifying: toVerify.length + pipelinedCandidateIds.size } });
+          await run.narrator.say(`Kernel: all reasoners agree on "${preVote?.leader?.answer ?? ""}"; running a single cross-family audit instead of a full verification wave.`);
+        } else {
+          toVerify = kcfg.pipeline_verification ? pending : candidates;
+          if (toVerify.length > 0) {
+            emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, candidates: toVerify.length, adaptive: preVote !== undefined ? "split" : "no-vote" } });
+            await run.narrator.say(preVote !== undefined && !preVote.unanimous
+              ? `Kernel: reasoners disagree (${preVote.entries.filter((e) => e.weight > 0).map((e) => `"${e.answer}"`).slice(0, 4).join(" vs ")}); verifying every candidate with cross-family auditors.`
+              : `Kernel: verifying ${toVerify.length} candidate answer(s) with cross-family auditors.`);
           }
         }
+        const entries = [...pipelined, ...(toVerify.length > 0 ? this.launchVerification(ctx, run, intent, searchLedger, toVerify, wave, widths, taskStartIndex) : [])];
         if (entries.length > 0) {
           const waveVerifications = await this.settleWithQuorum(run, entries, Math.min(2, run.pool.proposerFamilyCount), (settled) => this.verdictsAlreadyAccept(settled));
           verifications.push(...waveVerifications);

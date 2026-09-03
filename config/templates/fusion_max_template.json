@@ -35,6 +35,7 @@
       "worker_max_tokens_by_band": { "F2": 2500, "F3": 5000, "max": 8000 },
       "verifier_max_tokens": 1800,
       "pipeline_verification": true,
+      "adaptive_verification": true,
       "worker_reasoning_effort": { "verifier": "low", "intent": "low", "repair": "medium", "checkpoint": "medium" },
       "worker_timeout_seconds": 300,
       "worker_idle_timeout_seconds": 60,
@@ -45,7 +46,7 @@
       "max_concurrency": 8,
       "wave_quorum": 0.67,
       "straggler_grace_seconds": 15,
-      "search_deadline_seconds": { "F2": 300, "F3": 600, "max": 1800 },
+      "search_deadline_seconds": { "F2": 300, "F3": 480, "max": 1800 },
       "intent_extraction": true,
       "continuation": {
         "enabled": true,

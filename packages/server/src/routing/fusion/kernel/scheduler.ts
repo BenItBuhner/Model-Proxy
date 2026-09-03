@@ -21,10 +21,15 @@ export function parseRequestedKernelEffort(requestData: Record<string, unknown>)
   return "auto";
 }
 
-/** Map the resolved F-level (+ explicit max request) to the kernel's effort band. */
+/**
+ * Map the resolved F-level (+ explicit request) to the kernel's effort band.
+ * An explicit `high` is a request for more compute regardless of how simple
+ * the prompt looks (short AIME problems score as low complexity), so it maps
+ * to F3; `max` maps to max.
+ */
 export function effortBandFor(resolved: FusionEffortLevel | undefined, requested: RequestedKernelEffort): EffortBand {
   if (requested === "max") return "max";
-  if (resolved === "F3") return "F3";
+  if (requested === "high" || resolved === "F3") return "F3";
   return "F2";
 }
 

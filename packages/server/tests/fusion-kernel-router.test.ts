@@ -57,6 +57,7 @@ const kernelConfig: FusionConfig = {
     worker_max_tokens: 2_000,
     verifier_max_tokens: 1_500,
     pipeline_verification: true,
+    adaptive_verification: false,
     worker_reasoning_effort: { verifier: "low" },
     worker_timeout_seconds: 30,
     worker_idle_timeout_seconds: 20,
@@ -133,7 +134,7 @@ function familyOf(model: string): string {
   return "deepseek";
 }
 
-function proposalText(family: string, wave: number): string {
+function proposalText(family: string, wave: number, finalAnswer?: string): string {
   const shared = "The middleware must validate API key expiry before authorizing the request";
   const specific: Record<string, string> = {
     glm: "Use a constant-time comparison for API keys",
@@ -143,12 +144,12 @@ function proposalText(family: string, wave: number): string {
   return [
     `Proposal from ${family} (wave ${wave}): implement API key auth with expiry checks.`,
     "```json",
-    JSON.stringify({ answer_summary: `${family} plan`, key_claims: [shared, specific[family] ?? "x", "Answer: 42"], assumptions: [], risks: [], confidence: 0.8 }),
+    JSON.stringify({ answer_summary: `${family} plan`, ...(finalAnswer !== undefined ? { final_answer: finalAnswer } : {}), key_claims: [shared, specific[family] ?? "x", "Answer: 42"], assumptions: [], risks: [], confidence: 0.8 }),
     "```",
   ].join("\n");
 }
 
-function installFetch(captured: Captured, options: { synthesisToolCall?: boolean } = {}): void {
+function installFetch(captured: Captured, options: { synthesisToolCall?: boolean; finalAnswers?: Record<string, string> } = {}): void {
   globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     const model = String(body["model"] ?? "");
@@ -164,7 +165,7 @@ function installFetch(captured: Captured, options: { synthesisToolCall?: boolean
     if (system.includes("independent expert reasoners")) {
       captured.proposer.push(body);
       const wave = /wave (\d+)/.exec(allText(messages))?.[1] ?? "1";
-      return streamResponse(model, [proposalText(family, Number(wave))]);
+      return streamResponse(model, [proposalText(family, Number(wave), options.finalAnswers?.[family])]);
     }
     if (system.includes("adversarial verifier")) {
       captured.verifier.push(body);
@@ -557,6 +558,36 @@ describe("Fusion kernel engine", () => {
     expect(search).toContain("Kernel: new task");
     expect(search).toContain("Final synthesized answer");
     expect(captured.proposer.length).toBe(3);
+  });
+
+  it("adapts verification to the final-answer vote: unanimous → one audit, split → every candidate audited", async () => {
+    const adaptiveCfg: FusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true } };
+    const mathPrompt = [{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }];
+
+    const unanimous = emptyCaptured();
+    installFetch(unanimous, { finalAnswers: { glm: "750", kimi: "750", deepseek: "$750$" } });
+    const ctxA = makeCtx(mathPrompt, `conv-vote-unanimous-${Date.now()}`);
+    ctxA.fusionConfig = adaptiveCfg;
+    delete (ctxA.requestData as Record<string, unknown>)["tools"];
+    const a = await router.route(ctxA);
+    expect(unanimous.proposer).toHaveLength(3);
+    expect(unanimous.verifier).toHaveLength(1);
+    const synthA = allText(unanimous.synthesis[0]!["messages"] as unknown[]);
+    expect(synthA).toContain("FINAL ANSWER VOTE");
+    expect(synthA).toContain("UNANIMOUS");
+    expect(a.fusionTrace?.kernel?.["agreement"] as number).toBeGreaterThanOrEqual(0.7);
+
+    const split = emptyCaptured();
+    installFetch(split, { finalAnswers: { glm: "750", kimi: "500", deepseek: "750" } });
+    const ctxB = makeCtx(mathPrompt, `conv-vote-split-${Date.now()}`);
+    ctxB.fusionConfig = adaptiveCfg;
+    delete (ctxB.requestData as Record<string, unknown>)["tools"];
+    await router.route(ctxB);
+    expect(split.proposer).toHaveLength(3);
+    expect(split.verifier).toHaveLength(3);
+    const synthB = allText(split.synthesis[0]!["messages"] as unknown[]);
+    expect(synthB).toContain("SPLIT");
+    expect(synthB).toContain("\"500\"");
   });
 
   it("uses the fast path for trivial fresh requests and still records the ledger for later continuation", async () => {

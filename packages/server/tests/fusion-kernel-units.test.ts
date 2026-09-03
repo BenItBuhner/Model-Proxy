@@ -277,6 +277,7 @@ describe("kernel scheduler", () => {
     worker_max_tokens: 6_000,
     verifier_max_tokens: 2_500,
     pipeline_verification: true,
+    adaptive_verification: true,
     worker_reasoning_effort: {},
     worker_timeout_seconds: 300,
     worker_idle_timeout_seconds: 60,

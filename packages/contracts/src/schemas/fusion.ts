@@ -207,6 +207,12 @@ export const FusionKernelConfigSchema = z
     /** Start verifying each candidate as soon as it lands instead of after the whole proposal wave settles. */
     pipeline_verification: z.boolean().default(true),
     /**
+     * Vote-adaptive verification: when proposals declare final answers and the
+     * vote is unanimous across ≥2 families, verify only the leading candidate;
+     * when the vote is split, verify every candidate. Off = verify all.
+     */
+    adaptive_verification: z.boolean().default(true),
+    /**
      * `reasoning_effort` forwarded to upstream thinking models per worker role
      * (omitted roles use the model default). Verifiers and intent extraction
      * are terse by contract, so lower effort there cuts latency without
