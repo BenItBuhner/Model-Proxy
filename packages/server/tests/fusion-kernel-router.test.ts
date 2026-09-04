@@ -602,9 +602,10 @@ describe("Fusion kernel engine", () => {
     expect(trace["settledAnswer"]).toBe("[[1,4],[2,5],[3,6]]");
     // Proposers were told to ship a solve() program.
     expect(captured.proposer.some((p) => allText(p["messages"] as unknown[]).includes("EXAMPLE-GROUNDED TASK"))).toBe(true);
-    // Synthesis was told not to reproduce the grid.
-    expect(allText(captured.synthesis[0]!["messages"] as unknown[])).toContain("EXECUTION-VERIFIED RESULT");
-    expect(captured.synthesis[0]!["reasoning_effort"]).toBe("low");
+    // No LLM synthesis at all: the verified program's own rule statement is the explanation.
+    expect(captured.synthesis).toHaveLength(0);
+    expect(content).toContain("the rule transposes the grid");
+    expect(content).not.toContain("```python");
   });
 
   it("falls back to another family's synthesizer when the primary fails, and never leaks advisory notes", async () => {

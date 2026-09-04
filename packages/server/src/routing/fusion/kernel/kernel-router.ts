@@ -31,6 +31,12 @@ import { INTENT_OBJECTIVE, deterministicIntent, mergeModelIntent } from "./inten
 import { extractIoExamples, type IoExample, type TaskExamples } from "./examples.ts";
 import { checkCandidateProgram, describeFailures, extractSolveProgram } from "./execution.ts";
 
+/** Strip fenced code/JSON blocks and kernel metadata from a proposal, keeping its explanatory prose. */
+function proseOnly(text: string): string {
+  const stripped = text.replace(/```[\s\S]*?```/g, "").replace(/\n{3,}/g, "\n\n").trim();
+  return stripped.length > 1_800 ? `${stripped.slice(0, 1_797)}...` : stripped;
+}
+
 /** A program that embeds example outputs literally is a lookup table, not a rule. */
 function looksMemorized(program: string, examples: IoExample[]): boolean {
   const compact = program.replace(/\s+/g, "");
@@ -134,6 +140,8 @@ interface KernelRun {
   examples?: TaskExamples;
   /** Verified program output on the test input(s), appended after synthesis as the final artifact. */
   verifiedArtifact?: string;
+  /** Prose from the proposal whose program verified (its rule statement), used as the explanation. */
+  verifiedExplanation?: string;
   /** Execution statistics for the trace. */
   executionStats: { programs: number; verified: number; repairRounds: number };
   /** Coarse phase marker for heartbeat logs. */
@@ -246,10 +254,16 @@ export class FusionKernel {
       .filter((r) => r !== primary && !this.isFusionModel(r));
     const chain = [primary, ...alternates];
     const failFastCtx: FusionRequestContext = { ...ctx, kernelSynthesisFailFast: true };
-    // Execution-verified artifact leads the answer: a program that reproduced
-    // every task example produced it, and no model should hand-copy a grid.
-    if (run.verifiedArtifact !== undefined && ctx.clientProtocol !== "anthropic") {
-      yield* this.textAsStream(ctx, `\`\`\`json\n${run.verifiedArtifact}\n\`\`\`\n\n`, null);
+    // Execution-verified artifact: a program that reproduced every task example
+    // produced it. No LLM synthesis is needed (and none should hand-copy a
+    // grid): emit the artifact plus the winning proposal's rule statement.
+    if (run.verifiedArtifact !== undefined) {
+      const explanation = run.verifiedExplanation !== undefined && run.verifiedExplanation.length > 0
+        ? run.verifiedExplanation
+        : `The output above was produced by a program that reproduces every training example.`;
+      run.steps.push({ type: "synthesis", label: "Response Synthesis (execution-verified)", startedAt: nowIso(), durationMs: 0, modelRouting: "kernel", details: { verified: true } });
+      yield* this.textAsStream(ctx, `\`\`\`json\n${run.verifiedArtifact}\n\`\`\`\n\n${explanation}`);
+      return;
     }
     // With a verified artifact already emitted, the explanation is a bonus:
     // bound it tightly. Otherwise use the configured synthesis cap.
@@ -280,11 +294,6 @@ export class FusionKernel {
         clearTimeout(timer);
         ctx.signal?.removeEventListener("abort", onAbort);
       }
-    }
-    if (run.verifiedArtifact !== undefined) {
-      // The verified output already leads the response; a brief note is enough.
-      yield* this.textAsStream(ctx, "The output above was produced by a program that reproduces every training example.");
-      return;
     }
     // Every synthesizer failed (or one failed mid-answer): fall back to the
     // strongest candidate the search produced rather than leaking notes.
@@ -1344,7 +1353,10 @@ export class FusionKernel {
       run.executionStats.verified += 1;
       if (result.testOutputs.length > 0) {
         p.finalAnswer = JSON.stringify(result.testOutputs[0]);
-        run.verifiedArtifact ??= p.finalAnswer;
+        if (run.verifiedArtifact === undefined) {
+          run.verifiedArtifact = p.finalAnswer;
+          run.verifiedExplanation = proseOnly(p.answer);
+        }
         run.confirmedAnswerKeys.add(normalizeFinalAnswer(p.finalAnswer));
       }
       notifyEvidence(run);
