@@ -147,6 +147,52 @@ async function loadMathArena(suite: string, dataset: string, n: number, hint: st
 }
 
 export const loadAime2026 = (n: number) => loadMathArena("aime26", "MathArena/aime_2026", n, " (AIME answers are integers from 000 to 999.)");
+/** MathArena Apex: final-answer versions of the hardest 2025 olympiad problems; frontier models score far below ceiling. */
+export const loadApex2025 = (n: number) => loadMathArena("apex25", "MathArena/apex_2025", n, "");
+
+// ── ARC-AGI-2 public evaluation (exact grid match) ─────────────────────
+
+const ARC_INSTRUCTION =
+  "You are given training pairs that demonstrate a hidden transformation rule mapping an input grid to an output grid. Grids are 2D arrays of integers 0-9 (colors). Infer the rule from the training pairs and apply it to the test input. Think carefully: the output grid's dimensions may differ from the input's. End your response with the test output grid as a JSON array of arrays inside a ```json fenced block, and put nothing after that block.";
+
+interface ArcTask { train: Array<{ input: number[][]; output: number[][] }>; test: Array<{ input: number[][]; output?: number[][] }> }
+
+async function fetchJsonCached<T>(url: string): Promise<T> {
+  const key = createHash("sha256").update(url).digest("hex").slice(0, 24);
+  mkdirSync(CACHE_DIR, { recursive: true });
+  const cachePath = join(CACHE_DIR, `${key}.json`);
+  if (existsSync(cachePath)) return JSON.parse(readFileSync(cachePath, "utf8")) as T;
+  const res = await fetch(url, { signal: AbortSignal.timeout(60_000), headers: { "user-agent": "kernel-bench" } });
+  if (!res.ok) throw new Error(`fetch ${url} failed: ${res.status}`);
+  const text = await res.text();
+  writeFileSync(cachePath, text, "utf8");
+  return JSON.parse(text) as T;
+}
+
+const gridText = (g: number[][]) => `[${g.map((row) => `[${row.join(",")}]`).join(",\n ")}]`;
+
+export async function loadArcAgi2(n: number): Promise<BenchItem[]> {
+  const listing = await fetchJsonCached<Array<{ name: string; download_url: string }>>("https://api.github.com/repos/arcprize/ARC-AGI-2/contents/data/evaluation");
+  const files = listing.filter((f) => f.name.endsWith(".json")).sort((a, b) => a.name.localeCompare(b.name));
+  const picked = sample(files, n, "arcagi2");
+  const items: BenchItem[] = [];
+  for (const file of picked) {
+    const task = await fetchJsonCached<ArcTask>(file.download_url);
+    const test = task.test[0];
+    if (test === undefined || test.output === undefined) continue;
+    const trainText = task.train.map((p, i) => `Training pair ${i + 1}\nInput (${p.input.length}x${p.input[0]?.length ?? 0}):\n${gridText(p.input)}\nOutput (${p.output.length}x${p.output[0]?.length ?? 0}):\n${gridText(p.output)}`).join("\n\n");
+    items.push({
+      id: `arcagi2:${file.name.replace(".json", "")}`,
+      suite: "arcagi2",
+      domain: "reasoning",
+      kind: "grid",
+      messages: [{ role: "user", content: `${ARC_INSTRUCTION}\n\n${trainText}\n\nTest input (${test.input.length}x${test.input[0]?.length ?? 0}):\n${gridText(test.input)}` }],
+      answer: JSON.stringify(test.output),
+      meta: { trainPairs: task.train.length, testInputs: task.test.length },
+    });
+  }
+  return items;
+}
 export const loadHmmtFeb2025 = (n: number) => loadMathArena("hmmt25", "MathArena/hmmt_feb_2025", n, "");
 export const loadHmmtFeb2026 = (n: number) => loadMathArena("hmmt26", "MathArena/hmmt_feb_2026", n, "");
 export const loadBrumo2025 = (n: number) => loadMathArena("brumo25", "MathArena/brumo_2025", n, "");
@@ -283,6 +329,8 @@ export type SuiteName =
   | "aime24"
   | "aime25"
   | "aime26"
+  | "apex25"
+  | "arcagi2"
   | "hmmt25"
   | "hmmt26"
   | "brumo25"
@@ -302,7 +350,7 @@ export type SuiteName =
   | "creative";
 
 export const ALL_SUITES: SuiteName[] = [
-  "math500", "aime24", "aime25", "aime26", "hmmt25", "hmmt26", "brumo25",
+  "math500", "aime24", "aime25", "aime26", "apex25", "hmmt25", "hmmt26", "brumo25", "arcagi2",
   "supergpqa-physics", "supergpqa-chemistry", "supergpqa-biology",
   "mmlu-physics", "mmlu-chemistry", "mmlu-biology",
   "mmlu-law", "mmlu-business", "mmlu-economics", "mmlu-computer_science",
@@ -315,6 +363,8 @@ export async function loadSuite(name: SuiteName, n: number): Promise<BenchItem[]
     case "aime24": return loadAime2024(n);
     case "aime25": return loadAime2025(n);
     case "aime26": return loadAime2026(n);
+    case "apex25": return loadApex2025(n);
+    case "arcagi2": return loadArcAgi2(n);
     case "hmmt25": return loadHmmtFeb2025(n);
     case "hmmt26": return loadHmmtFeb2026(n);
     case "brumo25": return loadBrumo2025(n);

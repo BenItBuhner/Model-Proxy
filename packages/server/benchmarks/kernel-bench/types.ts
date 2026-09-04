@@ -1,6 +1,6 @@
 /** Shared types for the kernel benchmark harness. */
 
-export type ItemKind = "numeric" | "mc" | "code" | "yesno" | "open";
+export type ItemKind = "numeric" | "mc" | "code" | "yesno" | "grid" | "open";
 
 export type Domain = "math" | "science" | "swe" | "finance" | "legal" | "creativity" | "reasoning";
 

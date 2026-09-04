@@ -210,8 +210,59 @@ export async function gradeCode(text: string, item: BenchItem): Promise<{ predic
   }
 }
 
+/** Last JSON array-of-arrays of small integers in the text (fenced block preferred). */
+export function extractGrid(text: string): number[][] | undefined {
+  const candidates: string[] = [];
+  for (const m of text.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/gi)) candidates.push(m[1] ?? "");
+  candidates.push(text);
+  for (const source of candidates.reverse()) {
+    // Scan for the last balanced "[[ ... ]]" region.
+    let best: number[][] | undefined;
+    for (let i = 0; i < source.length; i++) {
+      if (source[i] !== "[" || source[i + 1] !== "[") continue;
+      let depth = 0;
+      for (let j = i; j < source.length; j++) {
+        if (source[j] === "[") depth++;
+        else if (source[j] === "]") {
+          depth--;
+          if (depth === 0) {
+            try {
+              const parsed = JSON.parse(source.slice(i, j + 1)) as unknown;
+              if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((r) => Array.isArray(r) && r.every((v) => Number.isInteger(v)))) best = parsed as number[][];
+            } catch {
+              // not JSON
+            }
+            i = j;
+            break;
+          }
+        }
+      }
+    }
+    if (best !== undefined) return best;
+  }
+  return undefined;
+}
+
+export function gradeGrid(text: string, expected: string): { predicted: string | undefined; correct: boolean } {
+  const grid = extractGrid(text);
+  if (grid === undefined) return { predicted: undefined, correct: false };
+  const predicted = JSON.stringify(grid);
+  let want: number[][];
+  try {
+    want = JSON.parse(expected) as number[][];
+  } catch {
+    return { predicted, correct: false };
+  }
+  const correct = grid.length === want.length && grid.every((row, i) => row.length === want[i]!.length && row.every((v, j) => v === want[i]![j]));
+  return { predicted: `${grid.length}x${grid[0]?.length ?? 0}${correct ? "" : " (mismatch)"}`, correct };
+}
+
 export async function gradeItem(item: BenchItem, text: string): Promise<{ predicted?: string; expected?: string; correct?: boolean; detail?: string }> {
   switch (item.kind) {
+    case "grid": {
+      const g = gradeGrid(text, item.answer ?? "");
+      return { predicted: g.predicted, expected: `${(JSON.parse(item.answer ?? "[]") as number[][]).length} rows`, correct: g.correct };
+    }
     case "numeric": {
       const g = gradeNumeric(text, item.answer ?? "");
       return { predicted: g.predicted, expected: item.answer, correct: g.correct };
