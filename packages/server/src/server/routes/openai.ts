@@ -63,7 +63,7 @@ import {
   shouldPersistCompletion,
 } from "./route-helpers.ts";
 import { principal, requireAuth } from "../auth.ts";
-import { formatOpenAIError } from "../error-formatters.ts";
+import { formatOpenAIError, formatOpenAIUpstreamError } from "../error-formatters.ts";
 import {
   estimateRequestTokens,
   recordRequestAbort,
@@ -566,7 +566,7 @@ async function handleResponsesNative(c: Context, endpointPath: string): Promise<
       const message = err instanceof Error ? err.message : String(err);
       recordRequestFinish({ requestId, responseStatus: status, responseTimeMs: Math.round(performance.now() - started), errorMessage: message, errorType: err instanceof Error ? err.name : "Unknown" });
       emit({ type: "request.finished", at: nowIso(), status, totalMs: Math.round(performance.now() - started), errorMessage: message, errorType: err instanceof Error ? err.name : "Unknown" });
-      return c.json(formatOpenAIError(status, message, status >= 500 ? "api_error" : "invalid_request_error"), status as ContentfulStatusCode);
+      return c.json(formatOpenAIUpstreamError(status, message, status >= 500 ? "api_error" : "invalid_request_error"), status as ContentfulStatusCode);
     }
   });
 }
@@ -941,7 +941,7 @@ async function handleChatCompletions(
               const type = routingStatus?.type ?? "internal_server_error";
               const message =
                 err instanceof Error ? err.message : `Streaming error: ${String(err)}`;
-              const errorPayload = formatOpenAIError(status, message, type);
+              const errorPayload = formatOpenAIUpstreamError(status, message, type);
               safeEnqueue(`data: ${JSON.stringify(errorPayload)}\n\n`);
               safeEnqueue("data: [DONE]\n\n");
               try {
@@ -1044,13 +1044,14 @@ async function handleChatCompletions(
       if (err instanceof RoutingError) {
         const message = `All routes failed for model '${request.model}': ${err.summary()}`;
         const { status, type } = routingErrorStatus(err);
+        const errorPayload = formatOpenAIUpstreamError(status, message, type);
         recordRequestFinish({
           requestId,
           responseStatus: status,
           responseTimeMs: totalMs,
           errorMessage: message,
           errorType: err.name,
-          responseBody: formatOpenAIError(status, message, type),
+          responseBody: errorPayload,
         });
         emit({
           type: "request.finished",
@@ -1060,17 +1061,18 @@ async function handleChatCompletions(
           errorType: err.name,
           errorMessage: message,
         });
-        return c.json(formatOpenAIError(status, message, type), status);
+        return c.json(errorPayload, status);
       }
       if (err instanceof RouteExecutionError) {
         const status = (err.statusCode ?? 502) as ContentfulStatusCode;
+        const errorPayload = formatOpenAIUpstreamError(status, err.message);
         recordRequestFinish({
           requestId,
           responseStatus: status,
           responseTimeMs: totalMs,
           errorMessage: err.message,
           errorType: err.name,
-          responseBody: formatOpenAIError(status, err.message),
+          responseBody: errorPayload,
         });
         emit({
           type: "request.finished",
@@ -1080,7 +1082,7 @@ async function handleChatCompletions(
           errorType: err.name,
           errorMessage: err.message,
         });
-        return c.json(formatOpenAIError(status, err.message), status);
+        return c.json(errorPayload, status);
       }
       if (err instanceof EnforceValidationError) {
         const message = `Enforce tool-call validation failed after ${err.attempts} attempts: ${err.lastReason}`;

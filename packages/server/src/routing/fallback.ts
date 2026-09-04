@@ -1973,6 +1973,11 @@ export class FallbackRouter {
           recordRouteProgress(route, attemptNumber);
 
           const streamStartMs = performance.now();
+          // Once any byte reached the client the response is committed: a
+          // restarted attempt would append a second stream (fresh tool-call
+          // fragments at index 0) onto the same SSE response and corrupt the
+          // client's accumulator. Surface the error instead.
+          let yieldedToClient = false;
           try {
             const stream = executeStream({
               route,
@@ -1987,6 +1992,7 @@ export class FallbackRouter {
               targetProtocol,
               { allowEmptyPassthrough },
             )) {
+              yieldedToClient = true;
               yield chunk;
             }
             emit({
@@ -1999,7 +2005,19 @@ export class FallbackRouter {
             });
             return;
           } catch (err) {
-            if (signal?.aborted === true) throw err;
+            if (signal?.aborted === true || yieldedToClient) {
+              emit({
+                type: "route.failed",
+                at: nowIso(),
+                attempt: attemptNumber,
+                provider: route.provider,
+                model: route.model,
+                errorType: err instanceof Error ? err.name : "Unknown",
+                message: err instanceof Error ? err.message : String(err),
+                willFallback: false,
+              });
+              throw err;
+            }
             const actionInfo = resolveErrorAction(route.provider, err);
             if (actionInfo.action === "auto_fix_tool_responses") {
               if (targetProtocol === "responses") throw err;
@@ -2021,6 +2039,7 @@ export class FallbackRouter {
                   targetProtocol,
                   { allowEmptyPassthrough },
                 )) {
+                  yieldedToClient = true;
                   yield chunk;
                 }
                 emit({
@@ -2033,7 +2052,7 @@ export class FallbackRouter {
                 });
                 return;
               } catch (retryErr) {
-                if (signal?.aborted) throw retryErr;
+                if (signal?.aborted || yieldedToClient) throw retryErr;
                 const disposition = this.handleAttemptError(
                   retryErr,
                   route,

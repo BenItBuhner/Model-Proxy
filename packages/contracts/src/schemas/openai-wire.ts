@@ -36,7 +36,9 @@ export type OpenAIToolCall = z.infer<typeof OpenAIToolCall>;
 
 export const OpenAIMessage = z
   .object({
-    role: z.enum(["system", "user", "assistant", "tool"]),
+    // "developer" is OpenAI's successor to "system" for newer models; keep
+    // accepting both so requests using it are not rejected outright.
+    role: z.enum(["system", "developer", "user", "assistant", "tool"]),
     content: z
       .union([z.string(), z.array(OpenAIMessageContentPart), z.null()])
       .optional(),
@@ -50,7 +52,9 @@ export type OpenAIMessage = z.infer<typeof OpenAIMessage>;
 
 export const OpenAIToolDefinition = z
   .object({
-    type: z.literal("function"),
+    // "function" in practice, but rejecting custom/built-in types here would
+    // 400 the entire request; the upstream decides what it supports.
+    type: z.string(),
     function: z
       .object({
         name: z.string(),
