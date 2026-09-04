@@ -12,6 +12,7 @@ import {
   finalizeResponsesStream,
   responsesRequestToChat,
 } from "../format/responses.ts";
+import { createStreamConverter } from "../format/stream-converters.ts";
 import {
   forceRefreshAccountContext,
   isAccountCredential,
@@ -59,9 +60,6 @@ function buildContext(
   if (route.extraHeaders !== undefined) ctx.extraHeaders = route.extraHeaders;
   if (route.bufferPartialToolCalls !== undefined) {
     ctx.bufferPartialToolCalls = route.bufferPartialToolCalls;
-  }
-  if (route.smoothStreaming === true) {
-    ctx.smoothStreaming = true;
   }
   return ctx;
 }
@@ -726,23 +724,36 @@ export async function* executeStream({
       route,
     );
     const sourceStream = streamProvider(provider, sourceProtocol, converted, route, signal);
-    if (targetProtocol !== "responses" || sourceProtocol === "responses") {
+    if (sourceProtocol === targetProtocol) {
       yield* sourceStream;
       return;
     }
 
-    const state = createResponsesStreamState(
+    if (targetProtocol === "responses") {
+      const state = createResponsesStreamState(
+        typeof requestData["model"] === "string" ? requestData["model"] : route.model,
+        undefined,
+        Array.isArray(requestData["tools"]) ? requestData["tools"] : undefined,
+      );
+      for await (const chunk of sourceStream) {
+        const events = sourceProtocol === "anthropic"
+          ? anthropicStreamChunkToResponsesEvents(chunk, state)
+          : chatStreamChunkToResponsesEvents(chunk, state);
+        for (const event of events) yield event;
+      }
+      for (const event of finalizeResponsesStream(state)) yield event;
+      return;
+    }
+
+    const converter = createStreamConverter(
+      sourceProtocol,
+      targetProtocol,
       typeof requestData["model"] === "string" ? requestData["model"] : route.model,
-      undefined,
-      Array.isArray(requestData["tools"]) ? requestData["tools"] : undefined,
     );
     for await (const chunk of sourceStream) {
-      const events = sourceProtocol === "anthropic"
-        ? anthropicStreamChunkToResponsesEvents(chunk, state)
-        : chatStreamChunkToResponsesEvents(chunk, state);
-      for (const event of events) yield event;
+      for (const out of converter.convert(chunk)) yield out;
     }
-    for (const event of finalizeResponsesStream(state)) yield event;
+    for (const out of converter.finalize()) yield out;
   } catch (err) {
     if (err instanceof RouteExecutionError) throw err;
     throw wrapExecError(err, route);

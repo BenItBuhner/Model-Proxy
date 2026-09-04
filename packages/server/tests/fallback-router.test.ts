@@ -292,6 +292,39 @@ beforeAll(() => {
       ],
     }),
   );
+  writeFileSync(
+    join(tmpRoot, "models", "fake-vision-only-model.json"),
+    JSON.stringify({
+      logical_name: "fake-vision-only-model",
+      timeout_seconds: 5,
+      default_cooldown_seconds: 0,
+      model_routings: [
+        {
+          provider: "fake",
+          model: "fake-native-vision-backend",
+          wire_protocol: "openai",
+          capabilities: { multimodal: true },
+        },
+      ],
+    }),
+  );
+  writeFileSync(
+    join(tmpRoot, "models", "fake-text-fallback-vision.json"),
+    JSON.stringify({
+      logical_name: "fake-text-fallback-vision",
+      timeout_seconds: 5,
+      default_cooldown_seconds: 0,
+      model_routings: [
+        {
+          provider: "fake",
+          model: "fake-text-only-backend",
+          wire_protocol: "openai",
+          capabilities: { multimodal: false },
+        },
+      ],
+      fallback_model_routings: ["fake-vision-only-model"],
+    }),
+  );
 
   writeFileSync(
     join(tmpRoot, "models", "fake-transient-error-model.json"),
@@ -325,19 +358,6 @@ beforeAll(() => {
             },
           },
         },
-      ],
-    }),
-  );
-
-  writeFileSync(
-    join(tmpRoot, "models", "fake-smooth-model.json"),
-    JSON.stringify({
-      logical_name: "fake-smooth-model",
-      timeout_seconds: 5,
-      default_cooldown_seconds: 0,
-      smooth_streaming: true,
-      model_routings: [
-        { provider: "fake", model: "fake-backend", wire_protocol: "openai" },
       ],
     }),
   );
@@ -697,37 +717,6 @@ describe("FallbackRouter", () => {
     expect(FakeProvider.calls[0]?.args["reasoning_effort"]).toBe("high");
   });
 
-  test("plumbs smooth_streaming model config into the provider context", async () => {
-    FakeProvider.calls = [];
-    FakeProvider.responses = [
-      {
-        id: "chatcmpl-x",
-        object: "chat.completion",
-        choices: [
-          {
-            index: 0,
-            message: { role: "assistant", content: "hello" },
-            finish_reason: "stop",
-          },
-        ],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      },
-    ];
-
-    const router = makeRouter();
-    await router.callWithFallback({
-      logicalModel: "fake-smooth-model",
-      requestData: {
-        model: "fake-smooth-model",
-        messages: [{ role: "user", content: "hi" }],
-      },
-      targetProtocol: "openai",
-    });
-
-    expect(FakeProvider.calls.length).toBe(1);
-    expect(FakeProvider.calls[0]?.ctx.smoothStreaming).toBe(true);
-  });
-
   test("omits reasoning_effort from provider args when not requested", async () => {
     FakeProvider.calls = [];
     FakeProvider.responses = [
@@ -759,22 +748,33 @@ describe("FallbackRouter", () => {
     expect(FakeProvider.calls[0]?.args["reasoning_effort"]).toBeUndefined();
   });
 
-  test("skips non-multimodal routes for image requests", async () => {
+  test("describes images instead of switching mixed models to a vision route", async () => {
+    clearImageDescriptionCache();
     FakeProvider.calls = [];
     FakeProvider.responses = [
       {
-        id: "vision",
+        id: "vision-desc",
         object: "chat.completion",
         choices: [
           {
             index: 0,
-            message: { role: "assistant", content: "saw it" },
+            message: { role: "assistant", content: "a red square on a blue background" },
+            finish_reason: "stop",
+          },
+        ],
+      },
+      {
+        id: "text-answer",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "it is a red square" },
             finish_reason: "stop",
           },
         ],
       },
     ];
-
     const router = makeRouter();
     const result = await router.callWithFallback({
       logicalModel: "fake-capability-model",
@@ -792,11 +792,166 @@ describe("FallbackRouter", () => {
       },
       targetProtocol: "openai",
     });
-
-    expect(result["id"]).toBe("vision");
+    expect(result["id"]).toBe("text-answer");
     expect(FakeProvider.calls.map((call) => call.args.model)).toEqual([
       "fake-vision-backend",
+      "fake-text-only-backend",
     ]);
+    expect(JSON.stringify(FakeProvider.calls[0]?.args.messages ?? [])).toContain("data:image/png;base64,abc");
+    const textContent = JSON.stringify(FakeProvider.calls[1]?.args.messages ?? []);
+    expect(textContent).not.toContain("image_url");
+    expect(textContent).toContain("a red square on a blue background");
+  });
+  test("keeps the original text route on later turns and reuses cached descriptions", async () => {
+    clearImageDescriptionCache();
+    FakeProvider.calls = [];
+    FakeProvider.responses = [
+      {
+        id: "vision-desc",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "a red square on a blue background" },
+            finish_reason: "stop",
+          },
+        ],
+      },
+      {
+        id: "text-answer-1",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "it is a red square" },
+            finish_reason: "stop",
+          },
+        ],
+      },
+      {
+        id: "text-answer-2",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "still a red square" },
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ];
+    const imagePart = { type: "image_url", image_url: { url: "data:image/png;base64,stay-put" } };
+    const router = makeRouter();
+    await router.callWithFallback({
+      logicalModel: "fake-capability-model",
+      requestData: {
+        model: "fake-capability-model",
+        messages: [{ role: "user", content: [{ type: "text", text: "what is this?" }, imagePart] }],
+      },
+      targetProtocol: "openai",
+    });
+    await router.callWithFallback({
+      logicalModel: "fake-capability-model",
+      requestData: {
+        model: "fake-capability-model",
+        messages: [
+          { role: "user", content: [{ type: "text", text: "what is this?" }, imagePart] },
+          { role: "assistant", content: "it is a red square" },
+          { role: "user", content: "what color is the background?" },
+        ],
+      },
+      targetProtocol: "openai",
+    });
+    expect(FakeProvider.calls.map((call) => call.args.model)).toEqual([
+      "fake-vision-backend",
+      "fake-text-only-backend",
+      "fake-text-only-backend",
+    ]);
+    const followUp = JSON.stringify(FakeProvider.calls[2]?.args.messages ?? []);
+    expect(followUp).not.toContain("image_url");
+    expect(followUp).toContain("a red square on a blue background");
+  });
+  test("forwards images to a fully multimodal model without describing", async () => {
+    clearImageDescriptionCache();
+    FakeProvider.calls = [];
+    FakeProvider.responses = [
+      {
+        id: "native-vision",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "saw it" },
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ];
+    const router = makeRouter();
+    const result = await router.callWithFallback({
+      logicalModel: "fake-vision-only-model",
+      requestData: {
+        model: "fake-vision-only-model",
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "image_url", image_url: { url: "data:image/png;base64,abc" } }],
+          },
+        ],
+      },
+      targetProtocol: "openai",
+    });
+    expect(result["id"]).toBe("native-vision");
+    expect(FakeProvider.calls.map((call) => call.args.model)).toEqual(["fake-native-vision-backend"]);
+    expect(JSON.stringify(FakeProvider.calls[0]?.args.messages ?? [])).toContain("image_url");
+  });
+  test("does not answer via a vision fallback when the original model cannot see images", async () => {
+    clearImageDescriptionCache();
+    FakeProvider.calls = [];
+    FakeProvider.responses = [
+      {
+        id: "vision-desc",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "a red square on a blue background" },
+            finish_reason: "stop",
+          },
+        ],
+      },
+      {
+        id: "text-answer",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "it is a red square" },
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ];
+    const router = makeRouter();
+    const result = await router.callWithFallback({
+      logicalModel: "fake-text-fallback-vision",
+      requestData: {
+        model: "fake-text-fallback-vision",
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "image_url", image_url: { url: "data:image/png;base64,abc" } }],
+          },
+        ],
+      },
+      targetProtocol: "openai",
+    });
+    expect(result["id"]).toBe("text-answer");
+    expect(FakeProvider.calls.map((call) => call.args.model)).toEqual([
+      "fake-vision-backend",
+      "fake-text-only-backend",
+    ]);
+    expect(FakeProvider.calls.map((call) => call.args.model)).not.toContain("fake-native-vision-backend");
   });
 
   test("skips routes whose declared context window is too small", async () => {
@@ -1097,9 +1252,35 @@ describe("FallbackRouter", () => {
     expect(FakeProvider.calls[0]?.ctx.signal?.aborted).toBe(true);
   });
 
-  test("hedged routing filters non-multimodal candidates before launch", async () => {
+  test("hedged routing describes images then answers on the original text route", async () => {
+    clearImageDescriptionCache();
     FakeProvider.calls = [];
     FakeProvider.responses = [
+      {
+        id: "vision-desc",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "a red square on a blue background" },
+            finish_reason: "stop",
+          },
+        ],
+      },
+      {
+        delayMs: 50,
+        body: {
+          id: "hedged-text",
+          object: "chat.completion",
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "text" },
+              finish_reason: "stop",
+            },
+          ],
+        },
+      },
       {
         id: "hedged-vision",
         object: "chat.completion",
@@ -1112,7 +1293,6 @@ describe("FallbackRouter", () => {
         ],
       },
     ];
-
     const router = makeRouter({ random: () => 0.5 });
     const result = await router.callWithFallback({
       logicalModel: "fake-hedged-capability-model",
@@ -1121,19 +1301,21 @@ describe("FallbackRouter", () => {
         messages: [
           {
             role: "user",
-            content: [
-              { type: "image_url", image_url: { url: "data:image/png;base64,abc" } },
-            ],
+            content: [{ type: "image_url", image_url: { url: "data:image/png;base64,abc" } }],
           },
         ],
       },
       targetProtocol: "openai",
     });
-
-    expect(result["id"]).toBe("hedged-vision");
-    expect(FakeProvider.calls.map((call) => call.args.model)).toEqual([
-      "fake-hedged-vision",
-    ]);
+    expect(["hedged-text", "hedged-vision"]).toContain(String(result["id"]));
+    expect(FakeProvider.calls[0]?.args.model).toBe("fake-vision-backend");
+    expect(JSON.stringify(FakeProvider.calls[0]?.args.messages ?? [])).toContain("data:image/png;base64,abc");
+    const answerModels = FakeProvider.calls.slice(1).map((call) => call.args.model);
+    expect(answerModels).toContain("fake-hedged-text-only");
+    expect(answerModels).toContain("fake-hedged-vision");
+    for (const call of FakeProvider.calls.slice(1)) {
+      expect(JSON.stringify(call.args.messages ?? [])).not.toContain("image_url");
+    }
   });
 
   test("hedged routing includes a secondary route even when primary has many proxy variants", async () => {

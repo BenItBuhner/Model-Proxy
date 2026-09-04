@@ -205,6 +205,37 @@ describe("resolveContextWindow precedence", () => {
     expect(window).toBe(40960);
   });
 
+  test("route context_window overrides upstream-reported metadata", async () => {
+    writeModel("config-wins-model", {
+      timeout_seconds: 60,
+      default_cooldown_seconds: 60,
+      model_routings: [
+        {
+          provider: "groq",
+          model: "llama-upstream",
+          context_window: 1000000,
+        },
+      ],
+      fallback_model_routings: [],
+    });
+
+    fetchImpl = async (input) => {
+      const url = String(input);
+      if (url.includes("/models")) {
+        return new Response(
+          JSON.stringify({
+            data: [{ id: "llama-upstream", context_window: 200000 }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return originalFetch(input);
+    };
+
+    const window = await resolveContextWindow("config-wins-model");
+    expect(window).toBe(1000000);
+  });
+
   test("uses DEFAULT_CONTEXT_WINDOW env when no other source applies", async () => {
     writeModel("env-default-model", {
       timeout_seconds: 60,

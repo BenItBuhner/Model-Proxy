@@ -39,7 +39,7 @@ import {
   shouldPersistCompletion,
 } from "./route-helpers.ts";
 import { principal, requireAuth } from "../auth.ts";
-import { formatAnthropicError } from "../error-formatters.ts";
+import { formatAnthropicError, formatAnthropicUpstreamError } from "../error-formatters.ts";
 import {
   estimateRequestTokens,
   recordRequestAbort,
@@ -270,7 +270,7 @@ export function createAnthropicRoutes(): Hono {
                 const status = err instanceof RoutingError ? routingErrorStatus(err) : 500;
                 const message =
                   err instanceof Error ? err.message : `Streaming error: ${String(err)}`;
-                const errorPayload = formatAnthropicError(status, message);
+                const errorPayload = formatAnthropicUpstreamError(status, message);
                 safeEnqueue(`data: ${JSON.stringify(errorPayload)}\n\n`);
                 try {
                   controller.close();
@@ -358,13 +358,14 @@ export function createAnthropicRoutes(): Hono {
         if (err instanceof RoutingError) {
           const message = `All routes failed for model '${request.model}': ${err.summary()}`;
           const status = routingErrorStatus(err);
+          const errorPayload = formatAnthropicUpstreamError(status, message);
           recordRequestFinish({
             requestId,
             responseStatus: status,
             responseTimeMs: totalMs,
             errorMessage: message,
             errorType: err.name,
-            responseBody: formatAnthropicError(status, message),
+            responseBody: errorPayload,
           });
           emit({
             type: "request.finished",
@@ -374,17 +375,18 @@ export function createAnthropicRoutes(): Hono {
             errorType: err.name,
             errorMessage: message,
           });
-          return c.json(formatAnthropicError(status, message), status);
+          return c.json(errorPayload, status);
         }
         if (err instanceof RouteExecutionError) {
           const status = (err.statusCode ?? 502) as ContentfulStatusCode;
+          const errorPayload = formatAnthropicUpstreamError(status, err.message);
           recordRequestFinish({
             requestId,
             responseStatus: status,
             responseTimeMs: totalMs,
             errorMessage: err.message,
             errorType: err.name,
-            responseBody: formatAnthropicError(status, err.message),
+            responseBody: errorPayload,
           });
           emit({
             type: "request.finished",
@@ -394,7 +396,7 @@ export function createAnthropicRoutes(): Hono {
             errorType: err.name,
             errorMessage: err.message,
           });
-          return c.json(formatAnthropicError(status, err.message), status);
+          return c.json(errorPayload, status);
         }
         if (err instanceof EnforceValidationError) {
           const message = `Enforce tool-call validation failed after ${err.attempts} attempts: ${err.lastReason}`;
@@ -570,6 +572,9 @@ function handleAnthropicFusionStream(
       }, Math.max(1_000, Math.floor(STREAM_HEARTBEAT_MS / 2)));
 
       let status = 200;
+      // Nested run() so the emit/finish calls below still resolve the request
+      // context: start() runs after the route handler (and its ALS scope) exited.
+      await runWithRequestContext(requestId, async () => {
       try {
         for await (const event of fusionRouter.stream(fusionCtx)) {
           if (!safeEnqueue(event)) break;
@@ -636,6 +641,7 @@ function handleAnthropicFusionStream(
         finishEvent["fusionTrace"] = fusionCtx.streamFusionTrace;
       }
       emit(finishEvent as never);
+      });
     },
   });
 

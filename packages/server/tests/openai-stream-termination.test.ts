@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { providerConfigLoader } from "../src/config/provider-loader.ts";
 import { OpenAIProvider } from "../src/providers/openai-provider.ts";
-import type { ProviderCallContext } from "../src/providers/base.ts";
 
 const tmpRoot = join(tmpdir(), `mp-openai-stream-${process.pid}-${Date.now()}`);
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -84,12 +83,19 @@ describe("OpenAIProvider streaming termination", () => {
 
     expect(result).not.toBe("timeout");
     if (result !== "timeout") {
-      expect(result).toHaveLength(2);
+      expect(result).toHaveLength(3);
       const payload = JSON.parse(result[0]!.slice("data: ".length)) as Record<string, unknown>;
       expect(payload["id"]).toBe("chunk-1");
       expect(payload["object"]).toBe("chat.completion.chunk");
       expect(payload["model"]).toBe("stream-model");
-      expect(result[1]).toBe("data: [DONE]\n\n");
+      // The upstream never sent a finish_reason; the proxy synthesizes the
+      // terminal chunk before [DONE] so clients can close out the choice.
+      const terminal = JSON.parse(result[1]!.slice("data: ".length)) as Record<string, unknown>;
+      expect(terminal["id"]).toBe("chunk-1");
+      const terminalChoice = (terminal["choices"] as Array<Record<string, unknown>>)[0]!;
+      expect(terminalChoice["finish_reason"]).toBe("stop");
+      expect(terminalChoice["delta"]).toEqual({});
+      expect(result[2]).toBe("data: [DONE]\n\n");
     }
   });
 
@@ -190,7 +196,7 @@ describe("OpenAIProvider streaming termination", () => {
       ),
     );
 
-    expect(result).toHaveLength(2);
+    expect(result).toHaveLength(3);
     const payload = JSON.parse(result[0]!.slice("data: ".length)) as Record<string, unknown>;
     expect(typeof payload["id"]).toBe("string");
     expect(payload["object"]).toBe("chat.completion.chunk");
@@ -209,7 +215,11 @@ describe("OpenAIProvider streaming termination", () => {
     const fn = toolCalls[0]?.["function"] as Record<string, unknown>;
     expect(fn["name"]).toBe("noop");
     expect(fn["arguments"]).toBe("");
-    expect(result[1]).toBe("data: [DONE]\n\n");
+    // Synthesized terminal chunk: upstream never sent a finish_reason, and
+    // the stream carried tool calls.
+    const terminal = JSON.parse(result[1]!.slice("data: ".length)) as Record<string, unknown>;
+    expect(((terminal["choices"] as Array<Record<string, unknown>>)[0]!)["finish_reason"]).toBe("tool_calls");
+    expect(result[2]).toBe("data: [DONE]\n\n");
   });
 
   test("normalizes partial edit tool-call stream deltas", async () => {
@@ -745,13 +755,14 @@ describe("OpenAIProvider streaming termination", () => {
       ),
     );
 
-    expect(result).toHaveLength(2);
+    expect(result).toHaveLength(3);
     const payload = JSON.parse(result[0]!.slice("data: ".length)) as Record<string, unknown>;
     const choices = payload["choices"] as Array<Record<string, unknown>>;
     const delta = choices[0]?.["delta"] as Record<string, unknown>;
     expect(delta["content"]).toBe("edit complete");
     expect(delta["reasoning"]).toBe("");
     expect(delta["reasoning_content"]).toBe("");
+    expect(result[2]).toBe("data: [DONE]\n\n");
   });
 
   test("preserves reasoning fields when synthesizing SSE from JSON", async () => {
@@ -802,37 +813,25 @@ describe("OpenAIProvider streaming termination", () => {
     expect(delta["reasoning_content"]).toBe("json thinking");
     expect(result[1]).toBe("data: [DONE]\n\n");
   });
-});
 
-describe("OpenAIProvider stream smoothing", () => {
-  const SENTENCE =
-    "Streaming feels much smoother when bursts are re-chunked into steady pieces. ";
-
-  function burstServer(): ReturnType<typeof Bun.serve> {
+  test("repairs finish_reason stop to tool_calls when the stream emitted tool calls", async () => {
     const encoder = new TextEncoder();
-    return Bun.serve({
+    server = Bun.serve({
       port: 0,
       fetch() {
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
+            // Some providers emit "stop" even though tool calls streamed;
+            // strict clients (Cursor) treat that as end-of-turn and never
+            // execute the tools.
             controller.enqueue(
               encoder.encode(
-                'data: {"id":"c1","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}\n\n',
+                'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_edit","type":"function","function":{"name":"edit_file","arguments":"{\\"path\\":\\"a.ts\\"}"}}]}}]}\n\n',
               ),
             );
             controller.enqueue(
               encoder.encode(
-                `data: ${JSON.stringify({
-                  id: "c2",
-                  object: "chat.completion.chunk",
-                  model: "m",
-                  choices: [{ index: 0, delta: { content: SENTENCE }, finish_reason: null }],
-                })}\n\n`,
-              ),
-            );
-            controller.enqueue(
-              encoder.encode(
-                'data: {"id":"c3","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+                'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
               ),
             );
             controller.enqueue(encoder.encode("data: [DONE]\n\n"));
@@ -843,56 +842,185 @@ describe("OpenAIProvider stream smoothing", () => {
         });
       },
     });
-  }
 
-  function makeCtx(smooth: boolean): ProviderCallContext {
-    return {
-      apiKey: "test-key",
-      baseUrlOverride: undefined,
-      timeoutSeconds: 30,
-      signal: new AbortController().signal,
-      smoothStreaming: smooth,
-    };
-  }
-
-  function deltaOf(chunk: Record<string, unknown>): Record<string, unknown> {
-    return ((chunk["choices"] as Array<Record<string, unknown>>)[0]!["delta"] ??
-      {}) as Record<string, unknown>;
-  }
-
-  test("re-chunks content bursts into paced pieces with order preserved", async () => {
-    server = burstServer();
     writeProviderConfig(server.url.origin);
+
     const provider = new OpenAIProvider("stream-test");
-    const chunks = await collect(
+    const result = await collect(
       provider.streamOpenAI(
-        { model: "stream-model", messages: [{ role: "user", content: "hi" }], stream: true },
-        makeCtx(true),
+        {
+          model: "stream-model",
+          messages: [{ role: "user", content: "edit a file" }],
+          stream: true,
+        },
+        {
+          apiKey: "test-key",
+          baseUrlOverride: undefined,
+          timeoutSeconds: 30,
+          signal: undefined,
+        },
       ),
     );
-    expect(chunks[chunks.length - 1]).toBe("data: [DONE]\n\n");
-    const parsed = chunks
-      .slice(0, -1)
-      .map((c) => JSON.parse(c.slice("data: ".length)) as Record<string, unknown>);
-    const finishFrame = parsed[parsed.length - 1]!;
-    expect(finishFrame["choices"] && (finishFrame["choices"] as Array<Record<string, unknown>>)[0]!["finish_reason"]).toBe("stop");
-    const contentFrames = parsed.slice(0, -1);
-    expect(contentFrames.length).toBeGreaterThan(2);
-    expect(contentFrames.map((c) => deltaOf(c)["content"]).join("")).toBe(SENTENCE);
-    expect(deltaOf(contentFrames[0]!)["role"]).toBe("assistant");
+
+    const finalPayload = JSON.parse(result[1]!.slice("data: ".length)) as Record<string, unknown>;
+    const finalChoice = (finalPayload["choices"] as Array<Record<string, unknown>>)[0]!;
+    expect(finalChoice["finish_reason"]).toBe("tool_calls");
   });
 
-  test("stays 1:1 passthrough when smoothing is off", async () => {
-    server = burstServer();
+  test("preserves finish_reason stop when no tool calls streamed", async () => {
+    const encoder = new TextEncoder();
+    server = Bun.serve({
+      port: 0,
+      fetch() {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                'data: {"choices":[{"delta":{"content":"just text"}},{"delta":{},"finish_reason":"stop"}]}\n\n',
+              ),
+            );
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          },
+        });
+        return new Response(stream, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+    });
+
     writeProviderConfig(server.url.origin);
+
     const provider = new OpenAIProvider("stream-test");
-    const chunks = await collect(
+    const result = await collect(
       provider.streamOpenAI(
-        { model: "stream-model", messages: [{ role: "user", content: "hi" }], stream: true },
-        makeCtx(false),
+        {
+          model: "stream-model",
+          messages: [{ role: "user", content: "hi" }],
+          stream: true,
+        },
+        {
+          apiKey: "test-key",
+          baseUrlOverride: undefined,
+          timeoutSeconds: 30,
+          signal: undefined,
+        },
       ),
     );
-    expect(chunks).toHaveLength(4);
+
+    const finalPayload = JSON.parse(result[0]!.slice("data: ".length)) as Record<string, unknown>;
+    const finalChoice = (finalPayload["choices"] as Array<Record<string, unknown>>)[1]!;
+    expect(finalChoice["finish_reason"]).toBe("stop");
+  });
+
+  test("synthesizes terminal chunk and [DONE] when the upstream closes without [DONE]", async () => {
+    const encoder = new TextEncoder();
+    server = Bun.serve({
+      port: 0,
+      fetch() {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n',
+              ),
+            );
+            // Clean close, no [DONE], no finish_reason (vLLM-style upstreams).
+            controller.close();
+          },
+        });
+        return new Response(stream, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+    });
+
+    writeProviderConfig(server.url.origin);
+
+    const provider = new OpenAIProvider("stream-test");
+    const result = await collect(
+      provider.streamOpenAI(
+        {
+          model: "stream-model",
+          messages: [{ role: "user", content: "hi" }],
+          stream: true,
+        },
+        {
+          apiKey: "test-key",
+          baseUrlOverride: undefined,
+          timeoutSeconds: 30,
+          signal: undefined,
+        },
+      ),
+    );
+
+    expect(result).toHaveLength(3);
+    expect(result[2]).toBe("data: [DONE]\n\n");
+    const terminal = JSON.parse(result[1]!.slice("data: ".length)) as Record<string, unknown>;
+    const terminalChoice = (terminal["choices"] as Array<Record<string, unknown>>)[0]!;
+    expect(terminalChoice["finish_reason"]).toBe("stop");
+  });
+
+  test("translates rejected max_tokens to max_completion_tokens and retries once", async () => {
+    const encoder = new TextEncoder();
+    const requestBodies: Array<Record<string, unknown>> = [];
+    server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const body = (await req.json()) as Record<string, unknown>;
+        requestBodies.push(body);
+        if (body["max_tokens"] !== undefined) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                message:
+                  "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.",
+              },
+            }),
+            { status: 400, headers: { "content-type": "application/json" } },
+          );
+        }
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n',
+              ),
+            );
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          },
+        });
+        return new Response(stream, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+    });
+
+    writeProviderConfig(server.url.origin);
+
+    const provider = new OpenAIProvider("stream-test");
+    const result = await collect(
+      provider.streamOpenAI(
+        {
+          model: "gpt-5",
+          messages: [{ role: "user", content: "hi" }],
+          stream: true,
+          max_tokens: 1024,
+        },
+        {
+          apiKey: "test-key",
+          baseUrlOverride: undefined,
+          timeoutSeconds: 30,
+          signal: undefined,
+        },
+      ),
+    );
+
+    expect(requestBodies).toHaveLength(2);
+    expect(requestBodies[0]?.["max_tokens"]).toBe(1024);
+    expect("max_tokens" in (requestBodies[1] ?? {})).toBe(false);
+    expect(requestBodies[1]?.["max_completion_tokens"]).toBe(1024);
+    expect(result.join("")).toContain("ok");
+    expect(result.at(-1)).toBe("data: [DONE]\n\n");
   });
 });
 

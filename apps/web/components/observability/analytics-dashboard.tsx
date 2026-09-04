@@ -1,7 +1,7 @@
 "use client";
 
 import { MetricWidget } from "./metric-widget";
-import { formatCount, formatDurationMs, formatUsd } from "@/lib/format";
+import { formatCount, formatDurationMs, formatPercent, formatTokensPerSecond, formatUsd } from "@/lib/format";
 import type { AnalyticsSummary } from "@/lib/endpoints";
 
 export function AnalyticsDashboard({
@@ -11,11 +11,11 @@ export function AnalyticsDashboard({
 }): React.ReactElement {
   const cacheRate =
     summary !== undefined && summary.completedRequests > 0
-      ? Math.round((summary.cacheHits / summary.completedRequests) * 100)
+      ? summary.cacheHits / summary.completedRequests
       : 0;
 
   return (
-    <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+    <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-5">
       <MetricWidget
         label="Total tokens"
         value={formatCount(summary?.totalTokens)}
@@ -28,13 +28,18 @@ export function AnalyticsDashboard({
       />
       <MetricWidget
         label="Cache hits"
-        value={`${cacheRate}%`}
+        value={formatPercent(cacheRate)}
         sublabel={`${formatCount(summary?.cacheReadTokens)} cached · ${formatCount(summary?.matchedTokens)} matched`}
       />
       <MetricWidget
         label="Requests"
         value={formatCount(summary?.totalRequests)}
-        sublabel={`${formatCount(summary?.activeRequests)} running · p95 ${formatDurationMs(summary?.p95LatencyMs)}`}
+        sublabel={`${formatCount(summary?.activeRequests)} running · ${formatCount(summary?.failedRequests)} failed`}
+      />
+      <MetricWidget
+        label="Speed"
+        value={formatTokensPerSecond(summary?.avgTokensPerSecond)}
+        sublabel={`95% ${formatDurationMs(summary?.p95LatencyMs)} · Avg ${formatDurationMs(summary?.avgLatencyMs)}`}
       />
     </div>
   );

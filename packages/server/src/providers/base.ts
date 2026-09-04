@@ -29,8 +29,6 @@ export interface ProviderCallContext {
   extraHeaders?: Record<string, string>;
   /** Buffer streamed tool-call chunks until upstream emits a completed tool call. */
   bufferPartialToolCalls?: boolean;
-  /** Re-chunk content deltas into a smooth, paced stream (route opt-in or global env). */
-  smoothStreaming?: boolean;
 }
 
 export interface OpenAICallArgs {
