@@ -134,6 +134,17 @@ function main(): void {
   }
   lines.push(`${"ALL".padEnd(26)}${models.map((model) => acc(overall.get(model) ?? cell()).padStart(18)).join("")}`);
   lines.push("");
+  // Strict accuracy: a failed call is a wrong answer from the user's point of view.
+  const strict = (c: Cell): string => (c.n === 0 ? "   -   " : `${((c.correct / c.n) * 100).toFixed(0).padStart(3)}% ${String(c.correct).padStart(2)}/${String(c.n).padEnd(2)}`);
+  lines.push(`${"strict (fail = wrong)".padEnd(26)}${models.map((m) => m.padStart(18)).join("")}`);
+  lines.push("-".repeat(dheader.length));
+  for (const domain of domains) {
+    const m = byDomain.get(domain);
+    if (m === undefined) continue;
+    lines.push(`${domain.padEnd(26)}${models.map((model) => strict(m.get(model) ?? cell()).padStart(18)).join("")}`);
+  }
+  lines.push(`${"ALL".padEnd(26)}${models.map((model) => strict(overall.get(model) ?? cell()).padStart(18)).join("")}`);
+  lines.push("");
   lines.push(`${"latency p50 / p90 (s)".padEnd(26)}${models.map((model) => { const c = overall.get(model) ?? cell(); return `${(percentile(c.latencies, 50) / 1000).toFixed(0)} / ${(percentile(c.latencies, 90) / 1000).toFixed(0)}`.padStart(18); }).join("")}`);
   lines.push(`${"failed calls".padEnd(26)}${models.map((model) => String((overall.get(model) ?? cell()).failed).padStart(18)).join("")}`);
 
