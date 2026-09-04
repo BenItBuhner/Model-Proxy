@@ -16,6 +16,8 @@ import {
   parseVerdict,
 } from "../src/routing/fusion/kernel/waves.ts";
 import { decideEscalation, effortBandFor, escalationStrategyNote, parseRequestedKernelEffort, widthsFor } from "../src/routing/fusion/kernel/scheduler.ts";
+import { extractIoExamples } from "../src/routing/fusion/kernel/examples.ts";
+import { checkCandidateProgram, describeFailures, extractSolveProgram } from "../src/routing/fusion/kernel/execution.ts";
 import { ModelPool } from "../src/routing/fusion/kernel/model-pool.ts";
 import { computeWorkKey } from "../src/routing/fusion/kernel/work-cache.ts";
 import { assembleStream } from "../src/routing/fusion/kernel/assemble.ts";
@@ -340,6 +342,38 @@ describe("kernel wave parsing and consensus", () => {
     expect(note).not.toContain("Claims already refuted");
   });
 
+  it("execution oracle: extracts examples, runs candidate programs, flags memorization, and lets verified programs dominate the vote", async () => {
+    const task = "Infer the rule.\n\nTraining pair 1\nInput (2x2):\n[[1,2],\n [3,4]]\nOutput (2x2):\n[[1,3],\n [2,4]]\n\nTraining pair 2\nInput (1x3):\n[[5,6,7]]\nOutput (3x1):\n[[5],[6],[7]]\n\nTest input (2x3):\n[[1,2,3],[4,5,6]]";
+    const ex = extractIoExamples(task);
+    expect(ex?.examples).toHaveLength(2);
+    expect(ex?.tests).toEqual([[[1, 2, 3], [4, 5, 6]]]);
+    const raw = extractIoExamples(JSON.stringify({ train: [{ input: [[1]], output: [[2]] }], test: [{ input: [[3]] }] }));
+    expect(raw?.examples[0]?.output).toEqual([[2]]);
+
+    const transpose = extractSolveProgram("Rule: transpose.\n```python\ndef solve(grid):\n    return [list(r) for r in zip(*grid)]\n```\n");
+    expect(transpose).toBeDefined();
+    const ok = await checkCandidateProgram(transpose!, ex!.examples, ex!.tests, 5_000);
+    expect(ok.passed).toBe(2);
+    expect(ok.testOutputs).toEqual([[[1, 4], [2, 5], [3, 6]]]);
+    const wrong = await checkCandidateProgram("def solve(grid):\n    return grid\n", ex!.examples, ex!.tests, 5_000);
+    expect(wrong.passed).toBe(0);
+    expect(describeFailures(wrong)).toContain("0/2");
+    const crash = await checkCandidateProgram("def solve(grid):\n    raise ValueError('boom')\n", ex!.examples, [], 5_000);
+    expect(crash.failures[0]?.error).toContain("ValueError");
+
+    // Vote: a verified program outweighs two unverified declarations and is decisive alone.
+    const p = (id: string, family: string, finalAnswer: string, execution?: Proposal["execution"]): Proposal => ({ ...proposal(id, family, [`answer ${finalAnswer}`]), finalAnswer, execution });
+    const vote = buildAnswerVote(
+      [p("p1", "glm", "[[1,4],[2,5],[3,6]]", { passed: 2, total: 2, verified: true, testOutputs: [[[1, 4], [2, 5], [3, 6]]], feedback: "" }), p("p2", "kimi", "[[1,2,3]]"), p("p3", "deepseek", "[[1,2,3]]", { passed: 0, total: 2, verified: false, testOutputs: [], feedback: "0/2" })],
+      [],
+      { verifiedWeight: 3 },
+    );
+    expect(vote?.leader?.key).toBe(normalizeFinalAnswer("[[1,4],[2,5],[3,6]]"));
+    expect(vote?.leader?.executionVerified).toBe(1);
+    expect(vote?.leader?.weight).toBe(3);
+    expect(isDecisiveVote(vote, [])).toBe(true);
+  });
+
   it("never rejects a claim on verifier wording overlap when the verdict was not reject", () => {
     const consensus = buildConsensus(
       [proposal("p1", "glm", ["The final count is 750"])],
@@ -376,6 +410,10 @@ describe("kernel scheduler", () => {
     adaptive_verification: true,
     control_proposer: true,
     effort_by_domain: { math: "F3", science: "F3" },
+    execution_verification: true,
+    execution_timeout_seconds: 10,
+    execution_repair_rounds: 2,
+    execution_verified_weight: 3,
     worker_reasoning_effort: {},
     worker_timeout_seconds: 300,
     worker_idle_timeout_seconds: 60,

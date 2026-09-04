@@ -60,6 +60,10 @@ const kernelConfig: FusionConfig = {
     adaptive_verification: false,
     control_proposer: false,
     effort_by_domain: { math: "F3", science: "F3" },
+    execution_verification: false,
+    execution_timeout_seconds: 10,
+    execution_repair_rounds: 2,
+    execution_verified_weight: 3,
     worker_reasoning_effort: { verifier: "low" },
     worker_timeout_seconds: 30,
     worker_idle_timeout_seconds: 20,
@@ -527,6 +531,62 @@ describe("Fusion kernel engine", () => {
     // Truncated work is not cached: only glm + kimi proposals (+ intent + verifiers) were stored.
     const cachedProposals = getOperationalDb().query("SELECT model_routing FROM fusion_kernel_work WHERE kind = 'proposer'").all() as Array<{ model_routing: string }>;
     expect(cachedProposals.map((r) => r.model_routing).sort()).toEqual(["glm-5.3", "kimi-k3"]);
+  });
+
+  it("executes candidate programs against task examples: a verified program overrides its author's wrong declaration and leads the answer", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-exec-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the transformation and apply it to the test input. End with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],\n [3,4]]\nOutput (2x2):\n[[1,3],\n [2,4]]\n\nTraining pair 2\nInput (1x3):\n[[5,6,7]]\nOutput (3x1):\n[[5],[6],[7]]\n\nTest input (2x3):\n[[1,2,3],[4,5,6]]";
+    const proposalWithProgram = (family: string, program: string, declared: string) =>
+      [
+        `Proposal from ${family}: the rule transposes the grid.`,
+        "```python",
+        program,
+        "```",
+        "```json",
+        JSON.stringify({ answer_summary: `${family} says transpose`, final_answer: declared, key_claims: ["The rule is a transpose", "Rows become columns", "Answer follows"], assumptions: [], risks: [], confidence: 0.7 }),
+        "```",
+      ].join("\n");
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        const model = String(body["model"]);
+        // glm: correct program, WRONG declared answer (typo while copying); kimi: wrong program; deepseek: no program.
+        if (model === "up-glm") return streamResponse(model, [proposalWithProgram("glm", "def solve(grid):\n    return [list(r) for r in zip(*grid)]", "[[1,4],[2,5],[3,7]]")]);
+        if (model === "up-kimi") return streamResponse(model, [proposalWithProgram("kimi", "def solve(grid):\n    return grid[::-1]", "[[4,5,6],[1,2,3]]")]);
+        return streamResponse(model, [proposalText("deepseek", 1, "[[4,5,6],[1,2,3]]")]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-exec-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: false, adaptive_verification: true } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    const execution = trace["execution"] as Record<string, unknown>;
+    expect(execution["examples"]).toBe(2);
+    expect(execution["programs"]).toBe(2);
+    expect(execution["verified"]).toBe(1);
+    expect(execution["artifact"]).toBe(true);
+    // The verified program's test output leads the response and settles the search.
+    const content = result.content ?? "";
+    expect(content.startsWith("```json\n")).toBe(true);
+    expect(content).toContain("[[1,4],[2,5],[3,6]]");
+    expect(content).not.toContain("[[1,4],[2,5],[3,7]]");
+    expect(trace["settledAnswer"]).toBe("[[1,4],[2,5],[3,6]]");
+    // Proposers were told to ship a solve() program.
+    expect(captured.proposer.some((p) => allText(p["messages"] as unknown[]).includes("EXAMPLE-GROUNDED TASK"))).toBe(true);
+    // Synthesis was told not to reproduce the grid.
+    expect(allText(captured.synthesis[0]!["messages"] as unknown[])).toContain("EXECUTION-VERIFIED RESULT");
+    expect(captured.synthesis[0]!["reasoning_effort"]).toBe("low");
   });
 
   it("falls back to another family's synthesizer when the primary fails, and never leaks advisory notes", async () => {

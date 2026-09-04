@@ -241,8 +241,12 @@ function rawHasAnswerPrefix(raw: string, key: string): boolean {
  * synthesis to presentation mode regardless of how poorly prose claims cluster.
  */
 export function isDecisiveVote(vote: AnswerVote | undefined, verifications: Verification[]): boolean {
-  if (vote === undefined || vote.leader === undefined || vote.voters < 2) return false;
+  if (vote === undefined || vote.leader === undefined) return false;
   const leader = vote.leader;
+  // Execution is ground truth on the task's examples: a leader backed by a
+  // verified program is decisive unless a competing answer is also verified.
+  if (leader.executionVerified > 0) return !vote.entries.some((e) => e !== leader && e.executionVerified > 0);
+  if (vote.voters < 2) return false;
   const proposerFamilies = (e: AnswerVoteEntry) => e.families.filter((f) => !f.startsWith("verifier:"));
   const leaderFamilies = proposerFamilies(leader);
   if (vote.unanimous) {
@@ -280,12 +284,13 @@ export function isDecisiveVote(vote: AnswerVote | undefined, verifications: Veri
  * rejecting it subtracts 0.5 and (when it supplies a corrected answer) adds
  * +0.5 to the corrected one. Weights are clamped at 0.
  */
-export function buildAnswerVote(proposals: Proposal[], verifications: Verification[]): AnswerVote | undefined {
+export function buildAnswerVote(proposals: Proposal[], verifications: Verification[], options: { verifiedWeight?: number } = {}): AnswerVote | undefined {
+  const verifiedWeight = options.verifiedWeight ?? 3;
   const entries = new Map<string, AnswerVoteEntry>();
   const bump = (raw: string, weight: number, family?: string, judge?: { family: string; confirm: boolean }) => {
     const key = normalizeFinalAnswer(raw);
     if (key.length === 0) return;
-    const entry = entries.get(key) ?? { key, answer: raw, weight: 0, families: [], verifierConfirms: 0, verifierRejects: 0, confirmFamilies: [], rejectFamilies: [] };
+    const entry = entries.get(key) ?? { key, answer: raw, weight: 0, families: [], verifierConfirms: 0, verifierRejects: 0, confirmFamilies: [], rejectFamilies: [], executionVerified: 0 };
     entry.weight += weight;
     if (family !== undefined && !entry.families.includes(family)) entry.families.push(family);
     if (judge !== undefined) {
@@ -303,7 +308,14 @@ export function buildAnswerVote(proposals: Proposal[], verifications: Verificati
   for (const p of proposals) {
     if (!p.success || p.finalAnswer === undefined) continue;
     voters += 1;
-    bump(p.finalAnswer, 1, p.family);
+    // A program that reproduced every task example is ground-truth-anchored
+    // evidence; a program that failed its examples discounts the claim.
+    const weight = p.execution?.verified === true ? verifiedWeight : p.execution !== undefined && p.execution.total > 0 ? 0.5 : 1;
+    bump(p.finalAnswer, weight, p.family);
+    if (p.execution?.verified === true) {
+      const e = entries.get(normalizeFinalAnswer(p.finalAnswer));
+      if (e !== undefined) e.executionVerified += 1;
+    }
   }
   if (voters === 0) return undefined;
   const byId = new Map(proposals.map((p) => [p.id, p]));
@@ -334,6 +346,7 @@ export function buildAnswerVote(proposals: Proposal[], verifications: Verificati
     for (const f of source.families) if (!target.families.includes(f)) target.families.push(f);
     for (const f of source.confirmFamilies) if (!target.confirmFamilies.includes(f)) target.confirmFamilies.push(f);
     for (const f of source.rejectFamilies) if (!target.rejectFamilies.includes(f)) target.rejectFamilies.push(f);
+    target.executionVerified += source.executionVerified;
     entries.delete(longer);
   }
   const list = [...entries.values()].map((e) => ({ ...e, weight: Math.max(0, Math.round(e.weight * 100) / 100) })).sort((a, b) => b.weight - a.weight);
@@ -432,7 +445,7 @@ export function clusterClaims(proposals: Proposal[]): ClaimCluster[] {
  * counts accept=1, revise=0.5, reject=0 across successful verifications.
  * A single answering family cannot exceed 0.5 claim consensus by construction.
  */
-export function buildConsensus(proposals: Proposal[], verifications: Verification[]): Consensus {
+export function buildConsensus(proposals: Proposal[], verifications: Verification[], options: { verifiedWeight?: number } = {}): Consensus {
   const usable = proposals.filter((p) => p.success && (p.answer.length > 0 || p.claims.length > 0));
   const familiesAnswered = new Set(usable.map((p) => p.family)).size;
   const clusters = clusterClaims(usable);
@@ -518,7 +531,7 @@ export function buildConsensus(proposals: Proposal[], verifications: Verificatio
     successfulVerifications.flatMap((v) => v.issues).filter((issue) => !attachedIssues.has(issue)),
   )].slice(0, 12);
 
-  const answerVote = buildAnswerVote(usable, verifications);
+  const answerVote = buildAnswerVote(usable, verifications, options);
   let agreement: number;
   if (answerVote !== undefined && answerVote.voters >= 2) {
     // Short-answer tasks: the answer vote is the strongest signal of agreement.

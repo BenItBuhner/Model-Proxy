@@ -127,6 +127,10 @@ export interface Proposal {
   confidence: number | undefined;
   /** The single final answer when the task has one (number, option letter, yes/no, short phrase). */
   finalAnswer?: string;
+  /** Candidate program (python `solve`) when the task carries examples. */
+  program?: string;
+  /** Result of executing the program against the task's examples. */
+  execution?: { passed: number; total: number; verified: boolean; testOutputs: unknown[]; feedback: string; memorized?: boolean };
   raw: string;
   workKey: string;
   cached: boolean;
@@ -172,6 +176,8 @@ export interface AnswerVoteEntry {
   /** Families whose verifier confirmed / rejected this answer (for independence checks). */
   confirmFamilies: string[];
   rejectFamilies: string[];
+  /** Proposals whose program reproduced every task example and produced this answer. */
+  executionVerified: number;
 }
 
 export interface AnswerVote {

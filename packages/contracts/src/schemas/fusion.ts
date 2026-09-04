@@ -219,6 +219,19 @@ export const FusionKernelConfigSchema = z
      */
     control_proposer: z.boolean().default(true),
     /**
+     * Example-grounded execution verification. When a task ships input/output
+     * examples (ARC-style grids, labelled Input/Output pairs), proposers also
+     * emit a Python `solve()` program; the kernel executes it on every example
+     * and on the test inputs. A program reproducing all examples is verified
+     * evidence (dominant vote weight) and its test output becomes the final
+     * artifact; failures feed bounded repair waves. Runs model-written Python
+     * on the proxy host — enable only where that is acceptable.
+     */
+    execution_verification: z.boolean().default(false),
+    execution_timeout_seconds: z.number().int().min(1).max(120).default(10),
+    execution_repair_rounds: z.number().int().min(0).max(6).default(2),
+    execution_verified_weight: z.number().min(1).max(10).default(3),
+    /**
      * `reasoning_effort` forwarded to upstream thinking models per worker role
      * (omitted roles use the model default). Verifiers and intent extraction
      * are terse by contract, so lower effort there cuts latency without

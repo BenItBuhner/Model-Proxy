@@ -28,8 +28,28 @@ import type {
 import { assembleStream } from "./assemble.ts";
 import { compileCapsule, controlCapsule, type Capsule } from "./capsule.ts";
 import { INTENT_OBJECTIVE, deterministicIntent, mergeModelIntent } from "./intent.ts";
+import { extractIoExamples, type IoExample, type TaskExamples } from "./examples.ts";
+import { checkCandidateProgram, describeFailures, extractSolveProgram } from "./execution.ts";
+
+/** A program that embeds example outputs literally is a lookup table, not a rule. */
+function looksMemorized(program: string, examples: IoExample[]): boolean {
+  const compact = program.replace(/\s+/g, "");
+  return examples.some((e) => {
+    const out = JSON.stringify(e.output).replace(/\s+/g, "");
+    if (out.length < 12) return false;
+    if (compact.includes(out)) return true;
+    // Row-level literals of a grid output.
+    if (Array.isArray(e.output) && e.output.length >= 2) {
+      const rows = (e.output as unknown[]).map((r) => JSON.stringify(r).replace(/\s+/g, ""));
+      const hits = rows.filter((r) => r.length >= 8 && compact.includes(r)).length;
+      return hits >= Math.ceil(rows.length * 0.6);
+    }
+    return false;
+  });
+}
 import { hashMessages, truncateMiddle,
   findLastUserInstruction,
+  messageText,
 } from "./messages.ts";
 import { ModelPool, type PoolPick } from "./model-pool.ts";
 import {
@@ -110,6 +130,12 @@ interface KernelRun {
   lastVote?: AnswerVote;
   /** Normalized final answers confirmed by a pipelined verifier this run (enables evidence-based early settle). */
   confirmedAnswerKeys: Set<string>;
+  /** Input/output examples detected in the task (execution verification), if any. */
+  examples?: TaskExamples;
+  /** Verified program output on the test input(s), appended after synthesis as the final artifact. */
+  verifiedArtifact?: string;
+  /** Execution statistics for the trace. */
+  executionStats: { programs: number; verified: number; repairRounds: number };
   /** Wakes wave settlement loops when new evidence (e.g. an audit confirmation) arrives. */
   evidenceWaiters: Array<() => void>;
 }
@@ -216,6 +242,11 @@ export class FusionKernel {
       .filter((r) => r !== primary && !this.isFusionModel(r));
     const chain = [primary, ...alternates];
     const failFastCtx: FusionRequestContext = { ...ctx, kernelSynthesisFailFast: true };
+    // Execution-verified artifact leads the answer: a program that reproduced
+    // every task example produced it, and no model should hand-copy a grid.
+    if (run.verifiedArtifact !== undefined && ctx.clientProtocol !== "anthropic") {
+      yield* this.textAsStream(ctx, `\`\`\`json\n${run.verifiedArtifact}\n\`\`\`\n\n`, null);
+    }
     for (let i = 0; i < chain.length; i++) {
       const routing = chain[i]!;
       let yieldedContent = false;
@@ -258,13 +289,13 @@ export class FusionKernel {
   }
 
   /** Emit plain text as a single terminal chunk in the client's wire protocol. */
-  private async *textAsStream(ctx: FusionRequestContext, text: string): AsyncGenerator<string, void, unknown> {
+  private async *textAsStream(ctx: FusionRequestContext, text: string, finishReason: string | null = "stop"): AsyncGenerator<string, void, unknown> {
     const chunk = {
       id: `chatcmpl-kernel-${Date.now()}`,
       object: "chat.completion.chunk",
       created: Math.floor(Date.now() / 1000),
       model: ctx.logicalModel,
-      choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: "stop" }],
+      choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: finishReason }],
     };
     const openai = (async function* () { yield `data: ${JSON.stringify(chunk)}\n\n`; })();
     if (ctx.clientProtocol === "anthropic") yield* this.responseFuser.convertOpenAIStreamToAnthropic(ctx, openai);
@@ -509,6 +540,7 @@ export class FusionKernel {
       settledAnswer: undefined,
       confirmedAnswerKeys: new Set<string>(),
       evidenceWaiters: [],
+      executionStats: { programs: 0, verified: 0, repairRounds: 0 },
     };
   }
 
@@ -521,7 +553,7 @@ export class FusionKernel {
     // it. Waiting for more proposers would not change the decision, so this
     // applies even before the numeric quorum (e.g. when the remaining
     // proposers are all from one slow family).
-    const vote = buildAnswerVote(usable, []);
+    const vote = buildAnswerVote(usable, [], { verifiedWeight: run.kcfg.execution_verified_weight });
     if (vote?.leader !== undefined && vote.unanimous && vote.leader.families.length >= 2 && run.confirmedAnswerKeys.has(vote.leader.key)) return true;
     if (!quorumReached) return false;
     const pre = buildConsensus(usable, []);
@@ -820,6 +852,15 @@ export class FusionKernel {
     // carries a model-extracted intent (replay / rewind).
     const baseIntent = run.ledger.intent!;
     const proposerIntent = deterministicIntent(baseIntent.goal.split("\n(Kernel restatement:")[0]!, baseIntent.sourceMessageIndex);
+    // Example-grounded tasks: detect checkable input/output examples in the
+    // task text (the full message, not the truncated intent goal).
+    if (kcfg.execution_verification) {
+      const taskText = messageText(ctx.messages[baseIntent.sourceMessageIndex] ?? ctx.messages[ctx.messages.length - 1]);
+      run.examples = extractIoExamples(taskText);
+      if (run.examples !== undefined) {
+        await run.narrator.say(`Kernel: task carries ${run.examples.examples.length} input/output example(s); candidate programs will be executed against them.`);
+      }
+    }
     const intentPromise =
       kcfg.intent_extraction && baseIntent.extractedBy !== "model"
         ? this.extractIntent(ctx, run).catch((err) => log.warn("intent extraction failed; using deterministic intent", { error: String(err) }))
@@ -899,11 +940,18 @@ export class FusionKernel {
       proposals.push(...waveProposals);
       await intentPromise;
       const intent = run.ledger.intent ?? baseIntent;
+      // Example-grounded execution: run every candidate program against the
+      // task's examples; repair failing programs from concrete feedback.
+      if (run.examples !== undefined && kcfg.execution_verification) {
+        const repaired = await this.executionPhase(ctx, run, proposerIntent, searchLedger, waveProposals, wave, widths, taskStartIndex);
+        proposals.push(...repaired);
+        waveProposals.push(...repaired);
+      }
       if (verifyCandidates && this.remainingSearchMs(run) > 10_000) {
         const verifyStarted = performance.now();
         const candidates = waveProposals.filter((p) => p.success && (p.answer.length > 0 || p.claims.length > 0));
         const pending = candidates.filter((p) => !pipelinedCandidateIds.has(p.id));
-        const preVote = buildAnswerVote(waveProposals, []);
+        const preVote = buildAnswerVote(waveProposals, [], { verifiedWeight: kcfg.execution_verified_weight });
         const unanimousFamilies = preVote !== undefined && preVote.unanimous
           ? new Set(waveProposals.filter((p) => p.success && p.finalAnswer !== undefined).map((p) => p.family)).size
           : 0;
@@ -959,7 +1007,7 @@ export class FusionKernel {
           this.recordVerificationWave(ctx, run, waveVerifications, wave, Math.round(performance.now() - verifyStarted));
         }
       }
-      consensus = buildConsensus(proposals, verifications);
+      consensus = buildConsensus(proposals, verifications, { verifiedWeight: kcfg.execution_verified_weight });
       run.agreement = consensus.agreement;
       const acceptedNow = consensus.accepted.map((f) => f.statement);
       const novel = wave === 1 ? acceptedNow.length : novelClaimCount(previousAccepted, acceptedNow);
@@ -1040,7 +1088,7 @@ export class FusionKernel {
     }
 
     await intentPromise;
-    const finalConsensus = consensus ?? buildConsensus(proposals, verifications);
+    const finalConsensus = consensus ?? buildConsensus(proposals, verifications, { verifiedWeight: kcfg.execution_verified_weight });
     this.applyConsensusToLedger(run, finalConsensus, priorFindings);
     run.ledger.lastSearch = {
       at: nowIso(),
@@ -1059,7 +1107,7 @@ export class FusionKernel {
     // settled — the synthesizer presents the best derivation instead of
     // re-solving the task with deep thinking. Split votes keep full depth.
     const vote = finalConsensus.answerVote;
-    run.settledAnswer = isDecisiveVote(vote, verifications) ? vote?.leader?.answer : undefined;
+    run.settledAnswer = run.verifiedArtifact ?? (isDecisiveVote(vote, verifications) ? vote?.leader?.answer : undefined);
   }
 
   private async extractIntent(ctx: FusionRequestContext, run: KernelRun): Promise<void> {
@@ -1128,6 +1176,91 @@ export class FusionKernel {
     run.steps.push({ type: "intent", label: "Intent Extraction", startedAt: nowIso(), durationMs, modelRouting: routing, details: { cached: cached !== undefined, domains: run.ledger.intent?.domains } });
   }
 
+  /**
+   * Execute candidate programs against the task examples. Verified programs
+   * (all examples reproduced) override the proposal's declared final answer
+   * with their test output; when none verifies and budget remains, bounded
+   * repair waves feed the best failing program plus its concrete failures back
+   * to the reasoners. Returns any repair-wave proposals.
+   */
+  private async executionPhase(
+    ctx: FusionRequestContext,
+    run: KernelRun,
+    intent: NonNullable<KernelLedger["intent"]>,
+    ledgerView: KernelLedger,
+    waveProposals: Proposal[],
+    wave: number,
+    widths: WaveWidths,
+    taskStartIndex: number,
+  ): Promise<Proposal[]> {
+    const ex = run.examples!;
+    const timeoutMs = run.kcfg.execution_timeout_seconds * 1000;
+    const started = performance.now();
+    const check = async (p: Proposal): Promise<void> => {
+      const program = extractSolveProgram(p.raw);
+      if (program === undefined) return;
+      p.program = program;
+      run.executionStats.programs += 1;
+      const result = await checkCandidateProgram(program, ex.examples, ex.tests, timeoutMs);
+      const memorized = result.passed === result.total && looksMemorized(program, ex.examples);
+      const verified = result.passed === result.total && result.total > 0 && !memorized;
+      p.execution = { passed: result.passed, total: result.total, verified, testOutputs: result.testOutputs, feedback: describeFailures(result), memorized };
+      if (verified) {
+        run.executionStats.verified += 1;
+        if (result.testOutputs.length > 0) p.finalAnswer = JSON.stringify(result.testOutputs[0]);
+      }
+    };
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, execution: true, examples: ex.examples.length } });
+    await Promise.all(waveProposals.filter((p) => p.success).map(check));
+    const extra: Proposal[] = [];
+    let round = 0;
+    let pool = waveProposals;
+    while (
+      !pool.some((p) => p.execution?.verified === true) &&
+      pool.some((p) => p.program !== undefined) &&
+      round < run.kcfg.execution_repair_rounds &&
+      this.remainingSearchMs(run) > 90_000
+    ) {
+      round += 1;
+      run.executionStats.repairRounds += 1;
+      const best = [...pool].filter((p) => p.execution !== undefined).sort((a, b) => (b.execution!.passed - a.execution!.passed) || (a.execution!.memorized ? 1 : 0) - (b.execution!.memorized ? 1 : 0))[0]!;
+      const note = [
+        `EXECUTION FEEDBACK (repair round ${round}): no candidate program reproduces every example yet.`,
+        `Best program so far (${best.execution!.passed}/${best.execution!.total} examples${best.execution!.memorized ? ", but it hard-codes example outputs — that does not count" : ""}):`,
+        "```python",
+        truncateMiddle(best.program!, 6_000, "program trimmed"),
+        "```",
+        best.execution!.feedback,
+        "Diagnose why it fails on those examples, fix the rule (do not special-case examples), and return the complete corrected program plus its output on the test input.",
+      ].join("\n");
+      await run.narrator.say(`Kernel: no program reproduces all ${ex.examples.length} examples yet (best ${best.execution!.passed}/${best.execution!.total}); running repair round ${round} with concrete failures.`);
+      const repairs = await this.proposalWave(ctx, run, intent, ledgerView, wave, widths, taskStartIndex, note, "proposer", Math.min(widths.proposals, 3));
+      await Promise.all(repairs.filter((p) => p.success).map(check));
+      extra.push(...repairs);
+      pool = repairs;
+    }
+    const verified = [...waveProposals, ...extra].filter((p) => p.execution?.verified === true);
+    if (verified.length > 0 && run.verifiedArtifact === undefined) {
+      const outputs = verified.map((p) => p.finalAnswer).filter((a): a is string => a !== undefined);
+      const counts = new Map<string, number>();
+      for (const o of outputs) counts.set(o, (counts.get(o) ?? 0) + 1);
+      const winner = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+      if (winner !== undefined) run.verifiedArtifact = winner[0];
+    }
+    const durationMs = Math.round(performance.now() - started);
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "completed", durationMs, detail: { wave, execution: true, programs: run.executionStats.programs, verified: run.executionStats.verified, repairRounds: round } });
+    run.steps.push({ type: "verification", label: `Execution Check (wave ${wave})`, startedAt: nowIso(), durationMs, modelRouting: "python3", details: { programs: run.executionStats.programs, verified: run.executionStats.verified, repairRounds: round, examples: ex.examples.length } });
+    log.info("kernel execution phase", { conversationId: run.ledger.conversationId, wave, programs: run.executionStats.programs, verified: run.executionStats.verified, repairRounds: round, durationMs, artifact: run.verifiedArtifact !== undefined });
+    return extra;
+  }
+
+  /** Extra contract for tasks that ship checkable examples: the reasoner must also deliver a program the kernel can execute. */
+  private executionContract(run: KernelRun): string {
+    const ex = run.examples;
+    if (ex === undefined || !run.kcfg.execution_verification) return "";
+    return `\n\nEXAMPLE-GROUNDED TASK: the task provides ${ex.examples.length} input/output example(s)${ex.tests.length > 0 ? ` and ${ex.tests.length} test input(s)` : ""}. Besides your reasoning, write ONE complete Python 3 program in a fenced \`\`\`python block that defines \`def solve(x)\` mapping an example input (plain Python lists/ints/strings exactly as given) to its output. The kernel will EXECUTE it on every example and on the test input(s); only a program that reproduces every example counts as verified. Implement the general rule — never hard-code example outputs or look them up. Use only the standard library. Your final_answer must be the JSON output your program produces on the test input.`;
+  }
+
   private proposerObjective(intent: KernelLedger["intent"], role: WorkerRole): string {
     const goal = truncateMiddle(intent?.goal ?? "", 3_000, "goal trimmed");
     if (role === "repair") {
@@ -1162,7 +1295,7 @@ export class FusionKernel {
       return proposal;
     };
     const maxTokens = this.proposalMaxTokens(run);
-    const objective = this.proposerObjective(intent, role);
+    const objective = this.proposerObjective(intent, role) + (role === "proposer" ? this.executionContract(run) : "");
     const phase = role === "repair" ? "repair" : role === "checkpoint" ? "checkpoint" : "proposal";
     emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase, status: "started", detail: { wave, count: picks.length, routings: picks.map((p) => p.routing) } });
     emitFusion(ctx, {
@@ -1502,6 +1635,9 @@ export class FusionKernel {
     return [
       "KERNEL SYNTHESIS BRIEF",
       `- ${proposalCount} independent reasoner(s) across families [${run.pool.familyNames.join(", ")}] proposed answers over ${run.waves} wave(s); ${verificationCount} cross-family verifier(s) audited them. Agreement ${consensus.agreement.toFixed(2)} (threshold ${kcfg.agreement_threshold}).`,
+      run.verifiedArtifact !== undefined
+        ? `- EXECUTION-VERIFIED RESULT: a candidate program reproduced ALL ${run.examples?.examples.length ?? 0} of the task's input/output examples and was run on the test input. The kernel has ALREADY EMITTED that verified output as the JSON block at the start of the response. Your job is to explain the inferred rule and how it maps the test input to that output, concisely. Do NOT write out any output grid, array, or JSON yourself — no code fences at all.`
+        : "",
       "- Notes labelled VERIFIED CONSENSUS are supported by ≥2 model families or confirmed by a verifier: treat them as reliable and build the answer on them.",
       "- Notes labelled DISPUTED need your own judgment; resolve them explicitly and state residual uncertainty where it remains. REJECTED items were refuted: do not use them.",
       "- Candidate answers are full independent attempts ranked by verifier verdicts; merge the best specifics (exact values, code, steps) rather than averaging prose.",
@@ -1742,6 +1878,7 @@ export class FusionKernel {
       truncatedWorkers: run.truncatedWorkers,
       earlySettles: run.earlySettles,
       settledAnswer: run.settledAnswer,
+      execution: run.examples !== undefined ? { examples: run.examples.examples.length, ...run.executionStats, artifact: run.verifiedArtifact !== undefined } : undefined,
       vote: run.lastVote !== undefined
         ? { leader: run.lastVote.leader?.answer, share: run.lastVote.leaderShare, unanimous: run.lastVote.unanimous, voters: run.lastVote.voters, entries: run.lastVote.entries.slice(0, 4).map((e) => ({ answer: e.answer, weight: e.weight, families: e.families })) }
         : undefined,
