@@ -136,6 +136,10 @@ interface KernelRun {
   verifiedArtifact?: string;
   /** Execution statistics for the trace. */
   executionStats: { programs: number; verified: number; repairRounds: number };
+  /** Coarse phase marker for heartbeat logs. */
+  phase: string;
+  /** Run-level abort: the watchdog trips it when a search outlives its total budget. */
+  abort: AbortController;
   /** Wakes wave settlement loops when new evidence (e.g. an audit confirmation) arrives. */
   evidenceWaiters: Array<() => void>;
 }
@@ -562,6 +566,8 @@ export class FusionKernel {
       confirmedAnswerKeys: new Set<string>(),
       evidenceWaiters: [],
       executionStats: { programs: 0, verified: 0, repairRounds: 0 },
+      phase: "prepared",
+      abort: new AbortController(),
     };
   }
 
@@ -611,9 +617,12 @@ export class FusionKernel {
    * it is substantial (see runWorker), so quorum trades tail latency for at
    * most a truncated proposal — never for silent data loss.
    */
-  private launchJobs<T>(jobs: QuorumJob<T>[]): QuorumEntry<T>[] {
+  private launchJobs<T>(run: KernelRun, jobs: QuorumJob<T>[]): QuorumEntry<T>[] {
     return jobs.map((job) => {
       const controller = new AbortController();
+      // The run watchdog cancels every outstanding job at once.
+      if (run.abort.signal.aborted) controller.abort();
+      else run.abort.signal.addEventListener("abort", () => controller.abort(), { once: true });
       return { family: job.family, promise: job.start(controller.signal), cancel: () => controller.abort() };
     });
   }
@@ -624,7 +633,7 @@ export class FusionKernel {
     minFamilies: number,
     earlySettle?: (settled: T[], quorumReached: boolean) => boolean,
   ): Promise<T[]> {
-    return this.settleWithQuorum(run, this.launchJobs(jobs), minFamilies, earlySettle);
+    return this.settleWithQuorum(run, this.launchJobs(run, jobs), minFamilies, earlySettle);
   }
 
   /**
@@ -867,6 +876,26 @@ export class FusionKernel {
 
   private async runSearch(ctx: FusionRequestContext, run: KernelRun): Promise<void> {
     const { kcfg } = run;
+    // Heartbeat: where the run is and how many workers are in flight, so a
+    // silent stall is diagnosable from the log. Watchdog: a search that
+    // outlives its budget by five minutes aborts every worker and settles.
+    const heartbeat = setInterval(() => {
+      log.info("kernel heartbeat", { conversationId: run.ledger.conversationId, phase: run.phase, elapsedMs: Math.round(performance.now() - run.startedAt), remainingSearchMs: this.remainingSearchMs(run), inFlight: run.semaphore.inFlight, waves: run.waves, workItems: run.totalWork, programs: run.executionStats.programs, verified: run.executionStats.verified });
+    }, 60_000);
+    const watchdog = setTimeout(() => {
+      log.error("kernel run watchdog fired; aborting outstanding workers", { conversationId: run.ledger.conversationId, phase: run.phase, elapsedMs: Math.round(performance.now() - run.startedAt), inFlight: run.semaphore.inFlight });
+      run.abort.abort();
+    }, kcfg.search_deadline_seconds[run.band] * 1000 + 300_000);
+    try {
+      await this.runSearchInner(ctx, run);
+    } finally {
+      clearInterval(heartbeat);
+      clearTimeout(watchdog);
+    }
+  }
+
+  private async runSearchInner(ctx: FusionRequestContext, run: KernelRun): Promise<void> {
+    const { kcfg } = run;
     this.beginFreshTaskIfNeeded(ctx, run);
     const priorFindings = run.classification.kind === "clarification" ? run.ledger.findings : [];
     const taskStartIndex = run.ledger.taskStartIndex;
@@ -922,6 +951,7 @@ export class FusionKernel {
       // A departed client aborts every worker; escalating further would only burn upstream budget.
       if (ctx.signal?.aborted === true) break;
       run.waves = wave;
+      run.phase = `proposal wave ${wave}`;
       const verifyCandidates = widths.verifiersPerCandidate > 0;
       // Pipelined verification: each candidate's verifiers launch the moment
       // the candidate lands, overlapping with slower proposers.
@@ -977,11 +1007,13 @@ export class FusionKernel {
       // Example-grounded execution: run every candidate program against the
       // task's examples; repair failing programs from concrete feedback.
       if (run.examples !== undefined && kcfg.execution_verification) {
+        run.phase = `execution phase wave ${wave}`;
         const repaired = await this.executionPhase(ctx, run, proposerIntent, searchLedger, waveProposals, wave, widths, taskStartIndex);
         proposals.push(...repaired);
         waveProposals.push(...repaired);
       }
       if (verifyCandidates && this.remainingSearchMs(run) > 10_000) {
+        run.phase = `verification wave ${wave}`;
         const verifyStarted = performance.now();
         const candidates = waveProposals.filter((p) => p.success && (p.answer.length > 0 || p.claims.length > 0));
         const pending = candidates.filter((p) => !pipelinedCandidateIds.has(p.id));
@@ -1250,6 +1282,7 @@ export class FusionKernel {
     ) {
       round += 1;
       run.executionStats.repairRounds += 1;
+      run.phase = `execution repair round ${round} (wave ${wave})`;
       const best = [...waveProposals, ...extra].filter((p) => p.execution !== undefined).sort((a, b) => (b.execution!.passed - a.execution!.passed) || (a.execution!.memorized ? 1 : 0) - (b.execution!.memorized ? 1 : 0))[0];
       const note = best !== undefined
         ? [
@@ -1509,6 +1542,7 @@ export class FusionKernel {
     }
     const timeoutMs = this.workerTimeoutMs(run);
     return this.launchJobs<Verification>(
+      run,
       jobs.map(({ candidate, pick, id }) => ({
         family: pick.family,
         start: async (signal): Promise<Verification> => {
@@ -1836,6 +1870,7 @@ export class FusionKernel {
   // ── Shared helpers ────────────────────────────────────────────────
 
   private applySynthesisContext(ctx: FusionRequestContext, run: KernelRun): void {
+    run.phase = "synthesis";
     ctx.kernelSynthesisRouting = run.executorRouting;
     // Settled answers only need presentation (low). Contested searches get real
     // but bounded thinking (medium): the synthesizer resolves the split from
