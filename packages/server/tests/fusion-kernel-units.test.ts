@@ -414,6 +414,7 @@ describe("kernel scheduler", () => {
     execution_timeout_seconds: 10,
     execution_repair_rounds: 2,
     execution_verified_weight: 3,
+    synthesis_timeout_seconds: 600,
     worker_reasoning_effort: {},
     worker_timeout_seconds: 300,
     worker_idle_timeout_seconds: 60,

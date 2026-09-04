@@ -247,12 +247,20 @@ export class FusionKernel {
     if (run.verifiedArtifact !== undefined && ctx.clientProtocol !== "anthropic") {
       yield* this.textAsStream(ctx, `\`\`\`json\n${run.verifiedArtifact}\n\`\`\`\n\n`, null);
     }
+    // With a verified artifact already emitted, the explanation is a bonus:
+    // bound it tightly. Otherwise use the configured synthesis cap.
+    const timeoutMs = (run.verifiedArtifact !== undefined ? Math.min(300, run.kcfg.synthesis_timeout_seconds) : run.kcfg.synthesis_timeout_seconds) * 1000;
     for (let i = 0; i < chain.length; i++) {
       const routing = chain[i]!;
       let yieldedContent = false;
+      const controller = new AbortController();
+      const onAbort = () => controller.abort();
+      ctx.signal?.addEventListener("abort", onAbort, { once: true });
+      let timedOut = false;
+      const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
       try {
         const probe = { content: "", toolNames: [] as string[] };
-        for await (const chunk of this.responseFuser.fuseStream({ ...failFastCtx, kernelSynthesisRouting: routing }, run.notes)) {
+        for await (const chunk of this.responseFuser.fuseStream({ ...failFastCtx, kernelSynthesisRouting: routing, signal: controller.signal }, run.notes)) {
           this.observeAnswerChunk(ctx, chunk, probe);
           if (probe.content.length > 0 || probe.toolNames.length > 0) yieldedContent = true;
           yield chunk;
@@ -260,10 +268,19 @@ export class FusionKernel {
         if (routing !== primary) run.executorRouting = routing;
         return;
       } catch (err) {
-        log.warn("kernel synthesis failed", { routing, attempt: i + 1, of: chain.length, yieldedContent, error: String(err).slice(0, 300) });
+        if (ctx.signal?.aborted === true) throw err;
+        log.warn("kernel synthesis failed", { routing, attempt: i + 1, of: chain.length, yieldedContent, timedOut, error: String(err).slice(0, 300) });
         if (yieldedContent) break; // partial answer already visible: do not restart on another model
-        if (i + 1 < chain.length) await run.narrator.say(`Kernel: synthesis on ${routing} failed; switching to ${chain[i + 1]}.`);
+        if (i + 1 < chain.length) await run.narrator.say(`Kernel: synthesis on ${routing} ${timedOut ? "exceeded its time budget" : "failed"}; switching to ${chain[i + 1]}.`);
+      } finally {
+        clearTimeout(timer);
+        ctx.signal?.removeEventListener("abort", onAbort);
       }
+    }
+    if (run.verifiedArtifact !== undefined) {
+      // The verified output already leads the response; a brief note is enough.
+      yield* this.textAsStream(ctx, "The output above was produced by a program that reproduces every training example.");
+      return;
     }
     // Every synthesizer failed (or one failed mid-answer): fall back to the
     // strongest candidate the search produced rather than leaking notes.

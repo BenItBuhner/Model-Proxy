@@ -231,6 +231,8 @@ export const FusionKernelConfigSchema = z
     execution_timeout_seconds: z.number().int().min(1).max(120).default(10),
     execution_repair_rounds: z.number().int().min(0).max(6).default(2),
     execution_verified_weight: z.number().min(1).max(10).default(3),
+    /** Hard wall-clock cap per synthesis attempt; on expiry the kernel moves to the next synthesizer or the best verified candidate. */
+    synthesis_timeout_seconds: z.number().int().min(30).max(3600).default(600),
     /**
      * `reasoning_effort` forwarded to upstream thinking models per worker role
      * (omitted roles use the model default). Verifiers and intent extraction

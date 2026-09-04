@@ -64,6 +64,7 @@ const kernelConfig: FusionConfig = {
     execution_timeout_seconds: 10,
     execution_repair_rounds: 2,
     execution_verified_weight: 3,
+    synthesis_timeout_seconds: 600,
     worker_reasoning_effort: { verifier: "low" },
     worker_timeout_seconds: 30,
     worker_idle_timeout_seconds: 20,
