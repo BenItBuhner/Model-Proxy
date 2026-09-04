@@ -25,6 +25,8 @@ export interface ChatClientOptions {
    * on the non-streaming path, so leave this off for them.
    */
   stream?: boolean;
+  /** Extra JSON merged into the request body (e.g. fusion effort overrides). */
+  extraBody?: Record<string, unknown>;
 }
 
 interface Assembled {
@@ -126,6 +128,7 @@ export async function chatCall(
         ...(opts.reasoningEffort !== undefined ? { reasoning_effort: opts.reasoningEffort } : {}),
         ...(opts.maxTokens !== undefined ? { max_tokens: opts.maxTokens } : {}),
         ...(opts.stream === true ? { stream: true, stream_options: { include_usage: true } } : {}),
+        ...(opts.extraBody ?? {}),
       }),
       signal: controller.signal,
     });

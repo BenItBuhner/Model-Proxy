@@ -32,6 +32,8 @@ interface Args {
   onlyItems: Set<string> | undefined;
   /** Row label override for a single model (e.g. fusion-max@v2) so before/after runs coexist. */
   label: string | undefined;
+  /** Extra JSON merged into every request body (e.g. {"fusion":{"effort":"max"}}). */
+  extraBody: Record<string, unknown> | undefined;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -47,6 +49,7 @@ function parseArgs(argv: string[]): Args {
     retryFailed: false,
     onlyItems: undefined,
     label: undefined,
+    extraBody: undefined,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -67,6 +70,7 @@ function parseArgs(argv: string[]): Args {
       case "--retry-failed": args.retryFailed = true; break;
       case "--only": args.onlyItems = new Set(next().split(",").map((s) => s.trim()).filter(Boolean)); break;
       case "--label": args.label = next(); break;
+      case "--extra-body": args.extraBody = JSON.parse(next()) as Record<string, unknown>; break;
       default: throw new Error(`unknown arg ${a}`);
     }
   }
@@ -105,6 +109,7 @@ async function runOne(item: BenchItem, model: string, args: Args): Promise<Model
       // Always stream: base models for origin timeouts, fusion for client idle
       // timeouts (the kernel appends its trace summary as a trailing SSE comment).
       stream: true,
+      extraBody: args.extraBody,
     },
     model,
     item.messages,
