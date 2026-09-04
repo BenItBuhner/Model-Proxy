@@ -265,11 +265,14 @@ export class FusionKernel {
       yield* this.textAsStream(ctx, `\`\`\`json\n${run.verifiedArtifact}\n\`\`\`\n\n${explanation}`);
       return;
     }
-    // With a verified artifact already emitted, the explanation is a bonus:
-    // bound it tightly. Otherwise use the configured synthesis cap.
-    const timeoutMs = (run.verifiedArtifact !== undefined ? Math.min(300, run.kcfg.synthesis_timeout_seconds) : run.kcfg.synthesis_timeout_seconds) * 1000;
+    // The synthesis cap bounds the WHOLE chain: the first attempt gets the
+    // lion's share, fallbacks get what is left (never less than 45 s).
+    const synthesisDeadline = performance.now() + run.kcfg.synthesis_timeout_seconds * 1000;
     for (let i = 0; i < chain.length; i++) {
       const routing = chain[i]!;
+      const remaining = synthesisDeadline - performance.now();
+      if (i > 0 && remaining < 45_000) break;
+      const timeoutMs = Math.max(45_000, i === 0 ? Math.round(remaining * 0.6) : remaining);
       let yieldedContent = false;
       const controller = new AbortController();
       const onAbort = () => controller.abort();
