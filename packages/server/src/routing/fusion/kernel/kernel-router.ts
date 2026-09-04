@@ -714,6 +714,9 @@ export class FusionKernel {
   private proposerReasoningEffort(run: KernelRun, role: WorkerRole): "low" | "medium" | "high" | undefined {
     const configured = run.kcfg.worker_reasoning_effort[role === "intent" ? "proposer" : role];
     if (configured !== undefined) return configured;
+    // Example-grounded tasks are verified by execution: several quick program
+    // attempts plus repair beat one exhaustive think that never finishes.
+    if (role === "proposer" && run.examples !== undefined && run.kcfg.execution_verification) return "medium";
     if (role === "proposer" && run.band !== "F2") return "high";
     return undefined;
   }
@@ -1241,23 +1244,30 @@ export class FusionKernel {
     let pool = waveProposals;
     while (
       !pool.some((p) => p.execution?.verified === true) &&
-      pool.some((p) => p.program !== undefined) &&
+      run.verifiedArtifact === undefined &&
       round < run.kcfg.execution_repair_rounds &&
       this.remainingSearchMs(run) > 90_000
     ) {
       round += 1;
       run.executionStats.repairRounds += 1;
-      const best = [...pool].filter((p) => p.execution !== undefined).sort((a, b) => (b.execution!.passed - a.execution!.passed) || (a.execution!.memorized ? 1 : 0) - (b.execution!.memorized ? 1 : 0))[0]!;
-      const note = [
-        `EXECUTION FEEDBACK (repair round ${round}): no candidate program reproduces every example yet.`,
-        `Best program so far (${best.execution!.passed}/${best.execution!.total} examples${best.execution!.memorized ? ", but it hard-codes example outputs — that does not count" : ""}):`,
-        "```python",
-        truncateMiddle(best.program!, 6_000, "program trimmed"),
-        "```",
-        best.execution!.feedback,
-        "Diagnose why it fails on those examples, fix the rule (do not special-case examples), and return the complete corrected program plus its output on the test input.",
-      ].join("\n");
-      await run.narrator.say(`Kernel: no program reproduces all ${ex.examples.length} examples yet (best ${best.execution!.passed}/${best.execution!.total}); running repair round ${round} with concrete failures.`);
+      const best = [...waveProposals, ...extra].filter((p) => p.execution !== undefined).sort((a, b) => (b.execution!.passed - a.execution!.passed) || (a.execution!.memorized ? 1 : 0) - (b.execution!.memorized ? 1 : 0))[0];
+      const note = best !== undefined
+        ? [
+            `EXECUTION FEEDBACK (repair round ${round}): no candidate program reproduces every example yet.`,
+            `Best program so far (${best.execution!.passed}/${best.execution!.total} examples${best.execution!.memorized ? ", but it hard-codes example outputs — that does not count" : ""}):`,
+            "```python",
+            truncateMiddle(best.program!, 6_000, "program trimmed"),
+            "```",
+            best.execution!.feedback,
+            "Diagnose why it fails on those examples, fix the rule (do not special-case examples), and return the complete corrected program.",
+          ].join("\n")
+        : [
+            `EXECUTION FEEDBACK (repair round ${round}): no reasoner delivered a runnable program in time.`,
+            "Write the program FIRST — a complete `def solve(x)` in a ```python block — using the simplest rule consistent with all examples, then briefly justify it. Keep reasoning short; the kernel executes and checks the program for you.",
+          ].join("\n");
+      await run.narrator.say(best !== undefined
+        ? `Kernel: no program reproduces all ${ex.examples.length} examples yet (best ${best.execution!.passed}/${best.execution!.total}); running repair round ${round} with concrete failures.`
+        : `Kernel: no runnable program arrived in time; running repair round ${round} asking for the program first.`);
       const repairs = await this.proposalWave(ctx, run, intent, ledgerView, wave, widths, taskStartIndex, note, "proposer", Math.min(widths.proposals, 3));
       await Promise.all(repairs.filter((p) => p.success).map(check));
       extra.push(...repairs);

@@ -39,7 +39,7 @@
       "control_proposer": true,
       "execution_verification": true,
       "execution_timeout_seconds": 10,
-      "execution_repair_rounds": 2,
+      "execution_repair_rounds": 3,
       "execution_verified_weight": 3,
       "synthesis_timeout_seconds": 600,
       "worker_reasoning_effort": { "verifier": "low", "intent": "low", "repair": "medium", "checkpoint": "medium" },
