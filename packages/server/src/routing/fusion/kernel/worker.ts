@@ -190,7 +190,22 @@ export async function runWorker(
       principal: ctx.principal,
       extraHeaders: ctx.extraHeaders,
     });
-    for await (const raw of stream) {
+    // Consume chunk-by-chunk racing the worker's abort: a stream that ignores
+    // the abort signal must not hold the wave hostage. Aborting the controller
+    // (hard timeout, idle timeout, cancel, client abort) wakes this loop.
+    let wakeAbort: (() => void) | undefined;
+    const abortedPromise = new Promise<"aborted">((resolve) => { wakeAbort = () => resolve("aborted"); });
+    if (controller.signal.aborted) wakeAbort?.();
+    else controller.signal.addEventListener("abort", () => wakeAbort?.(), { once: true });
+    const iterator = stream[Symbol.asyncIterator]();
+    for (;;) {
+      const step = await Promise.race([iterator.next(), abortedPromise]);
+      if (step === "aborted") {
+        void iterator.return?.(undefined).catch(() => undefined);
+        throw new DOMException("worker aborted", "AbortError");
+      }
+      if (step.done) break;
+      const raw = step.value;
       for (const event of splitSseEvents(raw)) {
         const parsed = parseOpenAIDelta(event);
         if (parsed === null) continue;
