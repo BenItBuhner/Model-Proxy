@@ -44,7 +44,7 @@
       "synthesis_timeout_seconds": 600,
       "worker_reasoning_effort": { "verifier": "low", "intent": "low", "repair": "medium", "checkpoint": "medium" },
       "worker_timeout_seconds": 300,
-      "worker_timeout_seconds_by_band": { "F2": 300, "F3": 600, "max": 900 },
+      "worker_timeout_seconds_by_band": { "F2": 300, "F3": 900, "max": 1200 },
       "worker_idle_timeout_seconds": 180,
       "proposal_width": { "F2": 3, "F3": 4, "max": 6 },
       "verifiers_per_candidate": { "F2": 1, "F3": 1, "max": 2 },
@@ -54,7 +54,7 @@
       "max_concurrency": 8,
       "wave_quorum": 0.67,
       "straggler_grace_seconds": 15,
-      "search_deadline_seconds": { "F2": 300, "F3": 900, "max": 1800 },
+      "search_deadline_seconds": { "F2": 300, "F3": 1200, "max": 2400 },
       "intent_extraction": true,
       "continuation": {
         "enabled": true,
