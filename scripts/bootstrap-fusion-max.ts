@@ -110,7 +110,7 @@ function providerJson(args: Args): Record<string, unknown> {
     },
     authentication: { type: "bearer", header_name: "Authorization", header_format: "Bearer {api_key}" },
     request_config: {
-      timeout_seconds: 1200,
+      timeout_seconds: 300,
       max_retries: 2,
       retry_on_status: [429, 500, 502, 503, 504],
       default_parameters: {},
@@ -138,7 +138,7 @@ function modelJson(args: Args, model: UpstreamModel): Record<string, unknown> {
     model: upstream,
     wire_protocol: "openai",
     context_window: model.contextWindow,
-    timeout_seconds: 1200,
+    timeout_seconds: 300,
     cooldown_seconds: 10,
   });
   // The alt upstream is always a sequential fallback; it only runs in parallel
@@ -150,7 +150,7 @@ function modelJson(args: Args, model: UpstreamModel): Record<string, unknown> {
   const hedged = args.hedge && model.alt !== undefined;
   return {
     logical_name: model.logical,
-    timeout_seconds: 1200,
+    timeout_seconds: 300,
     default_cooldown_seconds: 10,
     context_window: model.contextWindow,
     model_routings: routes,
