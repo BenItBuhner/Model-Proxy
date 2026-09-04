@@ -35,7 +35,10 @@ interface Assembled {
   kernel?: Record<string, unknown>;
 }
 
-async function assembleSse(res: Response): Promise<Assembled> {
+/** Abort a stream that produced no DATA event for this long; keep-alive comments do not count. */
+const DATA_IDLE_MS = Number(process.env.KERNEL_BENCH_DATA_IDLE_MS ?? 600_000);
+
+async function assembleSse(res: Response, abort: AbortController): Promise<Assembled> {
   if (res.body === null) return { content: "", error: "empty body" };
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -44,6 +47,13 @@ async function assembleSse(res: Response): Promise<Assembled> {
   let usage: Assembled["usage"];
   let error: string | undefined;
   let kernel: Assembled["kernel"];
+  let lastData = performance.now();
+  const idleTimer = setInterval(() => {
+    if (performance.now() - lastData > DATA_IDLE_MS) {
+      error = `stream idle: no data event for ${Math.round(DATA_IDLE_MS / 1000)}s (zombie keep-alive)`;
+      abort.abort();
+    }
+  }, 5_000);
   const handle = (event: string) => {
     const comment = event.split("\n").find((l) => l.startsWith(": fusion-kernel "));
     if (comment !== undefined) {
@@ -57,6 +67,7 @@ async function assembleSse(res: Response): Promise<Assembled> {
     if (line === undefined) return;
     const payload = line.slice(5).trim();
     if (payload.length === 0 || payload === "[DONE]") return;
+    lastData = performance.now();
     let chunk: Record<string, unknown>;
     try {
       chunk = JSON.parse(payload) as Record<string, unknown>;
@@ -71,17 +82,23 @@ async function assembleSse(res: Response): Promise<Assembled> {
       usage = { promptTokens: Number(u["prompt_tokens"] ?? 0), completionTokens: Number(u["completion_tokens"] ?? 0), totalTokens: Number(u["total_tokens"] ?? 0) };
     }
   };
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let idx: number;
-    while ((idx = buf.indexOf("\n\n")) >= 0) {
-      handle(buf.slice(0, idx));
-      buf = buf.slice(idx + 2);
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        handle(buf.slice(0, idx));
+        buf = buf.slice(idx + 2);
+      }
     }
+    if (buf.trim().length > 0) handle(buf);
+  } catch (err) {
+    if (error === undefined) error = err instanceof Error ? err.message : String(err);
+  } finally {
+    clearInterval(idleTimer);
   }
-  if (buf.trim().length > 0) handle(buf);
   return { content, usage, error, kernel };
 }
 
@@ -113,7 +130,7 @@ export async function chatCall(
       signal: controller.signal,
     });
     if (opts.stream === true && res.ok && (res.headers.get("content-type") ?? "").includes("text/event-stream")) {
-      const assembled = await assembleSse(res);
+      const assembled = await assembleSse(res, controller);
       const latencyMs = Math.round(performance.now() - started);
       const ok = assembled.content.length > 0 && assembled.error === undefined;
       return { ok, content: assembled.content, latencyMs, usage: assembled.usage, kernel: assembled.kernel, error: ok ? undefined : (assembled.error ?? "empty stream"), status: res.status };

@@ -191,10 +191,12 @@ export async function runWorker(
       extraHeaders: ctx.extraHeaders,
     });
     for await (const raw of stream) {
-      lastActivity = performance.now();
       for (const event of splitSseEvents(raw)) {
         const parsed = parseOpenAIDelta(event);
         if (parsed === null) continue;
+        // Only real data events count as activity: proxies keep emitting
+        // `: keep-alive` comments after the generation behind them has died.
+        lastActivity = performance.now();
         if (parsed.hasToolCalls) attemptedToolCalls = true;
         if (parsed.finishReason !== undefined) finishReason = parsed.finishReason;
         if (parsed.content.length > 0) {
