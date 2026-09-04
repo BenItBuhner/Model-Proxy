@@ -563,6 +563,8 @@ export class FusionKernel {
 
   /** Proposal-wave early settle: ≥2 families already agree above threshold. */
   private proposalsAlreadyAgree(run: KernelRun, settled: Proposal[], quorumReached: boolean): boolean {
+    // A program that reproduced every task example settles the wave outright.
+    if (settled.some((p) => p.execution?.verified === true)) return true;
     const usable = settled.filter((p) => p.success && p.claims.length > 0);
     if (new Set(usable.map((p) => p.family)).size < 2) return false;
     // Evidence-based settle for short-answer tasks: two families share the
@@ -922,9 +924,15 @@ export class FusionKernel {
       // With adaptive verification only the FIRST landed candidate is verified
       // eagerly; the rest wait for the wave so the answer vote can decide how
       // much verification is worth buying.
-      const onProposal = verifyCandidates && kcfg.pipeline_verification
+      const onProposal = (verifyCandidates && kcfg.pipeline_verification) || (run.examples !== undefined && kcfg.execution_verification)
         ? async (proposal: Proposal): Promise<void> => {
             if (!proposal.success || (proposal.answer.length === 0 && proposal.claims.length === 0)) return;
+            // Pipelined execution check: the first verified program settles the wave.
+            if (run.examples !== undefined && kcfg.execution_verification) {
+              await this.checkProposalProgram(run, proposal);
+              if (run.verifiedArtifact !== undefined) return; // no LLM audit needed
+            }
+            if (!(verifyCandidates && kcfg.pipeline_verification)) return;
             if (this.remainingSearchMs(run) <= 10_000) return;
             if (kcfg.adaptive_verification && pipelinedCandidateIds.size >= 1) return;
             // Reserve the slot synchronously: hooks for simultaneously landing
@@ -976,7 +984,14 @@ export class FusionKernel {
           : 0;
         let toVerify: Proposal[];
         let skipVerification = false;
-        if (kcfg.adaptive_verification && unanimousFamilies >= 3) {
+        if (run.verifiedArtifact !== undefined) {
+          // Ground-truth execution beats any LLM audit: nothing to verify.
+          skipVerification = true;
+          toVerify = [];
+          for (const entry of pipelined) entry.cancel();
+          run.cancelledWorkers += pipelined.length;
+          emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "completed", durationMs: 0, detail: { wave, adaptive: "execution-verified", skipped: true } });
+        } else if (kcfg.adaptive_verification && unanimousFamilies >= 3) {
           // Three independent families reached the same final answer: that is
           // stronger evidence than one more audit; skip verification entirely.
           skipVerification = true;
@@ -1213,22 +1228,8 @@ export class FusionKernel {
     taskStartIndex: number,
   ): Promise<Proposal[]> {
     const ex = run.examples!;
-    const timeoutMs = run.kcfg.execution_timeout_seconds * 1000;
     const started = performance.now();
-    const check = async (p: Proposal): Promise<void> => {
-      const program = extractSolveProgram(p.raw);
-      if (program === undefined) return;
-      p.program = program;
-      run.executionStats.programs += 1;
-      const result = await checkCandidateProgram(program, ex.examples, ex.tests, timeoutMs);
-      const memorized = result.passed === result.total && looksMemorized(program, ex.examples);
-      const verified = result.passed === result.total && result.total > 0 && !memorized;
-      p.execution = { passed: result.passed, total: result.total, verified, testOutputs: result.testOutputs, feedback: describeFailures(result), memorized };
-      if (verified) {
-        run.executionStats.verified += 1;
-        if (result.testOutputs.length > 0) p.finalAnswer = JSON.stringify(result.testOutputs[0]);
-      }
-    };
+    const check = (p: Proposal) => this.checkProposalProgram(run, p);
     emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, execution: true, examples: ex.examples.length } });
     await Promise.all(waveProposals.filter((p) => p.success).map(check));
     const extra: Proposal[] = [];
@@ -1271,6 +1272,34 @@ export class FusionKernel {
     run.steps.push({ type: "verification", label: `Execution Check (wave ${wave})`, startedAt: nowIso(), durationMs, modelRouting: "python3", details: { programs: run.executionStats.programs, verified: run.executionStats.verified, repairRounds: round, examples: ex.examples.length } });
     log.info("kernel execution phase", { conversationId: run.ledger.conversationId, wave, programs: run.executionStats.programs, verified: run.executionStats.verified, repairRounds: round, durationMs, artifact: run.verifiedArtifact !== undefined });
     return extra;
+  }
+
+  /**
+   * Execute one proposal's program against the task examples (idempotent). A
+   * verified program overrides the declared final answer with its test output,
+   * becomes the run's artifact if none exists yet, and wakes the wave so it can
+   * settle immediately — execution is stronger evidence than any audit.
+   */
+  private async checkProposalProgram(run: KernelRun, p: Proposal): Promise<void> {
+    const ex = run.examples;
+    if (ex === undefined || p.execution !== undefined || !p.success) return;
+    const program = extractSolveProgram(p.raw);
+    if (program === undefined) return;
+    p.program = program;
+    run.executionStats.programs += 1;
+    const result = await checkCandidateProgram(program, ex.examples, ex.tests, run.kcfg.execution_timeout_seconds * 1000);
+    const memorized = result.passed === result.total && looksMemorized(program, ex.examples);
+    const verified = result.passed === result.total && result.total > 0 && !memorized;
+    p.execution = { passed: result.passed, total: result.total, verified, testOutputs: result.testOutputs, feedback: describeFailures(result), memorized };
+    if (verified) {
+      run.executionStats.verified += 1;
+      if (result.testOutputs.length > 0) {
+        p.finalAnswer = JSON.stringify(result.testOutputs[0]);
+        run.verifiedArtifact ??= p.finalAnswer;
+        run.confirmedAnswerKeys.add(normalizeFinalAnswer(p.finalAnswer));
+      }
+      notifyEvidence(run);
+    }
   }
 
   /** Extra contract for tasks that ship checkable examples: the reasoner must also deliver a program the kernel can execute. */

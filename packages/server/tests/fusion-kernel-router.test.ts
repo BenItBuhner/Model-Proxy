@@ -552,24 +552,35 @@ describe("Fusion kernel engine", () => {
         JSON.stringify({ answer_summary: `${family} says transpose`, final_answer: declared, key_claims: ["The rule is a transpose", "Rows become columns", "Answer follows"], assumptions: [], risks: [], confidence: 0.7 }),
         "```",
       ].join("\n");
+    let slowAborted = false;
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
       const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
       if (system.includes("independent expert reasoners")) {
         captured.proposer.push(body);
         const model = String(body["model"]);
-        // glm: correct program, WRONG declared answer (typo while copying); kimi: wrong program; deepseek: no program.
+        // glm: correct program, WRONG declared answer (typo while copying); kimi: wrong program;
+        // deepseek: a slow thinker that only emits keep-alives until aborted.
         if (model === "up-glm") return streamResponse(model, [proposalWithProgram("glm", "def solve(grid):\n    return [list(r) for r in zip(*grid)]", "[[1,4],[2,5],[3,7]]")]);
         if (model === "up-kimi") return streamResponse(model, [proposalWithProgram("kimi", "def solve(grid):\n    return grid[::-1]", "[[4,5,6],[1,2,3]]")]);
-        return streamResponse(model, [proposalText("deepseek", 1, "[[4,5,6],[1,2,3]]")]);
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            const tick = setInterval(() => controller.enqueue(new TextEncoder().encode(": keep-alive\n\n")), 100);
+            init?.signal?.addEventListener("abort", () => { clearInterval(tick); slowAborted = true; controller.error(new DOMException("Aborted", "AbortError")); }, { once: true });
+          },
+        });
+        return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
       }
       return baseFetch(input as string, init);
     }) as unknown as typeof fetch;
 
     const ctx = makeCtx([{ role: "user", content: task }], `conv-exec-${Date.now()}`);
-    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: false, adaptive_verification: true } };
+    // Quorum would need all three; grace is long: only the verified program can end the wave quickly.
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: false, adaptive_verification: true, wave_quorum: 1, straggler_grace_seconds: 30, worker_timeout_seconds: 120 } };
     delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const started = performance.now();
     const result = await router.route(ctx);
+    const elapsed = performance.now() - started;
 
     const trace = result.fusionTrace?.kernel as Record<string, unknown>;
     const execution = trace["execution"] as Record<string, unknown>;
@@ -577,6 +588,11 @@ describe("Fusion kernel engine", () => {
     expect(execution["programs"]).toBe(2);
     expect(execution["verified"]).toBe(1);
     expect(execution["artifact"]).toBe(true);
+    // The first verified program settled the wave: the slow thinker was cancelled, no LLM audit ran.
+    expect(slowAborted).toBe(true);
+    expect(elapsed).toBeLessThan(8_000);
+    expect(captured.verifier).toHaveLength(0);
+    expect(trace["earlySettles"] as number).toBeGreaterThanOrEqual(1);
     // The verified program's test output leads the response and settles the search.
     const content = result.content ?? "";
     expect(content.startsWith("```json\n")).toBe(true);
