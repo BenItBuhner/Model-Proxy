@@ -1,0 +1,110 @@
+kernel version trajectory (each label = kernel build; items attempted under that build)
+
+label                    items  graded  correct    acc  fail   p50 s   p90 s   max s  notes
+deepseek-v4-pro-0813        87      87       81    93%     0      16     141    1114  
+fusion-max@v1                7       6        5    83%     1     455    1200    1200  baseline kernel (no answer vote); 300s client cap killed long items
+fusion-max@v2                6       6        6   100%     0     327    1092    1092  +answer vote, +vote in consensus
+fusion-max@v3                5       5        5   100%     0      70     354     354  +vote-adaptive verification, high→F3, presentation synthesis
+fusion-max@v4                5       5        5   100%     0      57     333     333  +skip verification on 3-family unanimity, phase durations
+fusion-max@v5                7       7        6    86%     0      68     868     868  +evidence-based early settle (2 families + audit)
+fusion-max@v6                3       3        3   100%     0     295     329     329  +band-scaled worker timeouts (F3 600s), unhedged workers
+fusion-max@v7                2       2        2   100%     0     113     140     140  +SSE inactivity scales with route timeout, idle 180s
+fusion-max@v8               27      26       25    96%     1     120    1017    1800  +decisive unanimous votes floor agreement, merge sloppy declarations
+fusion-max@v9               32      31       30    97%     1      63     870    1800  +family-aware decisiveness, de-herded escalation, cleaned declarations, bounded synthesis
+fusion-max@v10               1       1        0     0%     0     749     749     749  +independent confirmations only from uncommitted family; F3 proposers at high effort
+fusion-max@v11               3       3        2    67%     0     474     524     524  +control proposer (verbatim task, no framing)
+fusion-max@v12               2       2        2   100%     0     161     898     898  +split non-decisive votes cap agreement (escalate)
+fusion-max@v13              23      23       23   100%     0     215     531    1621  +domain-aware effort floor (math/science → F3 on auto)
+fusion-max@v14              64      64       61    95%     0     137     890    1565  +synthesis fallback chain, audit retry, data-only idle detection (hard campaign build)
+glm-5.3                     87      86       81    94%     1      34     428    1800  
+kimi-k3                     87      81       72    89%     6      33     404     985  
+
+Per-item fusion outcomes by version (✓ correct, ✗ wrong, ! failed/timeout, · not run):
+item                             v1   v2   v3   v4   v5   v6   v7   v8   v9  v10  v11  v12  v13  v14   glm kimi dsk
+aime24:2024-I-13                  ✓    ✓    ✓    ✓    ✓    ·    ·    ✓    ✓    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+aime24:2024-I-7                   ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+aime24:2024-I-9                   ✓    ✓    ✓    ✓    ✓    ·    ·    ✓    ✓    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+aime24:2024-II-11                 ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓    ✓     ✓    ✗   ✓
+aime24:2024-II-12                 ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+aime24:2024-II-13                 ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+aime24:2024-II-14                 ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+aime24:2024-II-7                  ✓    ✓    ✓    ✓    ✓    ✓    ·    ✓    ✓    ·    ·    ·    ✓    ✓     ✓    ✗   ✓
+aime25:1                          ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+aime25:11                         ·    ·    ·    ·    ·    ·    ·    ✓    ✓    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+aime25:13                         ·    ·    ·    ·    ·    ·    ·    !    ✓    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+aime25:14                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     !    !   ✓
+aime25:26                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+aime25:4                          ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+aime25:8                          ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+aime25:9                          ✗    ·    ·    ·    ✓    ·    ·    ✓    ✓    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+aime26:13                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+aime26:16                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+aime26:18                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    !   ✓
+aime26:21                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+aime26:23                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    !   ✓
+aime26:25                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+aime26:28                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓    ✓     ✓    !   ✓
+aime26:6                          ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+hmmt26:22                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+hmmt26:30                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+humaneval:HumanEval-117           ·    ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·     ✓    ✓   ✓
+humaneval:HumanEval-134           ·    ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·     ✓    ✓   ✓
+humaneval:HumanEval-62            ·    ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·     ✓    ✓   ✓
+legalbench-contract_qa:33         ·    ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·     ✓    ✓   ✓
+legalbench-contract_qa:40         ·    ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·     ✓    ✓   ✓
+legalbench-contract_qa:49         ·    ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·     ✓    ✓   ✓
+legalbench-hearsay:17             ·    ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·     ✓    ✓   ✓
+legalbench-hearsay:6              ·    ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·     ✓    ✓   ✓
+legalbench-hearsay:7              ·    ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·     ✓    ✓   ✓
+math500:100                       ✓    ✓    ✓    ✓    ✓    ✓    ✓    ✓    ✓    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+math500:136                       ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+math500:142                       ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+math500:154                       !    ✓    ·    ·    ✗    ·    ·    ✓    !    ·    ·    ✓    ✓    ✓     ✓    ✗   ✗
+math500:170                       ✓    ✓    ✓    ✓    ✓    ✓    ✓    ✓    ✓    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+math500:190                       ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+math500:194                       ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+math500:82                        ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+mmlu-biology:2895                 ·    ·    ·    ·    ·    ·    ·    ✓    ✓    ·    ·    ·    ·    ·     ✓    ✓   ✓
+mmlu-biology:2896                 ·    ·    ·    ·    ·    ·    ·    ✓    ✓    ·    ·    ·    ·    ·     ✓    ✓   ✓
+mmlu-biology:2900                 ·    ·    ·    ·    ·    ·    ·    ✓    ✓    ·    ·    ·    ·    ·     ✓    ✓   ✓
+mmlu-business:140                 ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·    ·     ✓    ✓   ✓
+mmlu-business:144                 ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·    ·     ✓    ✓   ✓
+mmlu-business:168                 ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·    ·     ✓    ✓   ✓
+mmlu-chemistry:3544               ·    ·    ·    ·    ·    ·    ·    ✓    ✓    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+mmlu-chemistry:3574               ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✗   ✓
+mmlu-chemistry:3601               ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+mmlu-chemistry:3611               ·    ·    ·    ·    ·    ·    ·    ✓    ✓    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+mmlu-chemistry:3617               ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+mmlu-chemistry:3622               ·    ·    ·    ·    ·    ·    ·    ✓    ✓    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+mmlu-computer_science:10368       ·    ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·     ✓    ✓   ✓
+mmlu-computer_science:10424       ·    ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·     ✓    ✓   ✓
+mmlu-computer_science:10447       ·    ·    ·    ·    ·    ·    ·    ✓    ✓    ·    ·    ·    ·    ·     ✓    ✓   ✓
+mmlu-economics:6887               ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·    ·     ✓    ✓   ✓
+mmlu-economics:6926               ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·    ·     ✓    ✓   ✓
+mmlu-law:919                      ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ✓    ·    ·    ·     ✓    ✓   ✓
+mmlu-law:932                      ·    ·    ·    ·    ·    ·    ·    ✗    ✓    ·    ✓    ·    ·    ·     ✓    ✓   ✓
+mmlu-law:948                      ·    ·    ·    ·    ·    ·    ·    ✓    ✗    ✗    ✗    ✓    ·    ·     ✓    ✓   ✓
+mmlu-physics:9053                 ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    !   ✗
+mmlu-physics:9071                 ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✗     ✗    ✗   ✗
+mmlu-physics:9080                 ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+mmlu-physics:9090                 ·    ·    ·    ·    ·    ·    ·    ✓    ✓    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+mmlu-physics:9102                 ·    ·    ·    ·    ·    ·    ·    ✓    ✓    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+mmlu-physics:9108                 ·    ·    ·    ·    ·    ·    ·    ✓    ✓    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+supergpqa-biology:2a9dd54b4711    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✗     ✗    ✗   ✗
+supergpqa-biology:7ce68145b2e0    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✗   ✓
+supergpqa-biology:81072bae4f17    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✗     ✗    ✗   ✗
+supergpqa-biology:929cbd9e50d9    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+supergpqa-biology:bfb2b07347ca    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    !   ✓
+supergpqa-biology:f0a7db9e75a1    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+supergpqa-chemistry:42b9a4912699    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+supergpqa-chemistry:95d839b90090    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+supergpqa-chemistry:cb20d3895400    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✗    ✗   ✓
+supergpqa-chemistry:d2cbedfc6243    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+supergpqa-chemistry:ee472dadc691    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+supergpqa-chemistry:f9c3f2a1fd05    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+supergpqa-physics:291b20b80f20    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+supergpqa-physics:3dc8b2b87d4c    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+supergpqa-physics:7fce6e909447    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✗    ✓   ✗
+supergpqa-physics:90ce7a309052    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+supergpqa-physics:97adf61e212c    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+supergpqa-physics:b526da7c6f60    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓

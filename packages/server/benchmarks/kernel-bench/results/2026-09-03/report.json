@@ -1,0 +1,734 @@
+{
+  "generatedAt": "2026-09-04T04:56:49.133Z",
+  "commonItems": 87,
+  "models": [
+    "deepseek-v4-pro-0813",
+    "glm-5.3",
+    "kimi-k3",
+    "fusion-max"
+  ],
+  "bySuite": {
+    "math500": {
+      "deepseek-v4-pro-0813": {
+        "n": 8,
+        "correct": 7,
+        "failed": 0,
+        "p50Ms": 9071,
+        "p90Ms": 633867
+      },
+      "glm-5.3": {
+        "n": 8,
+        "correct": 8,
+        "failed": 0,
+        "p50Ms": 33773,
+        "p90Ms": 647251
+      },
+      "kimi-k3": {
+        "n": 8,
+        "correct": 7,
+        "failed": 0,
+        "p50Ms": 12724,
+        "p90Ms": 408383
+      },
+      "fusion-max": {
+        "n": 8,
+        "correct": 8,
+        "failed": 0,
+        "p50Ms": 63992,
+        "p90Ms": 1564900
+      }
+    },
+    "aime24": {
+      "deepseek-v4-pro-0813": {
+        "n": 8,
+        "correct": 8,
+        "failed": 0,
+        "p50Ms": 30828,
+        "p90Ms": 86908
+      },
+      "kimi-k3": {
+        "n": 8,
+        "correct": 6,
+        "failed": 0,
+        "p50Ms": 75148,
+        "p90Ms": 403556
+      },
+      "glm-5.3": {
+        "n": 8,
+        "correct": 8,
+        "failed": 0,
+        "p50Ms": 125748,
+        "p90Ms": 321367
+      },
+      "fusion-max": {
+        "n": 8,
+        "correct": 8,
+        "failed": 0,
+        "p50Ms": 217518,
+        "p90Ms": 531497
+      }
+    },
+    "aime25": {
+      "glm-5.3": {
+        "n": 8,
+        "correct": 7,
+        "failed": 1,
+        "p50Ms": 92025,
+        "p90Ms": 1800003
+      },
+      "kimi-k3": {
+        "n": 8,
+        "correct": 7,
+        "failed": 1,
+        "p50Ms": 75211,
+        "p90Ms": 627391
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 8,
+        "correct": 8,
+        "failed": 0,
+        "p50Ms": 34034,
+        "p90Ms": 440954
+      },
+      "fusion-max": {
+        "n": 8,
+        "correct": 8,
+        "failed": 0,
+        "p50Ms": 168054,
+        "p90Ms": 1015863
+      }
+    },
+    "mmlu-physics": {
+      "glm-5.3": {
+        "n": 6,
+        "correct": 5,
+        "failed": 0,
+        "p50Ms": 16396,
+        "p90Ms": 90334
+      },
+      "kimi-k3": {
+        "n": 6,
+        "correct": 4,
+        "failed": 1,
+        "p50Ms": 14900,
+        "p90Ms": 197158
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 6,
+        "correct": 4,
+        "failed": 0,
+        "p50Ms": 6354,
+        "p90Ms": 17799
+      },
+      "fusion-max": {
+        "n": 6,
+        "correct": 5,
+        "failed": 0,
+        "p50Ms": 29129,
+        "p90Ms": 241266
+      }
+    },
+    "mmlu-chemistry": {
+      "glm-5.3": {
+        "n": 6,
+        "correct": 6,
+        "failed": 0,
+        "p50Ms": 39081,
+        "p90Ms": 200762
+      },
+      "kimi-k3": {
+        "n": 6,
+        "correct": 5,
+        "failed": 0,
+        "p50Ms": 33176,
+        "p90Ms": 179591
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 6,
+        "correct": 6,
+        "failed": 0,
+        "p50Ms": 12486,
+        "p90Ms": 94589
+      },
+      "fusion-max": {
+        "n": 6,
+        "correct": 6,
+        "failed": 0,
+        "p50Ms": 58847,
+        "p90Ms": 349032
+      }
+    },
+    "mmlu-biology": {
+      "glm-5.3": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 15688,
+        "p90Ms": 33811
+      },
+      "kimi-k3": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 17819,
+        "p90Ms": 52361
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 7324,
+        "p90Ms": 10441
+      },
+      "fusion-max": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 60273,
+        "p90Ms": 327660
+      }
+    },
+    "mmlu-law": {
+      "glm-5.3": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 29966,
+        "p90Ms": 93645
+      },
+      "kimi-k3": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 24946,
+        "p90Ms": 164836
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 16159,
+        "p90Ms": 22194
+      },
+      "fusion-max": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 160575,
+        "p90Ms": 523930
+      }
+    },
+    "mmlu-business": {
+      "glm-5.3": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 13228,
+        "p90Ms": 162589
+      },
+      "kimi-k3": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 15964,
+        "p90Ms": 156129
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 8069,
+        "p90Ms": 97979
+      },
+      "fusion-max": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 303367,
+        "p90Ms": 328928
+      }
+    },
+    "mmlu-economics": {
+      "glm-5.3": {
+        "n": 2,
+        "correct": 2,
+        "failed": 0,
+        "p50Ms": 15715,
+        "p90Ms": 20492
+      },
+      "kimi-k3": {
+        "n": 2,
+        "correct": 2,
+        "failed": 0,
+        "p50Ms": 17911,
+        "p90Ms": 22851
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 2,
+        "correct": 2,
+        "failed": 0,
+        "p50Ms": 7678,
+        "p90Ms": 16249
+      },
+      "fusion-max": {
+        "n": 2,
+        "correct": 2,
+        "failed": 0,
+        "p50Ms": 78687,
+        "p90Ms": 118308
+      }
+    },
+    "mmlu-computer_science": {
+      "glm-5.3": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 10483,
+        "p90Ms": 12558
+      },
+      "kimi-k3": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 8819,
+        "p90Ms": 9729
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 7132,
+        "p90Ms": 9182
+      },
+      "fusion-max": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 55367,
+        "p90Ms": 63080
+      }
+    },
+    "humaneval": {
+      "glm-5.3": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 19983,
+        "p90Ms": 124099
+      },
+      "kimi-k3": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 27131,
+        "p90Ms": 62762
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 14144,
+        "p90Ms": 34723
+      },
+      "fusion-max": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 554427,
+        "p90Ms": 956941
+      }
+    },
+    "legalbench-hearsay": {
+      "glm-5.3": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 17818,
+        "p90Ms": 19510
+      },
+      "kimi-k3": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 22757,
+        "p90Ms": 58577
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 7886,
+        "p90Ms": 11910
+      },
+      "fusion-max": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 72581,
+        "p90Ms": 177728
+      }
+    },
+    "legalbench-contract_qa": {
+      "glm-5.3": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 5587,
+        "p90Ms": 8048
+      },
+      "kimi-k3": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 4415,
+        "p90Ms": 9247
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 4026,
+        "p90Ms": 4766
+      },
+      "fusion-max": {
+        "n": 3,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 37387,
+        "p90Ms": 50170
+      }
+    },
+    "aime26": {
+      "kimi-k3": {
+        "n": 8,
+        "correct": 5,
+        "failed": 3,
+        "p50Ms": 124099,
+        "p90Ms": 985292
+      },
+      "glm-5.3": {
+        "n": 8,
+        "correct": 8,
+        "failed": 0,
+        "p50Ms": 365476,
+        "p90Ms": 803738
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 8,
+        "correct": 8,
+        "failed": 0,
+        "p50Ms": 28192,
+        "p90Ms": 216691
+      },
+      "fusion-max": {
+        "n": 8,
+        "correct": 8,
+        "failed": 0,
+        "p50Ms": 213593,
+        "p90Ms": 1117667
+      }
+    },
+    "hmmt26": {
+      "glm-5.3": {
+        "n": 2,
+        "correct": 2,
+        "failed": 0,
+        "p50Ms": 50191,
+        "p90Ms": 182944
+      },
+      "kimi-k3": {
+        "n": 2,
+        "correct": 2,
+        "failed": 0,
+        "p50Ms": 220831,
+        "p90Ms": 319049
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 2,
+        "correct": 2,
+        "failed": 0,
+        "p50Ms": 21111,
+        "p90Ms": 41140
+      },
+      "fusion-max": {
+        "n": 2,
+        "correct": 2,
+        "failed": 0,
+        "p50Ms": 293258,
+        "p90Ms": 684030
+      }
+    },
+    "supergpqa-physics": {
+      "glm-5.3": {
+        "n": 6,
+        "correct": 5,
+        "failed": 0,
+        "p50Ms": 13120,
+        "p90Ms": 418396
+      },
+      "kimi-k3": {
+        "n": 6,
+        "correct": 6,
+        "failed": 0,
+        "p50Ms": 18578,
+        "p90Ms": 328733
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 6,
+        "correct": 5,
+        "failed": 0,
+        "p50Ms": 40598,
+        "p90Ms": 446699
+      },
+      "fusion-max": {
+        "n": 6,
+        "correct": 6,
+        "failed": 0,
+        "p50Ms": 99683,
+        "p90Ms": 935548
+      }
+    },
+    "supergpqa-chemistry": {
+      "glm-5.3": {
+        "n": 6,
+        "correct": 5,
+        "failed": 0,
+        "p50Ms": 36598,
+        "p90Ms": 551368
+      },
+      "kimi-k3": {
+        "n": 6,
+        "correct": 5,
+        "failed": 0,
+        "p50Ms": 91879,
+        "p90Ms": 429986
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 6,
+        "correct": 6,
+        "failed": 0,
+        "p50Ms": 31246,
+        "p90Ms": 1113509
+      },
+      "fusion-max": {
+        "n": 6,
+        "correct": 6,
+        "failed": 0,
+        "p50Ms": 120818,
+        "p90Ms": 892982
+      }
+    },
+    "supergpqa-biology": {
+      "glm-5.3": {
+        "n": 6,
+        "correct": 4,
+        "failed": 0,
+        "p50Ms": 28479,
+        "p90Ms": 678396
+      },
+      "kimi-k3": {
+        "n": 6,
+        "correct": 2,
+        "failed": 1,
+        "p50Ms": 18195,
+        "p90Ms": 515298
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 6,
+        "correct": 4,
+        "failed": 0,
+        "p50Ms": 60828,
+        "p90Ms": 175493
+      },
+      "fusion-max": {
+        "n": 6,
+        "correct": 4,
+        "failed": 0,
+        "p50Ms": 94394,
+        "p90Ms": 563214
+      }
+    }
+  },
+  "byDomain": {
+    "math": {
+      "deepseek-v4-pro-0813": {
+        "n": 34,
+        "correct": 33,
+        "failed": 0,
+        "p50Ms": 28192,
+        "p90Ms": 212996
+      },
+      "glm-5.3": {
+        "n": 34,
+        "correct": 33,
+        "failed": 1,
+        "p50Ms": 92025,
+        "p90Ms": 647251
+      },
+      "kimi-k3": {
+        "n": 34,
+        "correct": 27,
+        "failed": 4,
+        "p50Ms": 75211,
+        "p90Ms": 416782
+      },
+      "fusion-max": {
+        "n": 34,
+        "correct": 34,
+        "failed": 0,
+        "p50Ms": 215188,
+        "p90Ms": 936831
+      }
+    },
+    "science": {
+      "glm-5.3": {
+        "n": 33,
+        "correct": 28,
+        "failed": 0,
+        "p50Ms": 28479,
+        "p90Ms": 360834
+      },
+      "kimi-k3": {
+        "n": 33,
+        "correct": 25,
+        "failed": 2,
+        "p50Ms": 31040,
+        "p90Ms": 308231
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 33,
+        "correct": 28,
+        "failed": 0,
+        "p50Ms": 18864,
+        "p90Ms": 175493
+      },
+      "fusion-max": {
+        "n": 33,
+        "correct": 30,
+        "failed": 0,
+        "p50Ms": 98550,
+        "p90Ms": 349032
+      }
+    },
+    "legal": {
+      "glm-5.3": {
+        "n": 9,
+        "correct": 9,
+        "failed": 0,
+        "p50Ms": 17818,
+        "p90Ms": 93645
+      },
+      "kimi-k3": {
+        "n": 9,
+        "correct": 9,
+        "failed": 0,
+        "p50Ms": 21129,
+        "p90Ms": 164836
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 9,
+        "correct": 9,
+        "failed": 0,
+        "p50Ms": 7886,
+        "p90Ms": 22194
+      },
+      "fusion-max": {
+        "n": 9,
+        "correct": 9,
+        "failed": 0,
+        "p50Ms": 72581,
+        "p90Ms": 523930
+      }
+    },
+    "finance": {
+      "glm-5.3": {
+        "n": 5,
+        "correct": 5,
+        "failed": 0,
+        "p50Ms": 15715,
+        "p90Ms": 162589
+      },
+      "kimi-k3": {
+        "n": 5,
+        "correct": 5,
+        "failed": 0,
+        "p50Ms": 17911,
+        "p90Ms": 156129
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 5,
+        "correct": 5,
+        "failed": 0,
+        "p50Ms": 8069,
+        "p90Ms": 97979
+      },
+      "fusion-max": {
+        "n": 5,
+        "correct": 5,
+        "failed": 0,
+        "p50Ms": 118308,
+        "p90Ms": 328928
+      }
+    },
+    "swe": {
+      "glm-5.3": {
+        "n": 6,
+        "correct": 6,
+        "failed": 0,
+        "p50Ms": 12558,
+        "p90Ms": 124099
+      },
+      "kimi-k3": {
+        "n": 6,
+        "correct": 6,
+        "failed": 0,
+        "p50Ms": 9729,
+        "p90Ms": 62762
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 6,
+        "correct": 6,
+        "failed": 0,
+        "p50Ms": 7132,
+        "p90Ms": 34723
+      },
+      "fusion-max": {
+        "n": 6,
+        "correct": 6,
+        "failed": 0,
+        "p50Ms": 63080,
+        "p90Ms": 956941
+      }
+    }
+  },
+  "overall": {
+    "deepseek-v4-pro-0813": {
+      "n": 87,
+      "correct": 81,
+      "failed": 0,
+      "p50Ms": 16496,
+      "p90Ms": 141167
+    },
+    "glm-5.3": {
+      "n": 87,
+      "correct": 81,
+      "failed": 1,
+      "p50Ms": 33811,
+      "p90Ms": 428157
+    },
+    "kimi-k3": {
+      "n": 87,
+      "correct": 72,
+      "failed": 6,
+      "p50Ms": 33081,
+      "p90Ms": 403556
+    },
+    "fusion-max": {
+      "n": 87,
+      "correct": 84,
+      "failed": 0,
+      "p50Ms": 122868,
+      "p90Ms": 684030
+    }
+  }
+}
