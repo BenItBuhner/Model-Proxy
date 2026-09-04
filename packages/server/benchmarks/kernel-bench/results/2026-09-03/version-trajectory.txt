@@ -1,7 +1,7 @@
 kernel version trajectory (each label = kernel build; items attempted under that build)
 
 label                    items  graded  correct    acc  fail   p50 s   p90 s   max s  notes
-deepseek-v4-pro-0813        87      87       81    93%     0      16     141    1114  
+deepseek-v4-pro-0813        91      91       83    91%     0      18     175    1198  
 fusion-max@v1                7       6        5    83%     1     455    1200    1200  baseline kernel (no answer vote); 300s client cap killed long items
 fusion-max@v2                6       6        6   100%     0     327    1092    1092  +answer vote, +vote in consensus
 fusion-max@v3                5       5        5   100%     0      70     354     354  +vote-adaptive verification, high→F3, presentation synthesis
@@ -15,9 +15,9 @@ fusion-max@v10               1       1        0     0%     0     749     749    
 fusion-max@v11               3       3        2    67%     0     474     524     524  +control proposer (verbatim task, no framing)
 fusion-max@v12               2       2        2   100%     0     161     898     898  +split non-decisive votes cap agreement (escalate)
 fusion-max@v13              23      23       23   100%     0     215     531    1621  +domain-aware effort floor (math/science → F3 on auto)
-fusion-max@v14              64      64       61    95%     0     137     890    1565  +synthesis fallback chain, audit retry, data-only idle detection (hard campaign build)
-glm-5.3                     87      86       81    94%     1      34     428    1800  
-kimi-k3                     87      81       72    89%     6      33     404     985  
+fusion-max@v14              68      67       64    96%     1     138     936    1800  +synthesis fallback chain, audit retry, data-only idle detection (hard campaign build)
+glm-5.3                     91      88       83    94%     3      37     456    1800  
+kimi-k3                     91      88       79    90%     3      42     412    1800  
 
 Per-item fusion outcomes by version (✓ correct, ✗ wrong, ! failed/timeout, · not run):
 item                             v1   v2   v3   v4   v5   v6   v7   v8   v9  v10  v11  v12  v13  v14   glm kimi dsk
@@ -39,14 +39,18 @@ aime25:8                          ·    ·    ·    ·    ·    ·    ·    ·  
 aime25:9                          ✗    ·    ·    ·    ✓    ·    ·    ✓    ✓    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
 aime26:13                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
 aime26:16                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
-aime26:18                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    !   ✓
+aime26:18                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
 aime26:21                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
-aime26:23                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    !   ✓
+aime26:23                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
 aime26:25                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
-aime26:28                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓    ✓     ✓    !   ✓
+aime26:28                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
 aime26:6                          ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓    ✓     ✓    ✓   ✓
+hmmt26:17                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    !     !    !   ✗
+hmmt26:18                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     !    ✓   ✗
+hmmt26:21                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
 hmmt26:22                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
 hmmt26:30                         ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
+hmmt26:8                          ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
 humaneval:HumanEval-117           ·    ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·     ✓    ✓   ✓
 humaneval:HumanEval-134           ·    ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·     ✓    ✓   ✓
 humaneval:HumanEval-62            ·    ·    ·    ·    ·    ·    ·    ·    ✓    ·    ·    ·    ·    ·     ✓    ✓   ✓
@@ -94,7 +98,7 @@ supergpqa-biology:2a9dd54b4711    ·    ·    ·    ·    ·    ·    ·    ·  
 supergpqa-biology:7ce68145b2e0    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✗   ✓
 supergpqa-biology:81072bae4f17    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✗     ✗    ✗   ✗
 supergpqa-biology:929cbd9e50d9    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
-supergpqa-biology:bfb2b07347ca    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    !   ✓
+supergpqa-biology:bfb2b07347ca    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
 supergpqa-biology:f0a7db9e75a1    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
 supergpqa-chemistry:42b9a4912699    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓
 supergpqa-chemistry:95d839b90090    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ·    ✓     ✓    ✓   ✓

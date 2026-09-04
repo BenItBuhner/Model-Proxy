@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-09-04T04:56:49.133Z",
-  "commonItems": 87,
+  "generatedAt": "2026-09-04T06:00:18.826Z",
+  "commonItems": 91,
   "models": [
     "deepseek-v4-pro-0813",
     "glm-5.3",
@@ -401,10 +401,10 @@
     "aime26": {
       "kimi-k3": {
         "n": 8,
-        "correct": 5,
-        "failed": 3,
-        "p50Ms": 124099,
-        "p90Ms": 985292
+        "correct": 8,
+        "failed": 0,
+        "p50Ms": 125160,
+        "p90Ms": 640656
       },
       "glm-5.3": {
         "n": 8,
@@ -430,32 +430,32 @@
     },
     "hmmt26": {
       "glm-5.3": {
-        "n": 2,
-        "correct": 2,
-        "failed": 0,
-        "p50Ms": 50191,
-        "p90Ms": 182944
+        "n": 6,
+        "correct": 4,
+        "failed": 2,
+        "p50Ms": 182944,
+        "p90Ms": 1800001
       },
       "kimi-k3": {
-        "n": 2,
-        "correct": 2,
-        "failed": 0,
-        "p50Ms": 220831,
-        "p90Ms": 319049
+        "n": 6,
+        "correct": 5,
+        "failed": 1,
+        "p50Ms": 247987,
+        "p90Ms": 1800001
       },
       "deepseek-v4-pro-0813": {
-        "n": 2,
-        "correct": 2,
+        "n": 6,
+        "correct": 4,
         "failed": 0,
-        "p50Ms": 21111,
-        "p90Ms": 41140
+        "p50Ms": 41140,
+        "p90Ms": 1197797
       },
       "fusion-max": {
-        "n": 2,
-        "correct": 2,
-        "failed": 0,
-        "p50Ms": 293258,
-        "p90Ms": 684030
+        "n": 6,
+        "correct": 5,
+        "failed": 1,
+        "p50Ms": 426404,
+        "p90Ms": 1800001
       }
     },
     "supergpqa-physics": {
@@ -528,10 +528,10 @@
       },
       "kimi-k3": {
         "n": 6,
-        "correct": 2,
-        "failed": 1,
-        "p50Ms": 18195,
-        "p90Ms": 515298
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 31040,
+        "p90Ms": 619364
       },
       "deepseek-v4-pro-0813": {
         "n": 6,
@@ -552,32 +552,32 @@
   "byDomain": {
     "math": {
       "deepseek-v4-pro-0813": {
-        "n": 34,
-        "correct": 33,
+        "n": 38,
+        "correct": 35,
         "failed": 0,
-        "p50Ms": 28192,
-        "p90Ms": 212996
+        "p50Ms": 30828,
+        "p90Ms": 439253
       },
       "glm-5.3": {
-        "n": 34,
-        "correct": 33,
-        "failed": 1,
-        "p50Ms": 92025,
-        "p90Ms": 647251
+        "n": 38,
+        "correct": 35,
+        "failed": 3,
+        "p50Ms": 112774,
+        "p90Ms": 803738
       },
       "kimi-k3": {
-        "n": 34,
-        "correct": 27,
-        "failed": 4,
-        "p50Ms": 75211,
-        "p90Ms": 416782
+        "n": 38,
+        "correct": 33,
+        "failed": 2,
+        "p50Ms": 81681,
+        "p90Ms": 627391
       },
       "fusion-max": {
-        "n": 34,
-        "correct": 34,
-        "failed": 0,
-        "p50Ms": 215188,
-        "p90Ms": 936831
+        "n": 38,
+        "correct": 37,
+        "failed": 1,
+        "p50Ms": 217518,
+        "p90Ms": 1117667
       }
     },
     "science": {
@@ -590,10 +590,10 @@
       },
       "kimi-k3": {
         "n": 33,
-        "correct": 25,
-        "failed": 2,
-        "p50Ms": 31040,
-        "p90Ms": 308231
+        "correct": 26,
+        "failed": 1,
+        "p50Ms": 33081,
+        "p90Ms": 328733
       },
       "deepseek-v4-pro-0813": {
         "n": 33,
@@ -703,32 +703,32 @@
   },
   "overall": {
     "deepseek-v4-pro-0813": {
-      "n": 87,
-      "correct": 81,
+      "n": 91,
+      "correct": 83,
       "failed": 0,
-      "p50Ms": 16496,
-      "p90Ms": 141167
+      "p50Ms": 17799,
+      "p90Ms": 175493
     },
     "glm-5.3": {
-      "n": 87,
-      "correct": 81,
-      "failed": 1,
-      "p50Ms": 33811,
-      "p90Ms": 428157
+      "n": 91,
+      "correct": 83,
+      "failed": 3,
+      "p50Ms": 36598,
+      "p90Ms": 455708
     },
     "kimi-k3": {
-      "n": 87,
-      "correct": 72,
-      "failed": 6,
-      "p50Ms": 33081,
-      "p90Ms": 403556
+      "n": 91,
+      "correct": 79,
+      "failed": 3,
+      "p50Ms": 41805,
+      "p90Ms": 412148
     },
     "fusion-max": {
-      "n": 87,
-      "correct": 84,
-      "failed": 0,
-      "p50Ms": 122868,
-      "p90Ms": 684030
+      "n": 91,
+      "correct": 87,
+      "failed": 1,
+      "p50Ms": 136626,
+      "p90Ms": 890427
     }
   }
 }
