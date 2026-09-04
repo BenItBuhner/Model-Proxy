@@ -1291,7 +1291,9 @@ export class FusionKernel {
     if (program === undefined) return;
     p.program = program;
     run.executionStats.programs += 1;
+    log.info("kernel execution check start", { conversationId: run.ledger.conversationId, proposal: p.id, programChars: program.length });
     const result = await checkCandidateProgram(program, ex.examples, ex.tests, run.kcfg.execution_timeout_seconds * 1000);
+    log.info("kernel execution check done", { conversationId: run.ledger.conversationId, proposal: p.id, passed: result.passed, total: result.total, durationMs: result.durationMs, error: result.error?.slice(0, 120) });
     const memorized = result.passed === result.total && looksMemorized(program, ex.examples);
     const verified = result.passed === result.total && result.total > 0 && !memorized;
     p.execution = { passed: result.passed, total: result.total, verified, testOutputs: result.testOutputs, feedback: describeFailures(result), memorized };
@@ -1433,7 +1435,9 @@ export class FusionKernel {
       Math.min(2, run.pool.proposerFamilyCount),
       role === "proposer" ? (settled, quorumReached) => this.proposalsAlreadyAgree(run, settled, quorumReached) : undefined,
     );
+    log.info("kernel proposal wave results", { conversationId: run.ledger.conversationId, role, wave, results: results.length, succeeded: results.filter((r) => r.success).length, hooks: hooks.length, elapsedMs: Math.round(performance.now() - started) });
     await Promise.all(hooks);
+    log.info("kernel proposal wave hooks done", { conversationId: run.ledger.conversationId, role, wave, elapsedMs: Math.round(performance.now() - started) });
 
     const durationMs = Math.round(performance.now() - started);
     const succeeded = results.filter((r) => r.success).length;

@@ -248,6 +248,7 @@ export async function runWorker(
         durationMs,
       });
     }
+    log.info("kernel worker completed", { id: req.id, routing: req.routing, chars: cleaned.length, durationMs, finishReason });
     return { content: cleaned, success: true, durationMs, finishReason, attemptedToolCalls };
   } catch (err) {
     const durationMs = Math.round(performance.now() - started);
