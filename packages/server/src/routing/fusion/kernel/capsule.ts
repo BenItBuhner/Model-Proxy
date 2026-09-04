@@ -35,6 +35,8 @@ export interface CapsuleInput {
   taskStartIndex: number;
   /** Optional strategy note (escalation guidance, disputed points). */
   strategyNote?: string;
+  /** Kernel-enforced response format, placed last so it overrides format instructions in the conversation. */
+  responseFormat?: string;
 }
 
 export interface Capsule {
@@ -169,6 +171,9 @@ export function compileCapsule(input: CapsuleInput): Capsule {
     userSections.push(`## Kernel guidance for this pass\n${input.strategyNote.trim()}`);
   }
   userSections.push(`## Your objective\n${input.objective.trim()}`);
+  if (input.responseFormat !== undefined && input.responseFormat.trim().length > 0) {
+    userSections.push(`## Required response format (kernel-enforced)\n${input.responseFormat.trim()}`);
+  }
 
   const messages: Capsule["messages"] = [
     { role: "system", content: contract },
@@ -185,6 +190,7 @@ export function compileCapsule(input: CapsuleInput): Capsule {
     tail: tail.hashes,
     attachments: stableHash(boundedAttachments),
     strategy: input.strategyNote ?? "",
+    format: input.responseFormat ?? "",
   }).slice(0, 32);
 
   return {

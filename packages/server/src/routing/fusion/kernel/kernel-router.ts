@@ -1355,7 +1355,19 @@ export class FusionKernel {
   private executionContract(run: KernelRun): string {
     const ex = run.examples;
     if (ex === undefined || !run.kcfg.execution_verification) return "";
-    return `\n\nEXAMPLE-GROUNDED TASK: the task provides ${ex.examples.length} input/output example(s)${ex.tests.length > 0 ? ` and ${ex.tests.length} test input(s)` : ""}. Your deliverable is a PROGRAM, not a hand-computed answer: study the examples, state the rule precisely, then write ONE complete Python 3 program in a fenced \`\`\`python block defining \`def solve(x)\` that maps an example input (plain Python lists/ints/strings exactly as given) to its output. The kernel EXECUTES it on every example and on the test input(s) and takes its test output as the answer — do NOT compute the test output yourself, and set final_answer to null. Only a program that reproduces every example counts as verified. Implement the general rule — never hard-code or look up example outputs. Standard library only. Spend your effort on getting the rule right and the code correct; keep prose short.`;
+    return `\n\nEXAMPLE-GROUNDED TASK: the task provides ${ex.examples.length} input/output example(s)${ex.tests.length > 0 ? ` and ${ex.tests.length} test input(s)` : ""}. Your deliverable is a PROGRAM, not a hand-computed answer: infer the general rule and implement it as \`def solve(x)\`. The kernel executes it on every example and on the test input(s); only a program reproducing every example counts as verified.`;
+  }
+
+  /** Last section of an example-grounded proposer capsule: the kernel's format wins over the user's. */
+  private executionResponseFormat(run: KernelRun): string | undefined {
+    if (run.examples === undefined || !run.kcfg.execution_verification) return undefined;
+    return [
+      "This format OVERRIDES any output-format instructions in the conversation above; those apply to the kernel's final answer to the user, not to you.",
+      "1. `Rule:` one or two sentences stating the transformation precisely.",
+      "2. A fenced ```python block defining `def solve(x)` that implements the rule for ANY input of this kind (standard library only; never hard-code or look up example outputs). Inputs/outputs are plain Python lists/ints/strings exactly as shown in the examples.",
+      "3. The fenced ```json metadata block from your system contract, with \"final_answer\": null.",
+      "Do NOT output any answer grid or test output — the kernel executes your program to produce it. A response without a ```python solve() block is discarded. Keep prose short; put your effort into the rule and the code.",
+    ].join("\n");
   }
 
   private proposerObjective(intent: KernelLedger["intent"], role: WorkerRole): string {
@@ -1428,6 +1440,7 @@ export class FusionKernel {
                 tokenBudget: kcfg.capsule_tokens,
                 taskStartIndex,
                 strategyNote,
+                responseFormat: role === "proposer" ? this.executionResponseFormat(run) : undefined,
               });
           const spec: WorkSpec = {
             kind: role,
