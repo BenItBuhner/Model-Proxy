@@ -608,6 +608,52 @@ describe("Fusion kernel engine", () => {
     expect(content).not.toContain("```python");
   });
 
+  it("bounds a synthesizer that streams reasoning forever: the synthesis timeout aborts it and the chain moves on", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-synth-timeout-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "500", deepseek: "750" } });
+    const baseFetch = globalThis.fetch;
+    const synthesisModels: string[] = [];
+    let slowAborted = false;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      if (system.includes("final model of a multi-model fusion kernel")) {
+        synthesisModels.push(String(body["model"]));
+        if (String(body["model"]) === "up-glm") {
+          // Streams a reasoning delta every 100 ms forever; ends only when aborted (like a real fetch).
+          const stream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              const enc = new TextEncoder();
+              const tick = setInterval(() => controller.enqueue(enc.encode(`data: ${JSON.stringify({ id: "s", object: "chat.completion.chunk", created: 1, model: "up-glm", choices: [{ index: 0, delta: { reasoning_content: "thinking... " }, finish_reason: null }] })}\n\n`)), 100);
+              init?.signal?.addEventListener("abort", () => { clearInterval(tick); slowAborted = true; controller.error(new DOMException("Aborted", "AbortError")); }, { once: true });
+            },
+          });
+          return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+        }
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-synth-timeout-${Date.now()}`);
+    // Split vote → deep synthesis path; 45 s is the schema minimum, so shrink it through the config directly.
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, control_proposer: false, synthesis_timeout_seconds: 120 } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const started = performance.now();
+    const result = await router.route(ctx);
+    const elapsed = performance.now() - started;
+
+    expect(slowAborted).toBe(true);
+    expect(synthesisModels[0]).toBe("up-glm");
+    expect(synthesisModels.length).toBeGreaterThanOrEqual(2);
+    expect(result.content).toContain("Final synthesized answer");
+    // Primary gets 60% of the 120 s budget (72 s), then the fallback answers instantly.
+    expect(elapsed).toBeGreaterThan(60_000);
+    expect(elapsed).toBeLessThan(100_000);
+  }, 150_000);
+
   it("falls back to another family's synthesizer when the primary fails, and never leaks advisory notes", async () => {
     const captured = emptyCaptured();
     installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });

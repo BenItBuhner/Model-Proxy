@@ -278,13 +278,24 @@ export class FusionKernel {
       const onAbort = () => controller.abort();
       ctx.signal?.addEventListener("abort", onAbort, { once: true });
       let timedOut = false;
-      const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+      let wakeDeadline: (() => void) | undefined;
+      const deadline = new Promise<"timeout">((resolve) => { wakeDeadline = () => resolve("timeout"); });
+      const timer = setTimeout(() => { timedOut = true; controller.abort(); wakeDeadline?.(); }, timeoutMs);
+      // Consume chunk-by-chunk racing the deadline: kernel progress must not
+      // depend on every layer below honoring the abort signal promptly.
+      const iterator = this.responseFuser.fuseStream({ ...failFastCtx, kernelSynthesisRouting: routing, signal: controller.signal }, run.notes)[Symbol.asyncIterator]();
       try {
         const probe = { content: "", toolNames: [] as string[] };
-        for await (const chunk of this.responseFuser.fuseStream({ ...failFastCtx, kernelSynthesisRouting: routing, signal: controller.signal }, run.notes)) {
-          this.observeAnswerChunk(ctx, chunk, probe);
+        for (;;) {
+          const step = await Promise.race([iterator.next(), deadline]);
+          if (step === "timeout") {
+            void iterator.return?.(undefined).catch(() => undefined);
+            throw new Error(`synthesis on ${routing} exceeded ${Math.round(timeoutMs / 1000)}s`);
+          }
+          if (step.done) break;
+          this.observeAnswerChunk(ctx, step.value, probe);
           if (probe.content.length > 0 || probe.toolNames.length > 0) yieldedContent = true;
-          yield chunk;
+          yield step.value;
         }
         if (routing !== primary) run.executorRouting = routing;
         return;
