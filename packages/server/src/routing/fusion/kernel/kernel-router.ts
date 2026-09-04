@@ -488,8 +488,12 @@ export class FusionKernel {
       // task replays its search — every work key hits the cache — while a
       // fast task simply re-runs the fast path.
       mode = ledger.lastSearch !== undefined ? "search" : runtimeEffort <= 1 ? "fast" : "search";
-    } else if (runtimeEffort <= 1 && classification.kind !== "clarification") mode = "fast";
-    else mode = "search";
+    } else if (runtimeEffort <= 1 && classification.kind !== "clarification" && band === "F2" && (requested === "auto" || requested === "low")) {
+      // Fast path only when nothing asked for depth: an explicit medium/high/max
+      // effort or a domain floor means the client wants the full search even if
+      // the prompt looks trivial to the complexity heuristic (e.g. numeric grids).
+      mode = "fast";
+    } else mode = "search";
 
     emitFusion(ctx, { type: "fusion.cache", at: nowIso(), kind: "ledger", hit: loaded !== undefined, detail: loaded !== undefined ? `ledger for ${conversationId.slice(0, 18)}…; task started at message ${ledger.taskStartIndex}` : undefined });
     emitFusion(ctx, {

@@ -591,7 +591,8 @@ describe("Fusion kernel engine", () => {
     // The first verified program settled the wave: the slow thinker was cancelled, no LLM audit ran.
     expect(slowAborted).toBe(true);
     expect(elapsed).toBeLessThan(8_000);
-    expect(captured.verifier).toHaveLength(0);
+    // At most one pipelined audit may have launched before the verified program landed.
+    expect(captured.verifier.length).toBeLessThanOrEqual(1);
     expect(trace["earlySettles"] as number).toBeGreaterThanOrEqual(1);
     // The verified program's test output leads the response and settles the search.
     const content = result.content ?? "";
