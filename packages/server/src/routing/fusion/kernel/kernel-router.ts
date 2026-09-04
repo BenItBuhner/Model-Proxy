@@ -893,6 +893,8 @@ export class FusionKernel {
     let previousAccepted: string[] = [];
 
     for (let wave = 1; wave <= widths.maxWaves; wave++) {
+      // A departed client aborts every worker; escalating further would only burn upstream budget.
+      if (ctx.signal?.aborted === true) break;
       run.waves = wave;
       const verifyCandidates = widths.verifiersPerCandidate > 0;
       // Pipelined verification: each candidate's verifiers launch the moment
