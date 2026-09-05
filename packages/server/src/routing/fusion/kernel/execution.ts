@@ -73,7 +73,7 @@ export async function runSolveProgram(code: string, inputs: unknown[], timeoutMs
     writeFileSync(join(dir, "candidate.py"), code, "utf8");
     writeFileSync(join(dir, "harness.py"), HARNESS.replace(/CPU_SECONDS/g, String(Math.max(1, Math.ceil(timeoutMs / 1000)))), "utf8");
     writeFileSync(join(dir, "inputs.json"), JSON.stringify({ inputs }), "utf8");
-    const proc = Bun.spawn(["python3", "-I", "harness.py"], {
+    const proc = Bun.spawn([process.env.KERNEL_EXEC_PYTHON ?? "python3", "-I", "harness.py"], {
       cwd: dir,
       stdout: "pipe",
       stderr: "pipe",
@@ -115,6 +115,120 @@ export async function checkCandidateProgram(code: string, examples: IoExample[],
     ? tests.map((_, i) => run.results[examples.length + i]).map((r) => (r !== undefined && r.ok ? r.out : undefined)).filter((v) => v !== undefined)
     : [];
   return { passed, total: examples.length, failures, testOutputs, durationMs };
+}
+
+// ── Code tasks: cross-execution of proposer-written tests ──────────────
+
+const TESTS_MARKER = "# kernel-tests";
+
+/** Solution block (first python block that is not the tests block) and tests block (`# kernel-tests`). */
+export function extractSolutionAndTests(text: string): { solution?: string; tests?: string } {
+  const blocks = [...text.matchAll(/```(?:python|py)?\s*\n([\s\S]*?)```/gi)].map((m) => (m[1] ?? "").trim()).filter((b) => b.length > 0);
+  const tests = blocks.find((b) => b.startsWith(TESTS_MARKER) || /^\s*#\s*kernel-tests/m.test(b.split("\n")[0] ?? ""));
+  const candidates = blocks.filter((b) => b !== tests && /\b(def|class)\s+\w+/.test(b));
+  const solution = candidates.sort((a, b) => b.length - a.length)[0];
+  return { solution, tests };
+}
+
+const TEST_RUNNER = `
+import json, sys, os, resource, traceback
+sys.path.insert(0, os.getcwd())
+try:
+    resource.setrlimit(resource.RLIMIT_AS, (2_000_000_000, 2_000_000_000))
+    resource.setrlimit(resource.RLIMIT_CPU, (CPU_SECONDS, CPU_SECONDS))
+except Exception:
+    pass
+os.environ.setdefault("MPLBACKEND", "Agg")
+result = {"import_error": None, "passed": [], "failed": {}}
+try:
+    import candidate
+    ns = {k: getattr(candidate, k) for k in dir(candidate) if not k.startswith("__")}
+    src = open("tests.py").read()
+    exec(compile(src, "tests.py", "exec"), ns)
+    names = [k for k, v in ns.items() if k.startswith("test") and callable(v)]
+    names.sort()
+    for name in names:
+        try:
+            ns[name]()
+            result["passed"].append(name)
+        except Exception as e:
+            result["failed"][name] = f"{type(e).__name__}: {e}"[:300]
+except Exception as e:
+    result["import_error"] = f"{type(e).__name__}: {e}"[:400]
+with open("result.json", "w") as f:
+    json.dump(result, f)
+`;
+
+export interface TestRun { passed: string[]; failed: Record<string, string>; importError?: string; total: number }
+
+/** Run one proposer's tests against one candidate solution; each `test*` function is an independent case. */
+export async function runTestsAgainst(solution: string, tests: string, timeoutMs = 60_000): Promise<TestRun> {
+  const dir = mkdtempSync(join(tmpdir(), "kernel-xtest-"));
+  try {
+    writeFileSync(join(dir, "candidate.py"), solution.endsWith("\n") ? solution : `${solution}\n`, "utf8");
+    writeFileSync(join(dir, "tests.py"), tests.endsWith("\n") ? tests : `${tests}\n`, "utf8");
+    writeFileSync(join(dir, "runner.py"), TEST_RUNNER.replace(/CPU_SECONDS/g, String(Math.max(2, Math.ceil(timeoutMs / 1000)))), "utf8");
+    const python = process.env.KERNEL_EXEC_PYTHON ?? "python3";
+    const proc = Bun.spawn([python, "-I", "runner.py"], {
+      cwd: dir,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", PYTHONDONTWRITEBYTECODE: "1", PYTHONHASHSEED: "0", HOME: dir, MPLBACKEND: "Agg" },
+    });
+    const timer = setTimeout(() => proc.kill(), timeoutMs);
+    const [exitCode, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
+    clearTimeout(timer);
+    const file = Bun.file(join(dir, "result.json"));
+    if (!(await file.exists())) {
+      return { passed: [], failed: {}, importError: (stderr.trim().split("\n").slice(-2).join(" | ") || `exit ${exitCode}`).slice(0, 400), total: 0 };
+    }
+    const parsed = JSON.parse(await file.text()) as { import_error: string | null; passed: string[]; failed: Record<string, string> };
+    const total = parsed.passed.length + Object.keys(parsed.failed).length;
+    return { passed: parsed.passed, failed: parsed.failed, importError: parsed.import_error ?? undefined, total };
+  } catch (err) {
+    return { passed: [], failed: {}, importError: err instanceof Error ? err.message : String(err), total: 0 };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+export interface CrossExecutionResult {
+  /** Per solution index: tests passed / total tests across every test set. */
+  scores: Array<{ passed: number; total: number; importErrors: number; failures: string[] }>;
+  /** Number of usable test functions across all test sets. */
+  totalTests: number;
+}
+
+/**
+ * CodeT-style agreement: run every solution against every proposer's tests.
+ * A solution's score is the number of test functions it passes across all
+ * sets; tests that no solution passes are dropped as likely-wrong tests.
+ */
+export async function crossExecute(solutions: string[], testSets: string[], timeoutMs = 60_000): Promise<CrossExecutionResult> {
+  const runs: TestRun[][] = [];
+  for (const solution of solutions) {
+    runs.push(await Promise.all(testSets.map((tests) => runTestsAgainst(solution, tests, timeoutMs))));
+  }
+  // Test identity = (set index, name); keep tests at least one solution passes.
+  const usable = new Set<string>();
+  for (let j = 0; j < testSets.length; j++) {
+    const names = new Set<string>();
+    for (const row of runs) for (const n of [...row[j]!.passed, ...Object.keys(row[j]!.failed)]) names.add(n);
+    for (const n of names) if (runs.some((row) => row[j]!.passed.includes(n))) usable.add(`${j}:${n}`);
+  }
+  const scores = runs.map((row) => {
+    let passed = 0;
+    let importErrors = 0;
+    const failures: string[] = [];
+    row.forEach((r, j) => {
+      if (r.importError !== undefined) importErrors += 1;
+      for (const n of r.passed) if (usable.has(`${j}:${n}`)) passed += 1;
+      for (const [n, err] of Object.entries(r.failed)) if (usable.has(`${j}:${n}`)) failures.push(`${n} (set ${j + 1}): ${err}`);
+      if (r.importError !== undefined) failures.push(`import/collection error (set ${j + 1}): ${r.importError}`);
+    });
+    return { passed, total: usable.size, importErrors, failures };
+  });
+  return { scores, totalTests: usable.size };
 }
 
 /** Compact, model-readable description of failures for a repair wave. */

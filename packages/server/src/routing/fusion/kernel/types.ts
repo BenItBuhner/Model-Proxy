@@ -130,7 +130,7 @@ export interface Proposal {
   /** Candidate program (python `solve`) when the task carries examples. */
   program?: string;
   /** Result of executing the program against the task's examples. */
-  execution?: { passed: number; total: number; verified: boolean; testOutputs: unknown[]; feedback: string; memorized?: boolean };
+  execution?: { passed: number; total: number; verified: boolean; testOutputs: unknown[]; feedback: string; memorized?: boolean; /** Code tasks: cross-executed against every proposer's tests. */ crossValidated?: boolean; score?: number };
   raw: string;
   workKey: string;
   cached: boolean;

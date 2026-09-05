@@ -608,6 +608,61 @@ describe("Fusion kernel engine", () => {
     expect(content).not.toContain("```python");
   });
 
+  it("cross-executes code solutions against every reasoner's tests and emits the best solution as the artifact", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-code-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Solve the following programming task. Return the complete solution as ONE ```python block.\n\nReturn the mean of a list of numbers; return 0.0 for an empty list.\nYou should write self-contained code starting with:\n```\ndef task_func(xs):\n```";
+    const proposalWithCode = (family: string, solution: string, tests: string) =>
+      [
+        `Approach (${family}): sum divided by length.`,
+        "```python",
+        solution,
+        "```",
+        "```python",
+        "# kernel-tests",
+        tests,
+        "```",
+        "```json",
+        JSON.stringify({ answer_summary: `${family} solution`, final_answer: null, key_claims: ["Mean is sum over count", "Empty list yields 0.0", "Works for ints"], assumptions: [], risks: [], confidence: 0.7 }),
+        "```",
+      ].join("\n");
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        const model = String(body["model"]);
+        // glm: correct; kimi: crashes on the empty list; deepseek: correct but its own test expects the wrong value (dropped as unusable).
+        if (model === "up-glm") return streamResponse(model, [proposalWithCode("glm", "def task_func(xs):\n    return sum(xs) / len(xs) if xs else 0.0", "def test_mean():\n    assert task_func([1, 2, 3]) == 2\ndef test_empty():\n    assert task_func([]) == 0.0")]);
+        if (model === "up-kimi") return streamResponse(model, [proposalWithCode("kimi", "def task_func(xs):\n    return sum(xs) / len(xs)", "def test_single():\n    assert task_func([5]) == 5")]);
+        return streamResponse(model, [proposalWithCode("deepseek", "def task_func(xs):\n    if not xs:\n        return 0.0\n    return sum(xs) / len(xs)", "def test_two():\n    assert task_func([1, 1]) == 1\ndef test_bogus():\n    assert task_func([1, 3]) == 3")]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-code-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: false, adaptive_verification: true } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    const execution = trace["execution"] as Record<string, unknown>;
+    expect(execution["codeTask"]).toBe(true);
+    expect(execution["programs"]).toBe(3);
+    expect(execution["artifact"]).toBe(true);
+    const content = result.content ?? "";
+    // The crashing solution lost; a correct solution is emitted as a python block, no LLM synthesis.
+    expect(content).toContain("```python");
+    expect(content).toMatch(/if xs else 0\.0|if not xs:/);
+    expect(content).not.toContain("# kernel-tests");
+    expect(captured.synthesis).toHaveLength(0);
+    expect(captured.proposer.some((p) => allText(p["messages"] as unknown[]).includes("# kernel-tests"))).toBe(true);
+  });
+
   it("bounds a synthesizer that streams reasoning forever: the synthesis timeout aborts it and the chain moves on", async () => {
     closeOperationalDbForTests();
     setStorageRootForTests(path.join(tmpRoot, `storage-synth-timeout-${Date.now()}`));

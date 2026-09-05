@@ -28,8 +28,8 @@ import type {
 import { assembleStream } from "./assemble.ts";
 import { compileCapsule, controlCapsule, type Capsule } from "./capsule.ts";
 import { INTENT_OBJECTIVE, deterministicIntent, mergeModelIntent } from "./intent.ts";
-import { extractIoExamples, type IoExample, type TaskExamples } from "./examples.ts";
-import { checkCandidateProgram, describeFailures, extractSolveProgram } from "./execution.ts";
+import { detectCodeTask, extractIoExamples, type CodeTask, type IoExample, type TaskExamples } from "./examples.ts";
+import { checkCandidateProgram, crossExecute, describeFailures, extractSolutionAndTests, extractSolveProgram } from "./execution.ts";
 
 /** Strip fenced code/JSON blocks and kernel metadata from a proposal, keeping its explanatory prose. */
 function proseOnly(text: string): string {
@@ -138,6 +138,10 @@ interface KernelRun {
   confirmedAnswerKeys: Set<string>;
   /** Input/output examples detected in the task (execution verification), if any. */
   examples?: TaskExamples;
+  /** Code-synthesis task without examples: verified by cross-executing proposer-written tests. */
+  codeTask?: CodeTask;
+  /** Fence language of the verified artifact. */
+  artifactKind: "json" | "python";
   /** Verified program output on the test input(s), appended after synthesis as the final artifact. */
   verifiedArtifact?: string;
   /** Prose from the proposal whose program verified (its rule statement), used as the explanation. */
@@ -262,7 +266,7 @@ export class FusionKernel {
         ? run.verifiedExplanation
         : `The output above was produced by a program that reproduces every training example.`;
       run.steps.push({ type: "synthesis", label: "Response Synthesis (execution-verified)", startedAt: nowIso(), durationMs: 0, modelRouting: "kernel", details: { verified: true } });
-      yield* this.textAsStream(ctx, `\`\`\`json\n${run.verifiedArtifact}\n\`\`\`\n\n${explanation}`);
+      yield* this.textAsStream(ctx, run.artifactKind === "python" ? `${explanation}\n\n\`\`\`python\n${run.verifiedArtifact}\n\`\`\`` : `\`\`\`json\n${run.verifiedArtifact}\n\`\`\`\n\n${explanation}`);
       return;
     }
     // The synthesis cap bounds the WHOLE chain: the first attempt gets the
@@ -589,6 +593,7 @@ export class FusionKernel {
       confirmedAnswerKeys: new Set<string>(),
       evidenceWaiters: [],
       executionStats: { programs: 0, verified: 0, repairRounds: 0 },
+      artifactKind: "json",
       phase: "prepared",
       abort: new AbortController(),
     };
@@ -748,7 +753,7 @@ export class FusionKernel {
     if (configured !== undefined) return configured;
     // Example-grounded tasks are verified by execution: several quick program
     // attempts plus repair beat one exhaustive think that never finishes.
-    if (role === "proposer" && run.examples !== undefined && run.kcfg.execution_verification) return "medium";
+    if (role === "proposer" && (run.examples !== undefined || run.codeTask !== undefined) && run.kcfg.execution_verification) return "medium";
     if (role === "proposer" && run.band !== "F2") return "high";
     return undefined;
   }
@@ -937,6 +942,14 @@ export class FusionKernel {
       run.examples = extractIoExamples(taskText);
       if (run.examples !== undefined) {
         await run.narrator.say(`Kernel: task carries ${run.examples.examples.length} input/output example(s); candidate programs will be executed against them.`);
+      } else {
+        // Only for tool-less requests: with tools the primary agent writes and
+        // runs code itself, and the kernel's job is planning, not synthesis.
+        const tools = (ctx.requestData as Record<string, unknown>)["tools"];
+        run.codeTask = Array.isArray(tools) && tools.length > 0 ? undefined : detectCodeTask(taskText);
+        if (run.codeTask !== undefined) {
+          await run.narrator.say(`Kernel: code task detected${run.codeTask.entryPoint !== undefined ? ` (\`${run.codeTask.entryPoint}\`)` : ""}; candidate solutions will be cross-executed against every reasoner's tests.`);
+        }
       }
     }
     const intentPromise =
@@ -1032,6 +1045,11 @@ export class FusionKernel {
       if (run.examples !== undefined && kcfg.execution_verification) {
         run.phase = `execution phase wave ${wave}`;
         const repaired = await this.executionPhase(ctx, run, proposerIntent, searchLedger, waveProposals, wave, widths, taskStartIndex);
+        proposals.push(...repaired);
+        waveProposals.push(...repaired);
+      } else if (run.codeTask !== undefined && kcfg.execution_verification) {
+        run.phase = `cross-execution wave ${wave}`;
+        const repaired = await this.codeExecutionPhase(ctx, run, proposerIntent, searchLedger, waveProposals, wave, widths, taskStartIndex);
         proposals.push(...repaired);
         waveProposals.push(...repaired);
       }
@@ -1377,16 +1395,110 @@ export class FusionKernel {
     }
   }
 
+  /**
+   * Code tasks without examples: cross-execute every solution against every
+   * proposer's tests (CodeT-style agreement). The best-scoring solution becomes
+   * the artifact when it passes at least 75% of the usable tests; otherwise one
+   * repair round feeds the failing tests back, then the normal search continues.
+   */
+  private async codeExecutionPhase(
+    ctx: FusionRequestContext,
+    run: KernelRun,
+    intent: NonNullable<KernelLedger["intent"]>,
+    ledgerView: KernelLedger,
+    waveProposals: Proposal[],
+    wave: number,
+    widths: WaveWidths,
+    taskStartIndex: number,
+  ): Promise<Proposal[]> {
+    const started = performance.now();
+    const timeoutMs = Math.max(run.kcfg.execution_timeout_seconds, 60) * 1000;
+    const extra: Proposal[] = [];
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, crossExecution: true } });
+
+    const evaluate = async (pool: Proposal[]): Promise<Proposal | undefined> => {
+      const parsed = pool.filter((p) => p.success).map((p) => ({ p, ...extractSolutionAndTests(p.raw) }));
+      const withSolution = parsed.filter((x) => x.solution !== undefined);
+      const testSets = parsed.map((x) => x.tests).filter((t): t is string => t !== undefined);
+      run.executionStats.programs = withSolution.length;
+      if (withSolution.length === 0 || testSets.length === 0) return undefined;
+      const result = await crossExecute(withSolution.map((x) => x.solution!), testSets, timeoutMs);
+      withSolution.forEach((x, i) => {
+        const score = result.scores[i]!;
+        const fraction = score.total > 0 ? score.passed / score.total : 0;
+        x.p.program = x.solution;
+        x.p.finalAnswer = x.solution;
+        x.p.execution = { passed: score.passed, total: score.total, verified: false, crossValidated: true, score: fraction, testOutputs: [], feedback: score.failures.slice(0, 6).join("\n") };
+      });
+      log.info("kernel cross-execution", { conversationId: run.ledger.conversationId, wave, solutions: withSolution.length, testSets: testSets.length, totalTests: result.totalTests, scores: result.scores.map((s) => `${s.passed}/${s.total}`) });
+      return [...withSolution].sort((a, b) => (b.p.execution!.score! - a.p.execution!.score!) || (a.solution!.length - b.solution!.length))[0]?.p;
+    };
+
+    let best = await evaluate(waveProposals);
+    let round = 0;
+    while (
+      best !== undefined &&
+      (best.execution?.score ?? 0) < 1 &&
+      round < Math.min(1, run.kcfg.execution_repair_rounds) &&
+      this.remainingSearchMs(run) > 90_000
+    ) {
+      round += 1;
+      run.executionStats.repairRounds += 1;
+      run.phase = `cross-execution repair round ${round} (wave ${wave})`;
+      const note = [
+        `EXECUTION FEEDBACK (repair round ${round}): the best solution so far passes ${best.execution!.passed}/${best.execution!.total} of the tests written by the reasoners.`,
+        "```python",
+        truncateMiddle(best.program ?? "", 6_000, "solution trimmed"),
+        "```",
+        "Failing tests and errors:",
+        best.execution!.feedback.length > 0 ? best.execution!.feedback : "(none recorded)",
+        "Judge each failing test against the task specification: fix the solution where the test is right, and write your own tests where a test is wrong. Return the complete corrected solution and your tests in the required format.",
+      ].join("\n");
+      await run.narrator.say(`Kernel: best solution passes ${best.execution!.passed}/${best.execution!.total} cross-tests; running a repair round with the failing tests.`);
+      const repairs = await this.proposalWave(ctx, run, intent, ledgerView, wave, widths, taskStartIndex, note, "proposer", Math.min(widths.proposals, 3));
+      extra.push(...repairs);
+      best = await evaluate([...waveProposals, ...extra]);
+    }
+
+    if (best !== undefined && (best.execution?.score ?? 0) >= 0.75 && best.program !== undefined && run.verifiedArtifact === undefined) {
+      run.executionStats.verified = 1;
+      run.verifiedArtifact = best.program;
+      run.artifactKind = "python";
+      run.verifiedExplanation = proseOnly(best.answer);
+      run.confirmedAnswerKeys.add(normalizeFinalAnswer(best.program));
+    }
+    const durationMs = Math.round(performance.now() - started);
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "completed", durationMs, detail: { wave, crossExecution: true, solutions: run.executionStats.programs, bestScore: best?.execution?.score, repairRounds: round, artifact: run.verifiedArtifact !== undefined } });
+    run.steps.push({ type: "verification", label: `Cross-Execution (wave ${wave})`, startedAt: nowIso(), durationMs, modelRouting: "python3", details: { solutions: run.executionStats.programs, bestScore: best?.execution?.score, repairRounds: round } });
+    log.info("kernel cross-execution phase", { conversationId: run.ledger.conversationId, wave, solutions: run.executionStats.programs, bestScore: best?.execution?.score, repairRounds: round, durationMs, artifact: run.verifiedArtifact !== undefined });
+    return extra;
+  }
+
   /** Extra contract for tasks that ship checkable examples: the reasoner must also deliver a program the kernel can execute. */
   private executionContract(run: KernelRun): string {
     const ex = run.examples;
+    if (ex === undefined && run.codeTask !== undefined && run.kcfg.execution_verification) {
+      return "\n\nCODE TASK: deliver the complete solution AND a block of standalone assertion tests; the kernel cross-executes every reasoner's solution against every reasoner's tests and selects by agreement.";
+    }
     if (ex === undefined || !run.kcfg.execution_verification) return "";
     return `\n\nEXAMPLE-GROUNDED TASK: the task provides ${ex.examples.length} input/output example(s)${ex.tests.length > 0 ? ` and ${ex.tests.length} test input(s)` : ""}. Your deliverable is a PROGRAM, not a hand-computed answer: infer the general rule and implement it as \`def solve(x)\`. The kernel executes it on every example and on the test input(s); only a program reproducing every example counts as verified.`;
   }
 
   /** Last section of an example-grounded proposer capsule: the kernel's format wins over the user's. */
   private executionResponseFormat(run: KernelRun): string | undefined {
-    if (run.examples === undefined || !run.kcfg.execution_verification) return undefined;
+    if (!run.kcfg.execution_verification) return undefined;
+    if (run.examples === undefined && run.codeTask !== undefined) {
+      const entry = run.codeTask.entryPoint !== undefined ? `\`${run.codeTask.entryPoint}\`` : "the requested function";
+      return [
+        "This format OVERRIDES any output-format instructions in the conversation above; those apply to the kernel's final answer to the user, not to you.",
+        "1. `Approach:` one or two sentences.",
+        `2. ONE fenced \`\`\`python block with the COMPLETE, self-contained solution (all imports, the full definition of ${entry}, exactly the signature the task specifies). No example usage, no prints, no tests in this block.`,
+        "3. ONE fenced ```python block whose FIRST line is `# kernel-tests`, containing 5-10 independent test functions named `test_*` that use plain `assert` statements to check the behaviors the task specifies (return values and shapes, raised exceptions via try/except, edge cases). Tests may reference the solution's functions directly (they run in the solution's namespace) and may import stdlib modules such as tempfile/os; they must be deterministic, need no network, and must not rely on files or state your solution did not create. The kernel executes EVERY reasoner's tests against EVERY reasoner's solution, so write tests you are confident a correct implementation of the specification passes.",
+        "4. The fenced ```json metadata block from your system contract, with \"final_answer\": null.",
+        "Keep prose short; put your effort into a correct solution and sharp tests.",
+      ].join("\n");
+    }
+    if (run.examples === undefined) return undefined;
     return [
       "This format OVERRIDES any output-format instructions in the conversation above; those apply to the kernel's final answer to the user, not to you.",
       "1. `Rule:` one or two sentences stating the transformation precisely.",
@@ -2018,7 +2130,7 @@ export class FusionKernel {
       truncatedWorkers: run.truncatedWorkers,
       earlySettles: run.earlySettles,
       settledAnswer: run.settledAnswer,
-      execution: run.examples !== undefined ? { examples: run.examples.examples.length, ...run.executionStats, artifact: run.verifiedArtifact !== undefined } : undefined,
+      execution: run.examples !== undefined || run.codeTask !== undefined ? { examples: run.examples?.examples.length ?? 0, codeTask: run.codeTask !== undefined, ...run.executionStats, artifact: run.verifiedArtifact !== undefined } : undefined,
       vote: run.lastVote !== undefined
         ? { leader: run.lastVote.leader?.answer, share: run.lastVote.leaderShare, unanimous: run.lastVote.unanimous, voters: run.lastVote.voters, entries: run.lastVote.entries.slice(0, 4).map((e) => ({ answer: e.answer, weight: e.weight, families: e.families })) }
         : undefined,

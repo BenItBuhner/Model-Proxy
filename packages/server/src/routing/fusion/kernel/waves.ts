@@ -310,7 +310,11 @@ export function buildAnswerVote(proposals: Proposal[], verifications: Verificati
     voters += 1;
     // A program that reproduced every task example is ground-truth-anchored
     // evidence; a program that failed its examples discounts the claim.
-    const weight = p.execution?.verified === true ? verifiedWeight : p.execution !== undefined && p.execution.total > 0 ? 0.5 : 1;
+    const weight = p.execution?.verified === true
+      ? verifiedWeight
+      : p.execution?.crossValidated === true
+        ? 1 + (verifiedWeight - 1) * (p.execution.score ?? 0) // cross-executed code: weight scales with tests passed
+        : p.execution !== undefined && p.execution.total > 0 ? 0.5 : 1;
     bump(p.finalAnswer, weight, p.family);
     if (p.execution?.verified === true) {
       const e = entries.get(normalizeFinalAnswer(p.finalAnswer));

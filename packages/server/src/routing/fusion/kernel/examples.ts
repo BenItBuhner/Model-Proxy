@@ -110,3 +110,24 @@ export function extractIoExamples(text: string): TaskExamples | undefined {
 export function deepEqualJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
+
+export interface CodeTask {
+  language: "python";
+  /** Function the task asks for, when a signature is given (e.g. `task_func`). */
+  entryPoint?: string;
+}
+
+/**
+ * Detect a Python code-synthesis task (a function/program to write, graded by
+ * hidden tests): a python fence or `def name(` signature plus an instruction
+ * to write/implement code. Such tasks have no checkable examples, so the
+ * kernel verifies candidates by cross-executing proposer-written tests.
+ */
+export function detectCodeTask(text: string): CodeTask | undefined {
+  if (text.length > 200_000) return undefined;
+  const hasPythonFence = /```\s*(python|py)?\s*\n[\s\S]*?\bdef\s+\w+\s*\(/i.test(text) || /```[\s\S]*?\bimport\s+\w+[\s\S]*?```/.test(text);
+  const signature = /\bdef\s+([A-Za-z_]\w*)\s*\(/.exec(text);
+  const asksForCode = /\b(write|implement|complete|return|provide)\b[^.\n]{0,80}\b(code|function|solution|program|implementation)\b/i.test(text) || /self-contained code/i.test(text);
+  if (!(hasPythonFence || signature !== null) || !asksForCode) return undefined;
+  return { language: "python", entryPoint: signature?.[1] };
+}
