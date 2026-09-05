@@ -1,0 +1,36 @@
+kernel-bench report — 96 graded rows, 24 items attempted by all 4 models (2026-09-05T04:53:33.894Z)
+
+suite                     deepseek-v4-pro-0813           glm-5.3           kimi-k3        fusion-max
+----------------------------------------------------------------------------------------------------
+apex25                             25%  1/4               -                 -            75%  3/4 
+arcagi2                            42%  8/19         60%  6/10         50%  4/8          65% 13/20
+
+domain                    deepseek-v4-pro-0813           glm-5.3           kimi-k3        fusion-max
+----------------------------------------------------------------------------------------------------
+math                               25%  1/4               -                 -            75%  3/4 
+reasoning                          42%  8/19         60%  6/10         50%  4/8          65% 13/20
+ALL                                39%  9/23         60%  6/10         50%  4/8          67% 16/24
+
+strict (fail = wrong)     deepseek-v4-pro-0813           glm-5.3           kimi-k3        fusion-max
+----------------------------------------------------------------------------------------------------
+math                               25%  1/4           0%  0/4           0%  0/4          75%  3/4 
+reasoning                          40%  8/20         30%  6/20         20%  4/20         65% 13/20
+ALL                                38%  9/24         25%  6/24         17%  4/24         67% 16/24
+
+latency p50 / p90 (s)              477 / 775       1336 / 1800        734 / 1800        695 / 1800
+failed calls                               1                14                16                 0
+
+fusion vs best single base model (same items):
+  math         fusion  75%  best base deepseek-v4-pro-0813    25%  Δ   50 pts
+  reasoning    fusion  65%  best base glm-5.3                 60%  Δ    5 pts
+  ALL          fusion  67%  best base glm-5.3                 60%  Δ    7 pts
+
+fusion misses (8):
+  arcagi2:28a6681f                   pred=10x10 (mismatch)     exp=10 rows              deepseek=✗ glm=! kimi=!  agr=0.22
+  arcagi2:4c416de3                   pred=                     exp=19 rows              deepseek=✗ glm=! kimi=!  agr=0.311
+  arcagi2:7b5033c1                   pred=25x1 (mismatch)      exp=25 rows              deepseek=✓ glm=✗ kimi=✗  agr=0.8
+  arcagi2:7b3084d4                   pred=                     exp=14 rows              deepseek=✗ glm=! kimi=!  agr=0.36
+  arcagi2:64efde09                   pred=                     exp=29 rows              deepseek=✗ glm=✗ kimi=!  agr=0.446
+  arcagi2:271d71e2                   pred=                     exp=26 rows              deepseek=✗ glm=! kimi=!  agr=0.289
+  arcagi2:20a9e565                   pred=                     exp=2 rows               deepseek=✗ glm=! kimi=!  agr=0.267
+  apex25:1                           pred=15                   exp=4049                 deepseek=✗ glm=! kimi=!  agr=0.276

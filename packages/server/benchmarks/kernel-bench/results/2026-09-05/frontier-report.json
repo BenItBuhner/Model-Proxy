@@ -1,0 +1,164 @@
+{
+  "generatedAt": "2026-09-05T04:53:33.894Z",
+  "commonItems": 24,
+  "models": [
+    "deepseek-v4-pro-0813",
+    "glm-5.3",
+    "kimi-k3",
+    "fusion-max"
+  ],
+  "bySuite": {
+    "apex25": {
+      "glm-5.3": {
+        "n": 4,
+        "correct": 0,
+        "failed": 4,
+        "p50Ms": 1543531,
+        "p90Ms": 1800002
+      },
+      "kimi-k3": {
+        "n": 4,
+        "correct": 0,
+        "failed": 4,
+        "p50Ms": 1779321,
+        "p90Ms": 1800001
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 4,
+        "correct": 1,
+        "failed": 0,
+        "p50Ms": 547299,
+        "p90Ms": 622069
+      },
+      "fusion-max": {
+        "n": 4,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 1498700,
+        "p90Ms": 1800577
+      }
+    },
+    "arcagi2": {
+      "deepseek-v4-pro-0813": {
+        "n": 20,
+        "correct": 8,
+        "failed": 1,
+        "p50Ms": 405405,
+        "p90Ms": 774636
+      },
+      "kimi-k3": {
+        "n": 20,
+        "correct": 4,
+        "failed": 12,
+        "p50Ms": 659534,
+        "p90Ms": 1800001
+      },
+      "glm-5.3": {
+        "n": 20,
+        "correct": 6,
+        "failed": 10,
+        "p50Ms": 1215647,
+        "p90Ms": 1800001
+      },
+      "fusion-max": {
+        "n": 20,
+        "correct": 13,
+        "failed": 0,
+        "p50Ms": 616223,
+        "p90Ms": 1800169
+      }
+    }
+  },
+  "byDomain": {
+    "math": {
+      "glm-5.3": {
+        "n": 4,
+        "correct": 0,
+        "failed": 4,
+        "p50Ms": 1543531,
+        "p90Ms": 1800002
+      },
+      "kimi-k3": {
+        "n": 4,
+        "correct": 0,
+        "failed": 4,
+        "p50Ms": 1779321,
+        "p90Ms": 1800001
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 4,
+        "correct": 1,
+        "failed": 0,
+        "p50Ms": 547299,
+        "p90Ms": 622069
+      },
+      "fusion-max": {
+        "n": 4,
+        "correct": 3,
+        "failed": 0,
+        "p50Ms": 1498700,
+        "p90Ms": 1800577
+      }
+    },
+    "reasoning": {
+      "deepseek-v4-pro-0813": {
+        "n": 20,
+        "correct": 8,
+        "failed": 1,
+        "p50Ms": 405405,
+        "p90Ms": 774636
+      },
+      "kimi-k3": {
+        "n": 20,
+        "correct": 4,
+        "failed": 12,
+        "p50Ms": 659534,
+        "p90Ms": 1800001
+      },
+      "glm-5.3": {
+        "n": 20,
+        "correct": 6,
+        "failed": 10,
+        "p50Ms": 1215647,
+        "p90Ms": 1800001
+      },
+      "fusion-max": {
+        "n": 20,
+        "correct": 13,
+        "failed": 0,
+        "p50Ms": 616223,
+        "p90Ms": 1800169
+      }
+    }
+  },
+  "overall": {
+    "glm-5.3": {
+      "n": 24,
+      "correct": 6,
+      "failed": 14,
+      "p50Ms": 1335996,
+      "p90Ms": 1800002
+    },
+    "kimi-k3": {
+      "n": 24,
+      "correct": 4,
+      "failed": 16,
+      "p50Ms": 733895,
+      "p90Ms": 1800001
+    },
+    "deepseek-v4-pro-0813": {
+      "n": 24,
+      "correct": 9,
+      "failed": 1,
+      "p50Ms": 477157,
+      "p90Ms": 774636
+    },
+    "fusion-max": {
+      "n": 24,
+      "correct": 16,
+      "failed": 0,
+      "p50Ms": 694812,
+      "p90Ms": 1800170
+    }
+  }
+}
