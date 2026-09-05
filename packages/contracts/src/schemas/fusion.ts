@@ -233,6 +233,16 @@ export const FusionKernelConfigSchema = z
     execution_verified_weight: z.number().min(1).max(10).default(3),
     /** After the first verified program, wait this long for a possibly-disagreeing second program before settling on one. */
     execution_settle_grace_seconds: z.number().min(0).max(600).default(45),
+    /**
+     * Computational scratchpad: proposers on the listed domains may emit ONE
+     * `# kernel-compute` python block per round; the kernel executes it and
+     * returns its stdout before the proposer finalizes (brute force, numeric
+     * checks, enumeration). Same host-execution caveat as execution_verification.
+     */
+    compute_scratchpad: z.boolean().default(false),
+    compute_scratchpad_domains: z.array(z.string()).default(["math", "science"]),
+    compute_timeout_seconds: z.number().int().min(1).max(300).default(30),
+    compute_rounds: z.number().int().min(0).max(4).default(2),
     /** Hard wall-clock cap per synthesis attempt; on expiry the kernel moves to the next synthesizer or the best verified candidate. */
     synthesis_timeout_seconds: z.number().int().min(30).max(3600).default(600),
     /**

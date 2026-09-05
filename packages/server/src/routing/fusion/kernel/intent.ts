@@ -6,7 +6,11 @@ const MAX_GOAL_CHARS = 4_000;
 
 const DOMAIN_SIGNALS: Array<{ domain: string; pattern: RegExp }> = [
   { domain: "swe", pattern: /\b(code|function|class|refactor|implement|bug|test|typescript|python|rust|go\b|java|api|endpoint|repo|repository|file|compile|build|deploy|migration|schema|component|library|package|lint|ci\b|pull request|commit)\b/i },
-  { domain: "math", pattern: /\b(prove|proof|theorem|lemma|integral|derivative|equation|matrix|probability|combinator|modulo|prime|polynomial|limit|converge|series|\d+\s*[+\-*/^]\s*\d+|solve for|calculate|compute)\b/i },
+  {
+    domain: "math",
+    pattern:
+      /\b(prove|proof|theorem|lemma|integral|derivative|equation|matrix|probability|combinator|modulo|\bmod\b|prime|polynomial|limit|converge|series|\d+\s*[+\-*/^]\s*\d+|solve for|calculate|compute|integers?|divisible|divisor|remainder|gcd|lcm|factorial|permutations?|polygon|triangle|circle|angle|geometr|sequence|digits?|real numbers?|positive (?:integers?|reals?)|minimum value|maximum value|largest|smallest|how many|number of|expected value|vertex|vertices|coordinates?)\b|\\(?:frac|sqrt|sum|int|binom|cdot|leq|geq|mathbb)|\$[^$\n]{1,200}\$/i,
+  },
   { domain: "science", pattern: /\b(experiment|hypothesis|physics|chemistry|biology|molecule|protein|thermodynamic|quantum|entropy|reaction|genome|cell|orbit|velocity|force|energy)\b/i },
   { domain: "research", pattern: /\b(research|survey|literature|compare|comparison|evaluate|assess|investigate|analy[sz]e|summar[iy]|review|pros and cons|trade-?offs?)\b/i },
   { domain: "data", pattern: /\b(dataset|csv|sql|query|pandas|dataframe|statistics|regression|plot|chart|aggregate|etl|pipeline)\b/i },

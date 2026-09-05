@@ -231,6 +231,44 @@ export async function crossExecute(solutions: string[], testSets: string[], time
   return { scores, totalTests: usable.size };
 }
 
+// ── Computational scratchpad ───────────────────────────────────────────
+
+const COMPUTE_MARKER = "# kernel-compute";
+
+/** The proposer's `# kernel-compute` block, if any. */
+export function extractComputeBlock(text: string): string | undefined {
+  const blocks = [...text.matchAll(/```(?:python|py)?\s*\n([\s\S]*?)```/gi)].map((m) => (m[1] ?? "").trim());
+  return blocks.find((b) => b.startsWith(COMPUTE_MARKER));
+}
+
+export interface ComputeRun { stdout: string; stderr: string; exitCode: number; timedOut: boolean; durationMs: number }
+
+/** Run a scratchpad program; stdout/stderr are truncated to keep the follow-up prompt bounded. */
+export async function runComputeProgram(code: string, timeoutMs = 30_000, maxChars = 6_000): Promise<ComputeRun> {
+  const started = performance.now();
+  const dir = mkdtempSync(join(tmpdir(), "kernel-compute-"));
+  try {
+    writeFileSync(join(dir, "compute.py"), code.endsWith("\n") ? code : `${code}\n`, "utf8");
+    const python = process.env.KERNEL_EXEC_PYTHON ?? "python3";
+    const proc = Bun.spawn([python, "-I", "compute.py"], {
+      cwd: dir,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", PYTHONDONTWRITEBYTECODE: "1", PYTHONHASHSEED: "0", HOME: dir, MPLBACKEND: "Agg" },
+    });
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; proc.kill(); }, timeoutMs);
+    const [exitCode, stdout, stderr] = await Promise.all([proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    clearTimeout(timer);
+    const clip = (t: string) => (t.length > maxChars ? `${t.slice(0, maxChars)}\n… [truncated ${t.length - maxChars} chars]` : t);
+    return { stdout: clip(stdout), stderr: clip(stderr.split("\n").slice(-30).join("\n")), exitCode, timedOut, durationMs: Math.round(performance.now() - started) };
+  } catch (err) {
+    return { stdout: "", stderr: err instanceof Error ? err.message : String(err), exitCode: -1, timedOut: false, durationMs: Math.round(performance.now() - started) };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 /** Compact, model-readable description of failures for a repair wave. */
 export function describeFailures(check: ExecutionCheck, maxChars = 2_500): string {
   if (check.error !== undefined) return `The program failed to run: ${check.error}`;

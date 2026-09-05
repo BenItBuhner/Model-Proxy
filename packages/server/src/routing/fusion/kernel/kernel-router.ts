@@ -29,7 +29,7 @@ import { assembleStream } from "./assemble.ts";
 import { compileCapsule, controlCapsule, type Capsule } from "./capsule.ts";
 import { INTENT_OBJECTIVE, deterministicIntent, mergeModelIntent } from "./intent.ts";
 import { detectCodeTask, extractIoExamples, type CodeTask, type IoExample, type TaskExamples } from "./examples.ts";
-import { checkCandidateProgram, crossExecute, describeFailures, extractSolutionAndTests, extractSolveProgram } from "./execution.ts";
+import { checkCandidateProgram, crossExecute, describeFailures, extractComputeBlock, extractSolutionAndTests, extractSolveProgram, runComputeProgram } from "./execution.ts";
 
 /** Strip fenced code/JSON blocks and kernel metadata from a proposal, keeping its explanatory prose. */
 function proseOnly(text: string): string {
@@ -144,6 +144,10 @@ interface KernelRun {
   artifactKind: "json" | "python";
   /** When the first program verified (grace window lets a disagreeing program land before settling). */
   firstVerifiedAt?: number;
+  /** Task domains from the deterministic intent (gates the computational scratchpad). */
+  domains: string[];
+  /** Scratchpad executions this run. */
+  computeRuns: number;
   /** Verified program output on the test input(s), appended after synthesis as the final artifact. */
   verifiedArtifact?: string;
   /** Prose from the proposal whose program verified (its rule statement), used as the explanation. */
@@ -596,6 +600,8 @@ export class FusionKernel {
       evidenceWaiters: [],
       executionStats: { programs: 0, verified: 0, repairRounds: 0 },
       artifactKind: "json",
+      domains: domainHint.domains,
+      computeRuns: 0,
       phase: "prepared",
       abort: new AbortController(),
     };
@@ -1534,8 +1540,20 @@ export class FusionKernel {
     return `\n\nEXAMPLE-GROUNDED TASK: the task provides ${ex.examples.length} input/output example(s)${ex.tests.length > 0 ? ` and ${ex.tests.length} test input(s)` : ""}. Your deliverable is a PROGRAM, not a hand-computed answer: infer the general rule and implement it as \`def solve(x)\`. The kernel executes it on every example and on the test input(s); only a program reproducing every example counts as verified.`;
   }
 
+  private scratchpadEnabled(run: KernelRun): boolean {
+    return run.kcfg.compute_scratchpad && run.examples === undefined && run.codeTask === undefined && run.domains.some((d) => run.kcfg.compute_scratchpad_domains.includes(d));
+  }
+
+  /** Scratchpad contract for math/science proposers. */
+  private scratchpadContract(): string {
+    return [
+      "COMPUTATIONAL SCRATCHPAD: you may include ONE fenced ```python block whose FIRST line is `# kernel-compute` to brute-force small cases, enumerate, simulate, or verify a conjecture numerically (Python 3 with numpy, scipy and sympy; print() what you need; keep runtime under 20 s). The kernel EXECUTES it and returns its output to you before you finalize — do not guess what it prints. Use it whenever a computation would settle a doubt (checking small n, integrating numerically, counting configurations); if you include a compute block, defer your final answer until you have seen the output.",
+    ].join("\n");
+  }
+
   /** Last section of an example-grounded proposer capsule: the kernel's format wins over the user's. */
   private executionResponseFormat(run: KernelRun): string | undefined {
+    if (this.scratchpadEnabled(run)) return this.scratchpadContract();
     if (!run.kcfg.execution_verification) return undefined;
     if (run.examples === undefined && run.codeTask !== undefined) {
       const entry = run.codeTask.entryPoint !== undefined ? `\`${run.codeTask.entryPoint}\`` : "the requested function";
@@ -1646,7 +1664,7 @@ export class FusionKernel {
             const parsed = parseProposal(cached.result.content);
             return settle({ id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: cached.result.content, workKey, cached: true, durationMs: 0, success: true });
           }
-          const result = await runWorker(ctx, this.fallbackRouter, {
+          let result = await runWorker(ctx, this.fallbackRouter, {
             id,
             role,
             focus: `${role} · ${pick.family}`,
@@ -1666,6 +1684,49 @@ export class FusionKernel {
           if (result.truncated === true) run.truncatedWorkers += 1;
           if (!result.success) {
             return settle({ id, family: pick.family, routing: pick.routing, wave, answer: "", claims: [], assumptions: [], risks: [], confidence: undefined, raw: "", workKey, cached: false, durationMs: result.durationMs, success: false, error: result.error });
+          }
+          // Computational scratchpad: execute the proposer's compute block and
+          // let it finalize with the real output (bounded rounds).
+          if (role === "proposer" && !isControl && this.scratchpadEnabled(run)) {
+            let rounds = 0;
+            let history: Array<{ role: "system" | "user" | "assistant"; content: string }> = [...capsule.messages];
+            while (rounds < kcfg.compute_rounds && this.remainingSearchMs(run) > 60_000 && !(signal?.aborted ?? false)) {
+              const code = extractComputeBlock(result.content);
+              if (code === undefined) break;
+              rounds += 1;
+              run.computeRuns += 1;
+              const out = await runComputeProgram(code, kcfg.compute_timeout_seconds * 1000);
+              log.info("kernel scratchpad run", { conversationId: run.ledger.conversationId, id, round: rounds, exitCode: out.exitCode, timedOut: out.timedOut, durationMs: out.durationMs, stdoutChars: out.stdout.length });
+              await run.narrator.say(`Kernel: ran ${pick.family}'s scratchpad computation (${out.timedOut ? "timed out" : `exit ${out.exitCode}, ${out.durationMs} ms`}).`);
+              const feedback = [
+                `COMPUTE OUTPUT (round ${rounds}${out.timedOut ? ", TIMED OUT" : `, exit ${out.exitCode}, ${out.durationMs} ms`}):`,
+                "```",
+                out.stdout.trim().length > 0 ? out.stdout.trim() : "(no stdout)",
+                out.stderr.trim().length > 0 ? `\n[stderr]\n${out.stderr.trim()}` : "",
+                "```",
+                rounds < kcfg.compute_rounds
+                  ? "Use this output to finish. Return your complete final proposal in the required format. Include another `# kernel-compute` block ONLY if one more computation is essential."
+                  : "Use this output to finish. Return your complete final proposal in the required format now (no further compute blocks will run).",
+              ].join("\n");
+              history = [...history, { role: "assistant", content: result.content }, { role: "user", content: feedback }];
+              const followUp = await runWorker(ctx, this.fallbackRouter, {
+                id: `${id}-c${rounds}`,
+                role,
+                focus: `${role} · ${pick.family} · compute round ${rounds}`,
+                routing: pick.routing,
+                messages: history,
+                maxTokens,
+                timeoutMs: Math.min(timeoutMs, Math.max(15_000, this.remainingSearchMs(run) - 30_000)),
+                idleTimeoutMs: kcfg.worker_idle_timeout_seconds * 1000,
+                reasoningEffort: this.proposerReasoningEffort(run, role),
+                onSegment: run.narrator.segment,
+                semaphore: run.semaphore,
+                signal,
+              });
+              run.pool.recordOutcome(pick.routing, followUp.success, followUp.durationMs);
+              if (!followUp.success) break; // keep the pre-compute proposal rather than nothing
+              result = { ...followUp, durationMs: result.durationMs + followUp.durationMs };
+            }
           }
           // Truncated output is usable evidence for this turn but is not
           // cached: a replay should get the chance to finish it.
@@ -2181,6 +2242,7 @@ export class FusionKernel {
       earlySettles: run.earlySettles,
       settledAnswer: run.settledAnswer,
       execution: run.examples !== undefined || run.codeTask !== undefined ? { examples: run.examples?.examples.length ?? 0, codeTask: run.codeTask !== undefined, ...run.executionStats, artifact: run.verifiedArtifact !== undefined } : undefined,
+      computeRuns: run.computeRuns > 0 ? run.computeRuns : undefined,
       vote: run.lastVote !== undefined
         ? { leader: run.lastVote.leader?.answer, share: run.lastVote.leaderShare, unanimous: run.lastVote.unanimous, voters: run.lastVote.voters, entries: run.lastVote.entries.slice(0, 4).map((e) => ({ answer: e.answer, weight: e.weight, families: e.families })) }
         : undefined,

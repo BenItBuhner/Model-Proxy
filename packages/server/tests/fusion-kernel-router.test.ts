@@ -65,6 +65,10 @@ const kernelConfig: FusionConfig = {
     execution_repair_rounds: 2,
     execution_verified_weight: 3,
     execution_settle_grace_seconds: 1,
+    compute_scratchpad: false,
+    compute_scratchpad_domains: ["math", "science"],
+    compute_timeout_seconds: 30,
+    compute_rounds: 2,
     synthesis_timeout_seconds: 600,
     worker_reasoning_effort: { verifier: "low" },
     worker_timeout_seconds: 30,
@@ -607,6 +611,46 @@ describe("Fusion kernel engine", () => {
     expect(captured.synthesis).toHaveLength(0);
     expect(content).toContain("the rule transposes the grid");
     expect(content).not.toContain("```python");
+  });
+
+  it("executes a math proposer's # kernel-compute block and lets it finalize with the real output", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-compute-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const baseFetch = globalThis.fetch;
+    let computeOutputSeen: string | undefined;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      if (system.includes("independent expert reasoners") && String(body["model"]) === "up-glm") {
+        captured.proposer.push(body);
+        const text = allText(messages);
+        if (text.includes("COMPUTE OUTPUT")) {
+          computeOutputSeen = text.slice(text.indexOf("COMPUTE OUTPUT"), text.indexOf("COMPUTE OUTPUT") + 200);
+          return streamResponse("up-glm", [proposalText("glm", 1, "750")]);
+        }
+        // First round: ask the kernel to count for it.
+        return streamResponse("up-glm", ["Let me count them.\n```python\n# kernel-compute\nprint(sum(1 for n in range(1, 1001) if (n**5 - n) % 60 == 0))\n```\n"]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-compute-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, control_proposer: false, compute_scratchpad: true, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(computeOutputSeen).toBeDefined();
+    expect(computeOutputSeen).toContain("750");
+    expect((result.fusionTrace?.kernel as Record<string, unknown>)["computeRuns"]).toBe(1);
+    // The scratchpad contract reached the proposer.
+    expect(captured.proposer.some((p) => allText(p["messages"] as unknown[]).includes("COMPUTATIONAL SCRATCHPAD"))).toBe(true);
+    // The finalized proposal (not the pre-compute draft) fed the vote.
+    const vote = (result.fusionTrace?.kernel as Record<string, unknown>)["vote"] as { leader?: string } | undefined;
+    expect(vote?.leader).toBe("750");
   });
 
   it("runs a discrimination wave when verified programs disagree on the test output and settles on the majority rule", async () => {
