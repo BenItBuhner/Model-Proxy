@@ -1547,7 +1547,9 @@ export class FusionKernel {
   /** Scratchpad contract for math/science proposers. */
   private scratchpadContract(): string {
     return [
-      "COMPUTATIONAL SCRATCHPAD: you may include ONE fenced ```python block whose FIRST line is `# kernel-compute` to brute-force small cases, enumerate, simulate, or verify a conjecture numerically (Python 3 with numpy, scipy and sympy; print() what you need; keep runtime under 20 s). The kernel EXECUTES it and returns its output to you before you finalize — do not guess what it prints. Use it whenever a computation would settle a doubt (checking small n, integrating numerically, counting configurations); if you include a compute block, defer your final answer until you have seen the output.",
+      "COMPUTATIONAL SCRATCHPAD: include ONE fenced ```python block whose FIRST line is `# kernel-compute` and the kernel will EXECUTE it (Python 3 with numpy, scipy, sympy; print() what you need; runtime under 20 s) and return the output to you before you finalize — never guess what it prints.",
+      "You SHOULD use it before committing to an answer whenever the problem has computable structure: counting/combinatorics and number theory (brute-force the small cases of n and compare with your formula), optimization/extremal problems (search small instances for the extremum and the configurations achieving it), geometry (place coordinates and evaluate lengths/areas/angles numerically, e.g. with sympy or floating point), sequences/recurrences (compute terms), probability (enumerate or Monte-Carlo). A disagreement between your reasoning and the computation means your reasoning is wrong until you can explain the gap.",
+      "When you include a compute block, do NOT give a final answer in that response — end with what you are checking; you will get the output and then finalize in the required format.",
     ].join("\n");
   }
 
@@ -1696,7 +1698,7 @@ export class FusionKernel {
               rounds += 1;
               run.computeRuns += 1;
               const out = await runComputeProgram(code, kcfg.compute_timeout_seconds * 1000);
-              log.info("kernel scratchpad run", { conversationId: run.ledger.conversationId, id, round: rounds, exitCode: out.exitCode, timedOut: out.timedOut, durationMs: out.durationMs, stdoutChars: out.stdout.length });
+              log.info("kernel scratchpad run", { conversationId: run.ledger.conversationId, id, round: rounds, exitCode: out.exitCode, timedOut: out.timedOut, durationMs: out.durationMs, stdoutChars: out.stdout.length, stdoutHead: out.stdout.slice(0, 200), stderrTail: out.stderr.slice(-300) });
               await run.narrator.say(`Kernel: ran ${pick.family}'s scratchpad computation (${out.timedOut ? "timed out" : `exit ${out.exitCode}, ${out.durationMs} ms`}).`);
               const feedback = [
                 `COMPUTE OUTPUT (round ${rounds}${out.timedOut ? ", TIMED OUT" : `, exit ${out.exitCode}, ${out.durationMs} ms`}):`,
