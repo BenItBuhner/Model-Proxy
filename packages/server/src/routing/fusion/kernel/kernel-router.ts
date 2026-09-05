@@ -753,7 +753,9 @@ export class FusionKernel {
     if (configured !== undefined) return configured;
     // Example-grounded tasks are verified by execution: several quick program
     // attempts plus repair beat one exhaustive think that never finishes.
-    if (role === "proposer" && (run.examples !== undefined || run.codeTask !== undefined) && run.kcfg.execution_verification) return "medium";
+    // Example-grounded tasks: several quick program attempts filtered by execution beat one exhaustive think.
+    // Code tasks graded by hidden tests reward careful spec reading instead: keep high effort.
+    if (role === "proposer" && run.examples !== undefined && run.kcfg.execution_verification) return "medium";
     if (role === "proposer" && run.band !== "F2") return "high";
     return undefined;
   }
@@ -1497,8 +1499,8 @@ export class FusionKernel {
       return [
         "This format OVERRIDES any output-format instructions in the conversation above; those apply to the kernel's final answer to the user, not to you.",
         "1. `Approach:` one or two sentences.",
-        `2. ONE fenced \`\`\`python block with the COMPLETE, self-contained solution (all imports, the full definition of ${entry}, exactly the signature the task specifies). No example usage, no prints, no tests in this block.`,
-        "3. ONE fenced ```python block whose FIRST line is `# kernel-tests`, containing 5-10 independent test functions named `test_*` that use plain `assert` statements to check the behaviors the task specifies (return values and shapes, raised exceptions via try/except, edge cases). Tests may reference the solution's functions directly (they run in the solution's namespace) and may import stdlib modules such as tempfile/os; they must be deterministic, need no network, and must not rely on files or state your solution did not create. The kernel executes EVERY reasoner's tests against EVERY reasoner's solution, so write tests you are confident a correct implementation of the specification passes.",
+        `2. ONE fenced \`\`\`python block with the COMPLETE, self-contained solution (all imports, the full definition of ${entry}, exactly the signature the task specifies). No example usage, no prints, no tests in this block. Follow the specification LITERALLY: use exactly the constants, formats, defaults, return types, column/key names, plot titles/labels and error behaviors it states; do not add validation, normalization or fallbacks the specification does not ask for (for example, do not pre-check that a file exists — let the library call raise), because hidden tests may mock library calls and check exact values.`,
+        "3. ONE fenced ```python block whose FIRST line is `# kernel-tests`, containing 5-10 independent test functions named `test_*` that use plain `assert` statements. Derive each test from a literal statement of the specification (a stated format, default, return type/shape, raised exception via try/except, or edge case); do not test behaviors the specification leaves open. Tests may reference the solution's functions directly (they run in the solution's namespace) and may import stdlib modules such as tempfile/os; they must be deterministic, need no network, and must not rely on files or state your solution did not create. The kernel executes EVERY reasoner's tests against EVERY reasoner's solution, so write tests you are confident a correct implementation of the specification passes.",
         "4. The fenced ```json metadata block from your system contract, with \"final_answer\": null.",
         "Keep prose short; put your effort into a correct solution and sharp tests.",
       ].join("\n");
