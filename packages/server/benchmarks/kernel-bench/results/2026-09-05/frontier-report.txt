@@ -1,31 +1,35 @@
-kernel-bench report — 128 graded rows, 32 items attempted by all 4 models (2026-09-05T15:22:30.085Z)
+kernel-bench report — 208 graded rows, 52 items attempted by all 4 models (2026-09-05T21:13:56.720Z)
 
 suite                     deepseek-v4-pro-0813           glm-5.3           kimi-k3        fusion-max
 ----------------------------------------------------------------------------------------------------
 apex25                             33%  4/12         25%  1/4          50%  2/4          58%  7/12
 arcagi2                            42%  8/19         60%  6/10         50%  4/8          65% 13/20
+bcbhard                            25%  5/20         20%  4/20         20%  4/20         30%  6/20
 
 domain                    deepseek-v4-pro-0813           glm-5.3           kimi-k3        fusion-max
 ----------------------------------------------------------------------------------------------------
 math                               33%  4/12         25%  1/4          50%  2/4          58%  7/12
 reasoning                          42%  8/19         60%  6/10         50%  4/8          65% 13/20
-ALL                                39% 12/31         50%  7/14         50%  6/12         63% 20/32
+swe                                25%  5/20         20%  4/20         20%  4/20         30%  6/20
+ALL                                33% 17/51         32% 11/34         31% 10/32         50% 26/52
 
 strict (fail = wrong)     deepseek-v4-pro-0813           glm-5.3           kimi-k3        fusion-max
 ----------------------------------------------------------------------------------------------------
 math                               33%  4/12          8%  1/12         17%  2/12         58%  7/12
 reasoning                          40%  8/20         30%  6/20         20%  4/20         65% 13/20
-ALL                                38% 12/32         22%  7/32         19%  6/32         63% 20/32
+swe                                25%  5/20         20%  4/20         20%  4/20         30%  6/20
+ALL                                33% 17/52         21% 11/52         19% 10/52         50% 26/52
 
-latency p50 / p90 (s)              474 / 775       1248 / 1800       1161 / 1617       1237 / 1800
+latency p50 / p90 (s)              286 / 744        613 / 1800        327 / 1515        615 / 1800
 failed calls                               1                18                20                 0
 
 fusion vs best single base model (same items):
   math         fusion  58%  best base kimi-k3                 50%  Δ    8 pts
   reasoning    fusion  65%  best base glm-5.3                 60%  Δ    5 pts
-  ALL          fusion  63%  best base glm-5.3                 50%  Δ   13 pts
+  swe          fusion  30%  best base deepseek-v4-pro-0813    25%  Δ    5 pts
+  ALL          fusion  50%  best base deepseek-v4-pro-0813    33%  Δ   17 pts
 
-fusion misses (12):
+fusion misses (26):
   arcagi2:28a6681f                   pred=10x10 (mismatch)     exp=10 rows              deepseek=✗ glm=! kimi=!  agr=0.22
   arcagi2:4c416de3                   pred=                     exp=19 rows              deepseek=✗ glm=! kimi=!  agr=0.311
   arcagi2:7b5033c1                   pred=25x1 (mismatch)      exp=25 rows              deepseek=✓ glm=✗ kimi=✗  agr=0.8
@@ -38,3 +42,17 @@ fusion misses (12):
   apex25:9                           pred=$4\pi$               exp=2 \sqrt{3}+\frac{8 \ deepseek=✗ glm=✗ kimi=✗  agr=0.495
   apex25:12                          pred=4048                 exp=2112                 deepseek=✗ glm=! kimi=!  agr=0.419
   apex25:10                          pred=126                  exp=213                  deepseek=✗ glm=! kimi=!  agr=0.475
+  bcbhard:1077                       pred=fail                 exp=pass                 deepseek=✗ glm=✗ kimi=✗  agr=0.262
+  bcbhard:409                        pred=fail                 exp=pass                 deepseek=✗ glm=✗ kimi=✗  agr=0.312
+  bcbhard:93                         pred=fail                 exp=pass                 deepseek=✗ glm=✗ kimi=✗  agr=0.39
+  bcbhard:582                        pred=fail                 exp=pass                 deepseek=✗ glm=✗ kimi=✗  agr=0.385
+  bcbhard:720                        pred=fail                 exp=pass                 deepseek=✗ glm=✗ kimi=✗  agr=0.483
+  bcbhard:502                        pred=fail                 exp=pass                 deepseek=✓ glm=✓ kimi=✗  agr=0.55
+  bcbhard:857                        pred=fail                 exp=pass                 deepseek=✗ glm=✗ kimi=✗  agr=0.267
+  bcbhard:654                        pred=fail                 exp=pass                 deepseek=✗ glm=✗ kimi=✗  agr=0.351
+  bcbhard:100                        pred=fail                 exp=pass                 deepseek=✗ glm=✗ kimi=✓  agr=0.192
+  bcbhard:1057                       pred=fail                 exp=pass                 deepseek=✗ glm=✗ kimi=✗  agr=0.377
+  bcbhard:560                        pred=fail                 exp=pass                 deepseek=✗ glm=✗ kimi=✗  agr=0.391
+  bcbhard:594                        pred=fail                 exp=pass                 deepseek=✗ glm=✗ kimi=✗  agr=0.279
+  bcbhard:636                        pred=fail                 exp=pass                 deepseek=✗ glm=✗ kimi=✗  agr=0.281
+  bcbhard:123                        pred=fail                 exp=pass                 deepseek=✗ glm=✗ kimi=✗  agr=0.402
