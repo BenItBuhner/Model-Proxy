@@ -1135,6 +1135,11 @@ export class FusionKernel {
         novelClaimsLastWave: novel,
         familyCount: run.pool.proposerFamilyCount,
       });
+      if (decision.escalate && run.verifiedArtifact !== undefined) {
+        // Execution already settled the answer; textual disagreement between
+        // candidates (different but equivalent programs) is not a reason to search on.
+        decision = { escalate: false, reason: "execution-verified artifact settles the task" };
+      }
       if (decision.escalate) {
         // Another wave only makes sense if a worker call can realistically
         // finish inside the remaining budget; use this run's observed latency.
