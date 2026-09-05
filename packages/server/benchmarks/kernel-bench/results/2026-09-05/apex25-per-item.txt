@@ -1,14 +1,16 @@
-item        exp                 deepseek glm kimi fusionF3 fusionMAX
+MathArena Apex 2025 per problem (✓ correct, ✗ wrong, ! failed/timeout, - not run)
+item        expected            deepseek glm kimi fusionF3 fusionMAX
 apex25:1    4049                ✗        ✗   !    ✗        ✓
-apex25:2    1/2                 ✗        !   !    ✗         
-apex25:3    \frac{1980}{169}    ✓        !   !    ✓         
+apex25:2    1/2                 ✗        !   !    ✗        ✗
+apex25:3    \frac{1980}{169}    ✓        !   !    ✓        -
 apex25:4    6266942768          ✗        !   !    ✓        ✓
 apex25:5    6                   ✗        ✗   ✓    ✓        ✓
-apex25:6    138                 ✗        ✓   ✓    ✓         
-apex25:7    248/517             ✓        !   !    ✓         
-apex25:8    1164                ✓        !   ✗    ✓         
-apex25:9    2 \sqrt{3}+\frac{8  ✗        ✗   ✗    ✗         
-apex25:10   213                 ✗        !   !    ✗         
+apex25:6    138                 ✗        ✓   ✓    ✓        -
+apex25:7    248/517             ✓        !   !    ✓        -
+apex25:8    1164                ✓        !   ✗    ✓        -
+apex25:9    2 \sqrt{3}+\frac{8  ✗        ✗   ✗    ✗        ✗
+apex25:10   213                 ✗        !   !    ✗        ✗
 apex25:11   14/5                ✓        !   !    ✓        ✓
-apex25:12   2112                ✗        !   !    ✗         
-max-effort (n=4): 4 / 4 | median latency 3000s
+apex25:12   2112                ✗        !   !    ✗        ✗
+fusion default: 7/12 | max effort on 8 problems: 4/8 (median 3000s) | default ∪ max: 8/12
+members: deepseek 4/12, kimi 2/12, glm 1/12 (strict; union of members 6/12)

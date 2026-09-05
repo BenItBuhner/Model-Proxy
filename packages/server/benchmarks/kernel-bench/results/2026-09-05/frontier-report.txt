@@ -1,4 +1,4 @@
-kernel-bench report — 128 graded rows, 32 items attempted by all 4 models (2026-09-05T12:18:01.861Z)
+kernel-bench report — 128 graded rows, 32 items attempted by all 4 models (2026-09-05T15:22:30.085Z)
 
 suite                     deepseek-v4-pro-0813           glm-5.3           kimi-k3        fusion-max
 ----------------------------------------------------------------------------------------------------
