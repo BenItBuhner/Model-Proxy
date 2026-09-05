@@ -1544,10 +1544,14 @@ export class FusionKernel {
     return run.kcfg.compute_scratchpad && run.examples === undefined && run.codeTask === undefined && run.domains.some((d) => run.kcfg.compute_scratchpad_domains.includes(d));
   }
 
-  /** Scratchpad contract for math/science proposers. */
-  private scratchpadContract(): string {
+  /** Scratchpad contract for math/science proposers; at F3/max the first computation is mandatory. */
+  private scratchpadContract(run: KernelRun): string {
+    const mandatory = run.band !== "F2";
     return [
       "COMPUTATIONAL SCRATCHPAD: include ONE fenced ```python block whose FIRST line is `# kernel-compute` and the kernel will EXECUTE it (Python 3 with numpy, scipy, sympy; print() what you need; runtime under 20 s) and return the output to you before you finalize — never guess what it prints.",
+      mandatory
+        ? "REQUIRED: your FIRST response must NOT contain a final answer. It must state your candidate approach and end with ONE `# kernel-compute` block that tests it against the problem — brute-force the small cases, enumerate configurations, evaluate the geometry numerically (including checks for self-intersection, degenerate cases and which region/set the problem actually refers to), or compute terms/integrals. Only after seeing the output do you finalize in the required format."
+        : "",
       "You SHOULD use it before committing to an answer whenever the problem has computable structure: counting/combinatorics and number theory (brute-force the small cases of n and compare with your formula), optimization/extremal problems (search small instances for the extremum and the configurations achieving it), geometry (place coordinates and evaluate lengths/areas/angles numerically, e.g. with sympy or floating point), sequences/recurrences (compute terms), probability (enumerate or Monte-Carlo). A disagreement between your reasoning and the computation means your reasoning is wrong until you can explain the gap.",
       "When you include a compute block, do NOT give a final answer in that response — end with what you are checking; you will get the output and then finalize in the required format.",
     ].join("\n");
@@ -1555,7 +1559,7 @@ export class FusionKernel {
 
   /** Last section of an example-grounded proposer capsule: the kernel's format wins over the user's. */
   private executionResponseFormat(run: KernelRun): string | undefined {
-    if (this.scratchpadEnabled(run)) return this.scratchpadContract();
+    if (this.scratchpadEnabled(run)) return this.scratchpadContract(run);
     if (!run.kcfg.execution_verification) return undefined;
     if (run.examples === undefined && run.codeTask !== undefined) {
       const entry = run.codeTask.entryPoint !== undefined ? `\`${run.codeTask.entryPoint}\`` : "the requested function";
