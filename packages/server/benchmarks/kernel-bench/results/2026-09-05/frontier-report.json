@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-09-05T04:53:33.894Z",
-  "commonItems": 24,
+  "generatedAt": "2026-09-05T12:18:01.862Z",
+  "commonItems": 32,
   "models": [
     "deepseek-v4-pro-0813",
     "glm-5.3",
@@ -10,32 +10,32 @@
   "bySuite": {
     "apex25": {
       "glm-5.3": {
-        "n": 4,
-        "correct": 0,
-        "failed": 4,
-        "p50Ms": 1543531,
-        "p90Ms": 1800002
+        "n": 12,
+        "correct": 1,
+        "failed": 8,
+        "p50Ms": 1248203,
+        "p90Ms": 1543425
       },
       "kimi-k3": {
-        "n": 4,
-        "correct": 0,
-        "failed": 4,
-        "p50Ms": 1779321,
-        "p90Ms": 1800001
+        "n": 12,
+        "correct": 2,
+        "failed": 8,
+        "p50Ms": 1382184,
+        "p90Ms": 1557247
       },
       "deepseek-v4-pro-0813": {
-        "n": 4,
-        "correct": 1,
+        "n": 12,
+        "correct": 4,
         "failed": 0,
-        "p50Ms": 547299,
-        "p90Ms": 622069
+        "p50Ms": 474463,
+        "p90Ms": 744300
       },
       "fusion-max": {
-        "n": 4,
-        "correct": 3,
+        "n": 12,
+        "correct": 7,
         "failed": 0,
-        "p50Ms": 1498700,
-        "p90Ms": 1800577
+        "p50Ms": 1800128,
+        "p90Ms": 1800185
       }
     },
     "arcagi2": {
@@ -72,32 +72,32 @@
   "byDomain": {
     "math": {
       "glm-5.3": {
-        "n": 4,
-        "correct": 0,
-        "failed": 4,
-        "p50Ms": 1543531,
-        "p90Ms": 1800002
+        "n": 12,
+        "correct": 1,
+        "failed": 8,
+        "p50Ms": 1248203,
+        "p90Ms": 1543425
       },
       "kimi-k3": {
-        "n": 4,
-        "correct": 0,
-        "failed": 4,
-        "p50Ms": 1779321,
-        "p90Ms": 1800001
+        "n": 12,
+        "correct": 2,
+        "failed": 8,
+        "p50Ms": 1382184,
+        "p90Ms": 1557247
       },
       "deepseek-v4-pro-0813": {
-        "n": 4,
-        "correct": 1,
+        "n": 12,
+        "correct": 4,
         "failed": 0,
-        "p50Ms": 547299,
-        "p90Ms": 622069
+        "p50Ms": 474463,
+        "p90Ms": 744300
       },
       "fusion-max": {
-        "n": 4,
-        "correct": 3,
+        "n": 12,
+        "correct": 7,
         "failed": 0,
-        "p50Ms": 1498700,
-        "p90Ms": 1800577
+        "p50Ms": 1800128,
+        "p90Ms": 1800185
       }
     },
     "reasoning": {
@@ -133,31 +133,31 @@
   },
   "overall": {
     "glm-5.3": {
-      "n": 24,
-      "correct": 6,
-      "failed": 14,
-      "p50Ms": 1335996,
-      "p90Ms": 1800002
-    },
-    "kimi-k3": {
-      "n": 24,
-      "correct": 4,
-      "failed": 16,
-      "p50Ms": 733895,
+      "n": 32,
+      "correct": 7,
+      "failed": 18,
+      "p50Ms": 1248203,
       "p90Ms": 1800001
     },
+    "kimi-k3": {
+      "n": 32,
+      "correct": 6,
+      "failed": 20,
+      "p50Ms": 1161184,
+      "p90Ms": 1616589
+    },
     "deepseek-v4-pro-0813": {
-      "n": 24,
-      "correct": 9,
+      "n": 32,
+      "correct": 12,
       "failed": 1,
-      "p50Ms": 477157,
+      "p50Ms": 474463,
       "p90Ms": 774636
     },
     "fusion-max": {
-      "n": 24,
-      "correct": 16,
+      "n": 32,
+      "correct": 20,
       "failed": 0,
-      "p50Ms": 694812,
+      "p50Ms": 1237147,
       "p90Ms": 1800170
     }
   }

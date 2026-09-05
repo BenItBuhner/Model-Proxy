@@ -1,0 +1,14 @@
+item        exp                 deepseek glm kimi fusionF3 fusionMAX
+apex25:1    4049                ✗        ✗   !    ✗        ✓
+apex25:2    1/2                 ✗        !   !    ✗         
+apex25:3    \frac{1980}{169}    ✓        !   !    ✓         
+apex25:4    6266942768          ✗        !   !    ✓        ✓
+apex25:5    6                   ✗        ✗   ✓    ✓        ✓
+apex25:6    138                 ✗        ✓   ✓    ✓         
+apex25:7    248/517             ✓        !   !    ✓         
+apex25:8    1164                ✓        !   ✗    ✓         
+apex25:9    2 \sqrt{3}+\frac{8  ✗        ✗   ✗    ✗         
+apex25:10   213                 ✗        !   !    ✗         
+apex25:11   14/5                ✓        !   !    ✓        ✓
+apex25:12   2112                ✗        !   !    ✗         
+max-effort (n=4): 4 / 4 | median latency 3000s
