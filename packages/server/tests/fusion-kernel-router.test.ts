@@ -64,6 +64,7 @@ const kernelConfig: FusionConfig = {
     execution_timeout_seconds: 10,
     execution_repair_rounds: 2,
     execution_verified_weight: 3,
+    execution_settle_grace_seconds: 1,
     synthesis_timeout_seconds: 600,
     worker_reasoning_effort: { verifier: "low" },
     worker_timeout_seconds: 30,
@@ -606,6 +607,54 @@ describe("Fusion kernel engine", () => {
     expect(captured.synthesis).toHaveLength(0);
     expect(content).toContain("the rule transposes the grid");
     expect(content).not.toContain("```python");
+  });
+
+  it("runs a discrimination wave when verified programs disagree on the test output and settles on the majority rule", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-discrim-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    // Symmetric training grids: identity and transpose both reproduce them; they differ on the test grid.
+    const task = "Infer the rule; end with the output grid as JSON.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[2,1]]\nOutput (2x2):\n[[1,2],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,0],[0,5]]\nOutput (2x2):\n[[5,0],[0,5]]\n\nTest input (2x2):\n[[1,2],[3,4]]";
+    const withProgram = (family: string, rule: string, program: string) =>
+      [`Rule: ${rule}`, "```python", program, "```", "```json", JSON.stringify({ answer_summary: `${family}: ${rule}`, final_answer: null, key_claims: ["Grid rule", "Applies to test", "Consistent"], assumptions: [], risks: [], confidence: 0.6 }), "```"].join("\n");
+    const identity = "def solve(grid):\n    return [list(r) for r in grid]";
+    const transpose = "def solve(grid):\n    return [list(r) for r in zip(*grid)]";
+    let discriminationPrompts = 0;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        const model = String(body["model"]);
+        if (allText(messages).includes("EXECUTION FEEDBACK (discrimination)")) {
+          discriminationPrompts += 1;
+          // Judges side with the transpose reading.
+          return streamResponse(model, [withProgram(model, "the grid is transposed", transpose)]);
+        }
+        if (model === "up-glm") return streamResponse(model, [withProgram("glm", "the grid is unchanged", identity)]);
+        if (model === "up-kimi") return streamResponse(model, [withProgram("kimi", "the grid is transposed", transpose)]);
+        return streamResponse(model, [proposalText("deepseek", 1, "[[1,2],[3,4]]")]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-discrim-${Date.now()}`);
+    // The discrimination wave needs budget left after the proposal wave (the test config's 60 s deadline is too tight).
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: false, adaptive_verification: true, execution_settle_grace_seconds: 1, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(discriminationPrompts).toBeGreaterThan(0);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    expect((trace["execution"] as Record<string, unknown>)["artifact"]).toBe(true);
+    const content = result.content ?? "";
+    expect(content).toContain("[[1,3],[2,4]]");
+    expect(content).not.toContain("[[1,2],[3,4]]");
+    expect(captured.synthesis).toHaveLength(0);
   });
 
   it("cross-executes code solutions against every reasoner's tests and emits the best solution as the artifact", async () => {

@@ -142,6 +142,8 @@ interface KernelRun {
   codeTask?: CodeTask;
   /** Fence language of the verified artifact. */
   artifactKind: "json" | "python";
+  /** When the first program verified (grace window lets a disagreeing program land before settling). */
+  firstVerifiedAt?: number;
   /** Verified program output on the test input(s), appended after synthesis as the final artifact. */
   verifiedArtifact?: string;
   /** Prose from the proposal whose program verified (its rule statement), used as the explanation. */
@@ -601,8 +603,18 @@ export class FusionKernel {
 
   /** Proposal-wave early settle: ≥2 families already agree above threshold. */
   private proposalsAlreadyAgree(run: KernelRun, settled: Proposal[], quorumReached: boolean): boolean {
-    // A program that reproduced every task example settles the wave outright.
-    if (settled.some((p) => p.execution?.verified === true)) return true;
+    // Programs that reproduced every task example settle the wave — once two of
+    // them agree on the test output, or once one has stood unchallenged for the
+    // grace window (a second, disagreeing program may still be in flight).
+    const verifiedOutputs = settled.filter((p) => p.execution?.verified === true && p.finalAnswer !== undefined).map((p) => p.finalAnswer!);
+    if (verifiedOutputs.length > 0) {
+      const counts = new Map<string, number>();
+      for (const o of verifiedOutputs) counts.set(o, (counts.get(o) ?? 0) + 1);
+      if ([...counts.values()].some((c) => c >= 2)) return true;
+      if (counts.size === 1 && run.firstVerifiedAt !== undefined && performance.now() - run.firstVerifiedAt >= run.kcfg.execution_settle_grace_seconds * 1000) return true;
+      if (counts.size === 1 && settled.filter((p) => p.success).length >= run.pool.proposerFamilyCount + 1) return true;
+      return false;
+    }
     const usable = settled.filter((p) => p.success && p.claims.length > 0);
     if (new Set(usable.map((p) => p.family)).size < 2) return false;
     // Evidence-based settle for short-answer tasks: two families share the
@@ -755,7 +767,7 @@ export class FusionKernel {
     // attempts plus repair beat one exhaustive think that never finishes.
     // Example-grounded tasks: several quick program attempts filtered by execution beat one exhaustive think.
     // Code tasks graded by hidden tests reward careful spec reading instead: keep high effort.
-    if (role === "proposer" && run.examples !== undefined && run.kcfg.execution_verification) return "medium";
+    if (role === "proposer" && run.examples !== undefined && run.kcfg.execution_verification) return run.band === "max" ? "high" : "medium";
     if (role === "proposer" && run.band !== "F2") return "high";
     return undefined;
   }
@@ -1005,7 +1017,7 @@ export class FusionKernel {
             // Pipelined execution check: the first verified program settles the wave.
             if (run.examples !== undefined && kcfg.execution_verification) {
               await this.checkProposalProgram(run, proposal);
-              if (run.verifiedArtifact !== undefined) return; // no LLM audit needed
+              if (run.firstVerifiedAt !== undefined) return; // execution evidence exists: no LLM audit needed
             }
             if (!(verifyCandidates && kcfg.pipeline_verification)) return;
             if (this.remainingSearchMs(run) <= 10_000) return;
@@ -1354,13 +1366,43 @@ export class FusionKernel {
       extra.push(...repairs);
       pool = repairs;
     }
-    const verified = [...waveProposals, ...extra].filter((p) => p.execution?.verified === true);
-    if (verified.length > 0 && run.verifiedArtifact === undefined) {
-      const outputs = verified.map((p) => p.finalAnswer).filter((a): a is string => a !== undefined);
-      const counts = new Map<string, number>();
-      for (const o of outputs) counts.set(o, (counts.get(o) ?? 0) + 1);
-      const winner = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
-      if (winner !== undefined) run.verifiedArtifact = winner[0];
+    let verified = [...waveProposals, ...extra].filter((p) => p.execution?.verified === true && p.finalAnswer !== undefined);
+    const distinctOutputs = (pool: Proposal[]) => new Set(pool.map((p) => p.finalAnswer!)).size;
+    if (distinctOutputs(verified) > 1 && this.remainingSearchMs(run) > 90_000) {
+      // Every candidate reproduces the examples yet they disagree on the test:
+      // the rule is underdetermined. One discrimination wave sees the competing
+      // rules side by side and argues for the intended one.
+      run.executionStats.repairRounds += 1;
+      run.phase = `execution discrimination (wave ${wave})`;
+      const groups = new Map<string, Proposal[]>();
+      for (const p of verified) groups.set(p.finalAnswer!, [...(groups.get(p.finalAnswer!) ?? []), p]);
+      const summary = [...groups.entries()].map(([out, ps], i) => {
+        const dims = (() => { try { const g = JSON.parse(out) as unknown[]; return Array.isArray(g) ? `${g.length}x${Array.isArray(g[0]) ? (g[0] as unknown[]).length : 1}` : "scalar"; } catch { return "?"; } })();
+        return `Candidate rule ${i + 1} (${ps.length} program(s), test output ${dims}):\n${truncateMiddle(proseOnly(ps[0]!.answer), 1_200, "rule trimmed")}\n\`\`\`python\n${truncateMiddle(ps[0]!.program ?? "", 3_000, "program trimmed")}\n\`\`\``;
+      }).join("\n\n");
+      const note = [
+        `EXECUTION FEEDBACK (discrimination): ${groups.size} different rules each reproduce ALL ${ex.examples.length} training pairs but produce DIFFERENT outputs on the test input, so the examples underdetermine the rule.`,
+        summary,
+        "Decide which rule the task intends: prefer the interpretation that explains WHY every training output looks the way it does (object roles, symmetry, counting, relative positions) over one that merely fits, and prefer the simpler, more natural rule when both explain equally well. Then return the complete program for the intended rule (you may reuse or fix one of the candidates).",
+      ].join("\n\n");
+      await run.narrator.say(`Kernel: ${groups.size} verified rules disagree on the test output; running a discrimination wave.`);
+      const judges = await this.proposalWave(ctx, run, intent, ledgerView, wave, widths, taskStartIndex, note, "proposer", Math.min(widths.proposals, 3));
+      await Promise.all(judges.filter((p) => p.success).map(check));
+      extra.push(...judges);
+      verified = [...waveProposals, ...extra].filter((p) => p.execution?.verified === true && p.finalAnswer !== undefined);
+    }
+    if (verified.length > 0) {
+      // Artifact = the test output backed by the most verified programs; ties → shortest program (Occam).
+      const counts = new Map<string, { n: number; shortest: Proposal }>();
+      for (const p of verified) {
+        const cur = counts.get(p.finalAnswer!);
+        if (cur === undefined) counts.set(p.finalAnswer!, { n: 1, shortest: p });
+        else counts.set(p.finalAnswer!, { n: cur.n + 1, shortest: (p.program?.length ?? Infinity) < (cur.shortest.program?.length ?? Infinity) ? p : cur.shortest });
+      }
+      const winner = [...counts.entries()].sort((a, b) => b[1].n - a[1].n || (a[1].shortest.program?.length ?? 0) - (b[1].shortest.program?.length ?? 0))[0]!;
+      run.verifiedArtifact = winner[0];
+      run.verifiedExplanation = proseOnly(winner[1].shortest.answer);
+      log.info("kernel execution artifact", { conversationId: run.ledger.conversationId, wave, verifiedPrograms: verified.length, distinctOutputs: counts.size, backing: winner[1].n });
     }
     const durationMs = Math.round(performance.now() - started);
     emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "completed", durationMs, detail: { wave, execution: true, programs: run.executionStats.programs, verified: run.executionStats.verified, repairRounds: round } });
@@ -1392,11 +1434,12 @@ export class FusionKernel {
       run.executionStats.verified += 1;
       if (result.testOutputs.length > 0) {
         p.finalAnswer = JSON.stringify(result.testOutputs[0]);
-        if (run.verifiedArtifact === undefined) {
-          run.verifiedArtifact = p.finalAnswer;
-          run.verifiedExplanation = proseOnly(p.answer);
-        }
         run.confirmedAnswerKeys.add(normalizeFinalAnswer(p.finalAnswer));
+        if (run.firstVerifiedAt === undefined) {
+          run.firstVerifiedAt = performance.now();
+          // Wake the wave when the grace window ends so it can settle on a lone verified program.
+          setTimeout(() => notifyEvidence(run), run.kcfg.execution_settle_grace_seconds * 1000 + 50);
+        }
       }
       notifyEvidence(run);
     }

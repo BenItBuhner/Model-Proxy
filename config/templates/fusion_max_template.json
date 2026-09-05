@@ -41,6 +41,7 @@
       "execution_timeout_seconds": 10,
       "execution_repair_rounds": 3,
       "execution_verified_weight": 3,
+      "execution_settle_grace_seconds": 45,
       "synthesis_timeout_seconds": 600,
       "worker_reasoning_effort": { "verifier": "low", "intent": "low", "repair": "medium", "checkpoint": "medium" },
       "worker_timeout_seconds": 300,
