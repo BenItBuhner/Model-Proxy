@@ -18,6 +18,8 @@ import {
 import { decideEscalation, effortBandFor, escalationStrategyNote, parseRequestedKernelEffort, widthsFor } from "../src/routing/fusion/kernel/scheduler.ts";
 import { extractIoExamples } from "../src/routing/fusion/kernel/examples.ts";
 import { checkCandidateProgram, describeFailures, extractSolveProgram } from "../src/routing/fusion/kernel/execution.ts";
+import { ARC_UTILS_SOURCE } from "../src/routing/fusion/kernel/arc-utils-source.ts";
+import { readFileSync } from "node:fs";
 import { ModelPool } from "../src/routing/fusion/kernel/model-pool.ts";
 import { computeWorkKey } from "../src/routing/fusion/kernel/work-cache.ts";
 import { assembleStream } from "../src/routing/fusion/kernel/assemble.ts";
@@ -372,6 +374,14 @@ describe("kernel wave parsing and consensus", () => {
     expect(vote?.leader?.executionVerified).toBe(1);
     expect(vote?.leader?.weight).toBe(3);
     expect(isDecisiveVote(vote, [])).toBe(true);
+  });
+
+  it("ships the grid helper library into the solve() sandbox, in sync with arc_utils.py", async () => {
+    const py = readFileSync(new URL("../src/routing/fusion/kernel/arc_utils.py", import.meta.url), "utf8");
+    expect(ARC_UTILS_SOURCE).toBe(py);
+    const r = await checkCandidateProgram("from arc_utils import *\ndef solve(g):\n    comps = connected_components(g, background=0)\n    return extract(g, comps[0])\n", [{ input: [[0, 0, 0], [0, 7, 7], [0, 0, 7]], output: [[7, 7], [0, 7]] }], [[[0, 3], [0, 0]]], 5_000);
+    expect(r.passed).toBe(1);
+    expect(r.testOutputs).toEqual([[[3]]]);
   });
 
   it("never rejects a claim on verifier wording overlap when the verdict was not reject", () => {

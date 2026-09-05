@@ -1570,7 +1570,7 @@ export class FusionKernel {
     return [
       "This format OVERRIDES any output-format instructions in the conversation above; those apply to the kernel's final answer to the user, not to you.",
       "1. `Rule:` one or two sentences stating the transformation precisely.",
-      "2. A fenced ```python block defining `def solve(x)` that implements the rule for ANY input of this kind (standard library only; never hard-code or look up example outputs). Inputs/outputs are plain Python lists/ints/strings exactly as shown in the examples.",
+      "2. A fenced ```python block defining `def solve(x)` that implements the rule for ANY input of this kind (standard library only; never hard-code or look up example outputs). Inputs/outputs are plain Python lists/ints/strings exactly as shown in the examples. A grid helper library is available via `from arc_utils import *`: connected_components(g, background=None, diagonal=False, by_color=True) -> [{color, cells, bbox, size}], extract(g, comp_or_bbox), crop, paste(base, patch, r, c, transparent), translate, flood_fill, bbox, bbox_of_color, cells_of_color, color_counts, background_color, replace_color, transpose/flip_h/flip_v/rotate_cw/rotate_ccw/rotate_180/all_symmetries, tile, scale_up/scale_down, overlay, find_subgrid, outline, hollow, is_symmetric_h/v, neighbors4/8, new_grid, dims. Prefer these over re-implementing object detection.",
       "3. The fenced ```json metadata block from your system contract, with \"final_answer\": null.",
       "Do NOT output any answer grid or test output — the kernel executes your program to produce it. A response without a ```python solve() block is discarded. Keep prose short; put your effort into the rule and the code.",
     ].join("\n");

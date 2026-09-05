@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ARC_UTILS_SOURCE } from "./arc-utils-source.ts";
 import { deepEqualJson, type IoExample } from "./examples.ts";
 
 /**
@@ -71,6 +72,7 @@ export async function runSolveProgram(code: string, inputs: unknown[], timeoutMs
   const dir = mkdtempSync(join(tmpdir(), "kernel-exec-"));
   try {
     writeFileSync(join(dir, "candidate.py"), code, "utf8");
+    writeFileSync(join(dir, "arc_utils.py"), ARC_UTILS_SOURCE, "utf8");
     writeFileSync(join(dir, "harness.py"), HARNESS.replace(/CPU_SECONDS/g, String(Math.max(1, Math.ceil(timeoutMs / 1000)))), "utf8");
     writeFileSync(join(dir, "inputs.json"), JSON.stringify({ inputs }), "utf8");
     const proc = Bun.spawn([process.env.KERNEL_EXEC_PYTHON ?? "python3", "-I", "harness.py"], {
