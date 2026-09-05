@@ -142,8 +142,6 @@ interface KernelRun {
   codeTask?: CodeTask;
   /** Fence language of the verified artifact. */
   artifactKind: "json" | "python";
-  /** Code task: top solutions tied on cross-execution; cross-family verifiers break the tie. */
-  codeFinalists?: Proposal[];
   /** Verified program output on the test input(s), appended after synthesis as the final artifact. */
   verifiedArtifact?: string;
   /** Prose from the proposal whose program verified (its rule statement), used as the explanation. */
@@ -1089,13 +1087,6 @@ export class FusionKernel {
           toVerify = pipelinedCandidateIds.size > 0 ? [] : candidates.slice(0, 1);
           emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, adaptive: "unanimous", vote: preVote?.leader?.answer, verifying: toVerify.length + pipelinedCandidateIds.size } });
           await run.narrator.say(`Kernel: all reasoners agree on "${preVote?.leader?.answer ?? ""}"; running a single cross-family audit instead of a full verification wave.`);
-        } else if (run.codeFinalists !== undefined && run.codeFinalists.length > 1) {
-          // Spend the audit budget on the tied finalists only.
-          toVerify = run.codeFinalists.filter((p) => !pipelinedCandidateIds.has(p.id));
-          for (const entry of pipelined) entry.cancel();
-          run.cancelledWorkers += pipelined.length;
-          pipelined.length = 0;
-          emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, adaptive: "code-finalists", candidates: toVerify.length } });
         } else {
           toVerify = kcfg.pipeline_verification ? pending : candidates;
           if (toVerify.length > 0) {
@@ -1132,7 +1123,6 @@ export class FusionKernel {
           this.recordVerificationWave(ctx, run, waveVerifications, wave, Math.round(performance.now() - verifyStarted));
         }
       }
-      if (run.codeFinalists !== undefined && run.verifiedArtifact === undefined) this.resolveCodeFinalists(run, verifications);
       consensus = buildConsensus(proposals, verifications, { verifiedWeight: kcfg.execution_verified_weight });
       run.agreement = consensus.agreement;
       const acceptedNow = consensus.accepted.map((f) => f.statement);
@@ -1478,53 +1468,17 @@ export class FusionKernel {
     }
 
     if (best !== undefined && (best.execution?.score ?? 0) >= 0.75 && best.program !== undefined && run.verifiedArtifact === undefined) {
-      const bestScore = best.execution!.score!;
-      const tied = [...waveProposals, ...extra].filter((p) => p.program !== undefined && p.execution?.crossValidated === true && Math.abs((p.execution.score ?? 0) - bestScore) < 1e-9);
-      const distinct = new Map<string, Proposal>();
-      for (const p of tied) distinct.set(p.program!.replace(/\s+/g, " ").trim(), p);
-      if (distinct.size > 1) {
-        // Proposer-written tests cannot separate these: let cross-family
-        // auditors judge the finalists against the specification.
-        run.codeFinalists = [...distinct.values()];
-        await run.narrator.say(`Kernel: ${distinct.size} solutions pass the same ${best.execution!.total} cross-tests; asking cross-family auditors to pick between them against the specification.`);
-      } else {
-        this.adoptCodeArtifact(run, best);
-      }
+      run.executionStats.verified = 1;
+      run.verifiedArtifact = best.program;
+      run.artifactKind = "python";
+      run.verifiedExplanation = proseOnly(best.answer);
+      run.confirmedAnswerKeys.add(normalizeFinalAnswer(best.program));
     }
     const durationMs = Math.round(performance.now() - started);
     emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "completed", durationMs, detail: { wave, crossExecution: true, solutions: run.executionStats.programs, bestScore: best?.execution?.score, repairRounds: round, artifact: run.verifiedArtifact !== undefined } });
     run.steps.push({ type: "verification", label: `Cross-Execution (wave ${wave})`, startedAt: nowIso(), durationMs, modelRouting: "python3", details: { solutions: run.executionStats.programs, bestScore: best?.execution?.score, repairRounds: round } });
     log.info("kernel cross-execution phase", { conversationId: run.ledger.conversationId, wave, solutions: run.executionStats.programs, bestScore: best?.execution?.score, repairRounds: round, durationMs, artifact: run.verifiedArtifact !== undefined });
     return extra;
-  }
-
-  private adoptCodeArtifact(run: KernelRun, best: Proposal): void {
-    if (best.program === undefined) return;
-    run.executionStats.verified = 1;
-    run.verifiedArtifact = best.program;
-    run.artifactKind = "python";
-    run.verifiedExplanation = proseOnly(best.answer);
-    run.confirmedAnswerKeys.add(normalizeFinalAnswer(best.program));
-    run.codeFinalists = undefined;
-  }
-
-  /** Pick among tied code finalists by auditor verdicts (accepts minus rejects), then by shorter code. */
-  private resolveCodeFinalists(run: KernelRun, verifications: Verification[]): void {
-    const finalists = run.codeFinalists ?? [];
-    if (finalists.length === 0) return;
-    const score = (p: Proposal): number => {
-      let s = 0;
-      for (const v of verifications) {
-        if (v.proposalId !== p.id || !v.success) continue;
-        if (v.verdict === "accept" && v.finalAnswerCorrect !== false) s += 1;
-        else if (v.verdict === "reject" || v.finalAnswerCorrect === false) s -= 1;
-      }
-      return s;
-    };
-    const ranked = [...finalists].sort((a, b) => score(b) - score(a) || (a.program?.length ?? 0) - (b.program?.length ?? 0));
-    const winner = ranked[0]!;
-    log.info("kernel code finalists resolved", { conversationId: run.ledger.conversationId, finalists: finalists.length, verdicts: finalists.map((p) => `${p.family}:${score(p)}`), winner: winner.family });
-    this.adoptCodeArtifact(run, winner);
   }
 
   /** Extra contract for tasks that ship checkable examples: the reasoner must also deliver a program the kernel can execute. */
