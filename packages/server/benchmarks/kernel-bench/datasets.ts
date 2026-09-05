@@ -271,6 +271,38 @@ export async function loadHumanEval(n: number): Promise<BenchItem[]> {
   );
 }
 
+// ── SWE: BigCodeBench-Hard (hidden unittest suites; frontier models ~35%) ──
+
+/** Libraries that need network, native services or heavyweight installs; tasks using them are excluded. */
+const BCB_EXCLUDED_LIBS = new Set([
+  "tensorflow", "keras", "librosa", "soundfile", "geopandas", "shapely", "pytesseract", "cv2", "gensim", "flask_login", "flask_wtf", "wtforms", "flask_mail", "werkzeug",
+  "smtplib", "ftplib", "socket", "ssl", "psutil", "requests", "urllib", "http", "select", "getpass", "docx", "Crypto", "cryptography", "rsa", "pyquery", "Levenshtein", "xlwt",
+  "wordcloud", "nltk", "textblob", "statsmodels", "chardet", "flask", "cgi", "email", "subprocess", "threading", "queue", "sqlite3",
+]);
+
+const BCB_INSTRUCTION = "Solve the following programming task. Return the complete, self-contained solution (all imports plus the full function) as ONE ```python code block, and nothing after it.";
+
+export async function loadBigCodeBenchHard(n: number): Promise<BenchItem[]> {
+  const first = await hfRows({ dataset: "bigcode/bigcodebench-hard", config: "default", split: "v0.1.4", length: 100, offset: 0 });
+  const rest = await hfRows({ dataset: "bigcode/bigcodebench-hard", config: "default", split: "v0.1.4", length: 100, offset: 100 });
+  const parseLibs = (v: unknown): string[] => {
+    if (Array.isArray(v)) return v.map(String);
+    try { return JSON.parse(String(v ?? "[]").replace(/'/g, "\"")) as string[]; } catch { return []; }
+  };
+  const eligible = [...first, ...rest].filter((r) => parseLibs(r.row["libs"]).every((l) => !BCB_EXCLUDED_LIBS.has(l)));
+  return sample(eligible, n, "bcbhard").map((r) =>
+    item({
+      suite: "bcbhard",
+      index: String(r.row["task_id"]).replace("BigCodeBench/", ""),
+      domain: "swe",
+      kind: "code",
+      user: `${BCB_INSTRUCTION}\n\n${String(r.row["instruct_prompt"])}`,
+      code: { prompt: String(r.row["code_prompt"]), test: String(r.row["test"]), entryPoint: String(r.row["entry_point"]), harness: "unittest" },
+      meta: { libs: parseLibs(r.row["libs"]) },
+    }),
+  );
+}
+
 // ── Legal: LegalBench ─────────────────────────────────────────────────
 
 export async function loadLegalBenchHearsay(n: number): Promise<BenchItem[]> {
@@ -331,6 +363,7 @@ export type SuiteName =
   | "aime26"
   | "apex25"
   | "arcagi2"
+  | "bcbhard"
   | "hmmt25"
   | "hmmt26"
   | "brumo25"
@@ -350,7 +383,7 @@ export type SuiteName =
   | "creative";
 
 export const ALL_SUITES: SuiteName[] = [
-  "math500", "aime24", "aime25", "aime26", "apex25", "hmmt25", "hmmt26", "brumo25", "arcagi2",
+  "math500", "aime24", "aime25", "aime26", "apex25", "hmmt25", "hmmt26", "brumo25", "arcagi2", "bcbhard",
   "supergpqa-physics", "supergpqa-chemistry", "supergpqa-biology",
   "mmlu-physics", "mmlu-chemistry", "mmlu-biology",
   "mmlu-law", "mmlu-business", "mmlu-economics", "mmlu-computer_science",
@@ -379,6 +412,7 @@ export async function loadSuite(name: SuiteName, n: number): Promise<BenchItem[]
     case "mmlu-economics": return loadMmluPro("economics", n);
     case "mmlu-computer_science": return loadMmluPro("computer science", n);
     case "humaneval": return loadHumanEval(n);
+    case "bcbhard": return loadBigCodeBenchHard(n);
     case "legalbench-hearsay": return loadLegalBenchHearsay(n);
     case "legalbench-contract_qa": return loadLegalBenchContractQa(n);
     case "creative": return loadCreativity(n);

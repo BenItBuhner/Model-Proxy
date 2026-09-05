@@ -15,7 +15,8 @@ export interface BenchItem {
   /** Ground truth (numeric/mc/yesno) or test harness (code) — absent for open items. */
   answer?: string;
   /** For code items: python test source + entry point. */
-  code?: { prompt: string; test: string; entryPoint: string };
+  /** Execution-tested code items. `harness` "humaneval" appends `check(entry)`; "unittest" runs the test module's TestCases. */
+  code?: { prompt: string; test: string; entryPoint: string; harness?: "humaneval" | "unittest" };
   meta?: Record<string, unknown>;
 }
 

@@ -195,13 +195,18 @@ export async function gradeCode(text: string, item: BenchItem): Promise<{ predic
   const entry = item.code.entryPoint;
   // If the model returned only a body (no def), prepend the original prompt.
   const program = new RegExp(`^\\s*def\\s+${entry}\\s*\\(`, "m").test(code) ? code : `${item.code.prompt}\n${code}`;
-  const source = `${program}\n\n${item.code.test}\n\ncheck(${entry})\n`;
+  const unittest = item.code.harness === "unittest";
+  const source = unittest
+    ? `${program}\n\n${item.code.test}\n\nif __name__ == "__main__":\n    import unittest\n    unittest.main(verbosity=0)\n`
+    : `${program}\n\n${item.code.test}\n\ncheck(${entry})\n`;
   const dir = mkdtempSync(join(tmpdir(), "kernel-bench-code-"));
   const file = join(dir, "candidate.py");
   writeFileSync(file, source, "utf8");
   try {
-    const proc = Bun.spawn(["python3", file], { cwd: dir, stdout: "pipe", stderr: "pipe", env: { PATH: process.env.PATH ?? "", PYTHONDONTWRITEBYTECODE: "1" } });
-    const timer = setTimeout(() => proc.kill(), 15_000);
+    // KERNEL_BENCH_PYTHON points at an interpreter with the suite's third-party libraries (e.g. a uv venv for BigCodeBench).
+    const python = process.env.KERNEL_BENCH_PYTHON ?? "python3";
+    const proc = Bun.spawn([python, file], { cwd: dir, stdout: "pipe", stderr: "pipe", env: { PATH: process.env.PATH ?? "", PYTHONDONTWRITEBYTECODE: "1", MPLBACKEND: "Agg", HOME: dir } });
+    const timer = setTimeout(() => proc.kill(), unittest ? 90_000 : 15_000);
     const [exitCode, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
     clearTimeout(timer);
     return { predicted: exitCode === 0 ? "pass" : "fail", correct: exitCode === 0, detail: exitCode === 0 ? undefined : stderr.slice(-600) };
