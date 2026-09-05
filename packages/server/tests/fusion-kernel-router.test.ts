@@ -661,6 +661,8 @@ describe("Fusion kernel engine", () => {
     expect(content).not.toContain("# kernel-tests");
     expect(captured.synthesis).toHaveLength(0);
     expect(captured.proposer.some((p) => allText(p["messages"] as unknown[]).includes("# kernel-tests"))).toBe(true);
+    // glm and deepseek tie on every cross-test: cross-family auditors were asked to break the tie.
+    expect(captured.verifier.length).toBeGreaterThan(0);
   });
 
   it("bounds a synthesizer that streams reasoning forever: the synthesis timeout aborts it and the chain moves on", async () => {
