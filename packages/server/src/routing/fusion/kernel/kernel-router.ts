@@ -1597,7 +1597,9 @@ export class FusionKernel {
   }
 
   private scratchpadEnabled(run: KernelRun): boolean {
-    return run.kcfg.compute_scratchpad && run.examples === undefined && run.codeTask === undefined && run.domains.some((d) => run.kcfg.compute_scratchpad_domains.includes(d));
+    // Max band only: at F3 the mandatory computation displaced plain reasoning
+    // and regressed solved Apex problems; at max it recovered unsolved ones.
+    return run.kcfg.compute_scratchpad && run.band === "max" && run.examples === undefined && run.codeTask === undefined && run.domains.some((d) => run.kcfg.compute_scratchpad_domains.includes(d));
   }
 
   /** Scratchpad contract for math/science proposers; at F3/max the first computation is mandatory. */

@@ -726,6 +726,7 @@ describe("Fusion kernel engine", () => {
 
     const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-compute-${Date.now()}`);
     ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, control_proposer: false, compute_scratchpad: true, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "max" }; // scratchpad is a max-band capability
     delete (ctx.requestData as Record<string, unknown>)["tools"];
     const result = await router.route(ctx);
 
