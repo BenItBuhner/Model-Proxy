@@ -1642,7 +1642,7 @@ export class FusionKernel {
     // example-grounded tasks a second one at the max band — taken from the
     // END of the pick list and from DISTINCT families, so their agreement is
     // independent evidence when no program reproduces the examples.
-    const directSlots = !kcfg.control_proposer ? 0 : run.examples !== undefined && kcfg.execution_verification && run.band === "max" ? 2 : 1;
+    const directSlots = !kcfg.control_proposer ? 0 : run.examples !== undefined && kcfg.execution_verification && run.band === "max" ? Math.min(3, run.pool.proposerFamilyCount) : 1;
     const directIndices = new Set<number>();
     const directFamilies = new Set<string>();
     for (let j = picks.length - 1; j >= 1 && directIndices.size < directSlots; j--) {
