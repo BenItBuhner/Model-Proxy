@@ -270,9 +270,12 @@ export class FusionKernel {
     if (run.verifiedArtifact !== undefined) {
       const explanation = run.verifiedExplanation !== undefined && run.verifiedExplanation.length > 0
         ? run.verifiedExplanation
-        : `The output above was produced by a program that reproduces every training example.`;
+        : `The output below was produced by a program that reproduces every training example.`;
       run.steps.push({ type: "synthesis", label: "Response Synthesis (execution-verified)", startedAt: nowIso(), durationMs: 0, modelRouting: "kernel", details: { verified: true } });
-      yield* this.textAsStream(ctx, run.artifactKind === "python" ? `${explanation}\n\n\`\`\`python\n${run.verifiedArtifact}\n\`\`\`` : `\`\`\`json\n${run.verifiedArtifact}\n\`\`\`\n\n${explanation}`);
+      // Explanation first, artifact LAST: clients (and the tasks' own "end with
+      // the output" instructions) read the final block as the answer, and the
+      // explanation may quote small example grids.
+      yield* this.textAsStream(ctx, `${explanation}\n\n\`\`\`${run.artifactKind}\n${run.verifiedArtifact}\n\`\`\``);
       return;
     }
     // The synthesis cap bounds the WHOLE chain: the first attempt gets the

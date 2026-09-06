@@ -601,7 +601,9 @@ describe("Fusion kernel engine", () => {
     expect(trace["earlySettles"] as number).toBeGreaterThanOrEqual(1);
     // The verified program's test output leads the response and settles the search.
     const content = result.content ?? "";
-    expect(content.startsWith("```json\n")).toBe(true);
+    // Explanation first, verified artifact as the LAST block (clients read the final block as the answer).
+    expect(content.trimEnd().endsWith("```")).toBe(true);
+    expect(content.lastIndexOf("```json\n")).toBeGreaterThan(0);
     expect(content).toContain("[[1,4],[2,5],[3,6]]");
     expect(content).not.toContain("[[1,4],[2,5],[3,7]]");
     expect(trace["settledAnswer"]).toBe("[[1,4],[2,5],[3,6]]");
