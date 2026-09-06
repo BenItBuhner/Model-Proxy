@@ -613,6 +613,45 @@ describe("Fusion kernel engine", () => {
     expect(content).not.toContain("```python");
   });
 
+  it("falls back to two families' identical direct grid when no program reproduces the examples", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-direct-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[4,3],[2,1]]\n\nTest input (2x2):\n[[5,6],[7,8]]";
+    const badProgram = (family: string) => ["Rule: transpose.", "```python", "def solve(grid):\n    return [list(r) for r in zip(*grid)]", "```", "```json", JSON.stringify({ answer_summary: `${family}`, final_answer: null, key_claims: ["Transpose", "Rows to columns", "Applies"], assumptions: [], risks: [], confidence: 0.5 }), "```"].join("\n");
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        return streamResponse(model, [badProgram(model)]); // wrong program from every synthesizer
+      }
+      if (!system.includes("final model of a multi-model fusion kernel") && !system.includes("adversarial") && allText(messages).includes("Test input")) {
+        // Direct (verbatim) proposers: both read the rule as 180° rotation.
+        return streamResponse(model, ["The rule rotates the grid by 180 degrees.\n```json\n[[8,7],[6,5]]\n```"]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-direct-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "max" }; // two direct slots at max
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    const execution = trace["execution"] as Record<string, unknown>;
+    expect(execution["verified"]).toBe(0);
+    expect(execution["artifact"]).toBe(true);
+    expect(result.content ?? "").toContain("[[8,7],[6,5]]");
+    expect(captured.synthesis).toHaveLength(0);
+  });
+
   it("executes a math proposer's # kernel-compute block and lets it finalize with the real output", async () => {
     closeOperationalDbForTests();
     setStorageRootForTests(path.join(tmpRoot, `storage-compute-${Date.now()}`));

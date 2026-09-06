@@ -107,6 +107,26 @@ export function extractIoExamples(text: string): TaskExamples | undefined {
   return fromRawArc(text) ?? fromLabelledBlocks(text);
 }
 
+/** Last JSON grid (array of arrays of integers) in a response; fenced blocks are preferred. */
+export function extractGridAnswer(text: string): number[][] | undefined {
+  const sources: string[] = [];
+  for (const m of text.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/gi)) sources.push(m[1] ?? "");
+  sources.push(text);
+  for (const source of sources.reverse()) {
+    let best: number[][] | undefined;
+    for (let i = 0; i < source.length; i++) {
+      if (source[i] !== "[" || source[i + 1] !== "[") continue;
+      const parsed = parseJsonValueAt(source, i);
+      if (parsed === undefined) continue;
+      const v = parsed.value;
+      if (Array.isArray(v) && v.length > 0 && v.every((r) => Array.isArray(r) && r.every((x) => Number.isInteger(x)))) best = v as number[][];
+      i = parsed.end - 1;
+    }
+    if (best !== undefined) return best;
+  }
+  return undefined;
+}
+
 export function deepEqualJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }

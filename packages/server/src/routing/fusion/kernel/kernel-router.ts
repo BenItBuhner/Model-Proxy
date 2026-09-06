@@ -28,7 +28,7 @@ import type {
 import { assembleStream } from "./assemble.ts";
 import { compileCapsule, controlCapsule, type Capsule } from "./capsule.ts";
 import { INTENT_OBJECTIVE, deterministicIntent, mergeModelIntent } from "./intent.ts";
-import { detectCodeTask, extractIoExamples, type CodeTask, type IoExample, type TaskExamples } from "./examples.ts";
+import { detectCodeTask, extractGridAnswer, extractIoExamples, type CodeTask, type IoExample, type TaskExamples } from "./examples.ts";
 import { checkCandidateProgram, crossExecute, describeFailures, extractComputeBlock, extractSolutionAndTests, extractSolveProgram, runComputeProgram } from "./execution.ts";
 
 /** Strip fenced code/JSON blocks and kernel metadata from a proposal, keeping its explanatory prose. */
@@ -1397,6 +1397,27 @@ export class FusionKernel {
       extra.push(...judges);
       verified = [...waveProposals, ...extra].filter((p) => p.execution?.verified === true && p.finalAnswer !== undefined);
     }
+    if (verified.length === 0) {
+      // No program reproduced the examples: fall back to independent direct
+      // answers. Two families producing the identical grid is strong evidence.
+      const direct = [...waveProposals, ...extra].filter((p) => p.success && p.program === undefined && p.finalAnswer !== undefined && /^\s*\[\s*\[/.test(p.finalAnswer));
+      const groups = new Map<string, Proposal[]>();
+      for (const p of direct) {
+        const key = normalizeFinalAnswer(p.finalAnswer!);
+        groups.set(key, [...(groups.get(key) ?? []), p]);
+      }
+      const agreed = [...groups.values()].filter((ps) => new Set(ps.map((p) => p.family)).size >= 2).sort((a, b) => b.length - a.length)[0];
+      if (agreed !== undefined) {
+        let grid: unknown;
+        try { grid = JSON.parse(agreed[0]!.finalAnswer!.replace(/\s+/g, "")); } catch { grid = undefined; }
+        if (Array.isArray(grid)) {
+          run.verifiedArtifact = JSON.stringify(grid);
+          run.verifiedExplanation = `${new Set(agreed.map((p) => p.family)).size} independent reasoners produced this output grid directly from the examples (no program reproduced every training pair).`;
+          run.executionStats.verified = 0;
+          log.info("kernel direct-answer agreement artifact", { conversationId: run.ledger.conversationId, wave, families: [...new Set(agreed.map((p) => p.family))] });
+        }
+      }
+    }
     if (verified.length > 0) {
       // Artifact = the test output backed by the most verified programs; ties → shortest program (Occam).
       const counts = new Map<string, { n: number; shortest: Proposal }>();
@@ -1427,7 +1448,14 @@ export class FusionKernel {
     const ex = run.examples;
     if (ex === undefined || p.execution !== undefined || !p.success) return;
     const program = extractSolveProgram(p.raw);
-    if (program === undefined) return;
+    if (program === undefined) {
+      // A direct answer (no program): make its grid votable.
+      if (p.finalAnswer === undefined) {
+        const grid = extractGridAnswer(p.raw);
+        if (grid !== undefined) p.finalAnswer = JSON.stringify(grid);
+      }
+      return;
+    }
     p.program = program;
     run.executionStats.programs += 1;
     log.info("kernel execution check start", { conversationId: run.ledger.conversationId, proposal: p.id, programChars: program.length });
@@ -1610,6 +1638,18 @@ export class FusionKernel {
     const { kcfg } = run;
     const started = performance.now();
     const picks = run.pool.proposers(widthOverride ?? widths.proposals);
+    // Direct-answer (verbatim task) slots: the control proposer, plus on
+    // example-grounded tasks a second one at the max band — taken from the
+    // END of the pick list and from DISTINCT families, so their agreement is
+    // independent evidence when no program reproduces the examples.
+    const directSlots = !kcfg.control_proposer ? 0 : run.examples !== undefined && kcfg.execution_verification && run.band === "max" ? 2 : 1;
+    const directIndices = new Set<number>();
+    const directFamilies = new Set<string>();
+    for (let j = picks.length - 1; j >= 1 && directIndices.size < directSlots; j--) {
+      if (directFamilies.has(picks[j]!.family)) continue;
+      directFamilies.add(picks[j]!.family);
+      directIndices.add(j);
+    }
     const hooks: Promise<void>[] = [];
     const settle = (proposal: Proposal): Proposal => {
       if (onProposal !== undefined) hooks.push(onProposal(proposal).catch((err) => log.warn("proposal hook failed", { id: proposal.id, error: String(err) })));
@@ -1640,7 +1680,10 @@ export class FusionKernel {
           // Control arm: the last first-wave proposer answers the user's
           // messages verbatim (no kernel framing) so the vote always includes
           // the plain base-model prior and framing drift becomes visible.
-          const isControl = kcfg.control_proposer && role === "proposer" && wave === 1 && picks.length >= 2 && i === picks.length - 1;
+          // Direct-answer proposers: the control proposer (verbatim task), plus on
+          // example-grounded tasks one more at the max band — a member's direct
+          // read of the grids is a hypothesis the program-synthesis framing can miss.
+          const isControl = role === "proposer" && wave === 1 && picks.length >= 2 && directIndices.has(i);
           const capsule = isControl
             ? controlCapsule(ctx.messages, taskStartIndex)
             : compileCapsule({
