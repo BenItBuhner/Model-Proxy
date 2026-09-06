@@ -1683,7 +1683,8 @@ export class FusionKernel {
           // Direct-answer proposers: the control proposer (verbatim task), plus on
           // example-grounded tasks one more at the max band — a member's direct
           // read of the grids is a hypothesis the program-synthesis framing can miss.
-          const isControl = role === "proposer" && wave === 1 && picks.length >= 2 && directIndices.has(i);
+          // Direct slots in wave 1 always; on example-grounded tasks in every wave (more independent direct reads).
+          const isControl = role === "proposer" && (wave === 1 || run.examples !== undefined) && picks.length >= 2 && directIndices.has(i);
           const capsule = isControl
             ? controlCapsule(ctx.messages, taskStartIndex)
             : compileCapsule({
