@@ -26,9 +26,9 @@ import type {
   SubagentResult,
 } from "../types.ts";
 import { assembleStream } from "./assemble.ts";
-import { compileCapsule, controlCapsule, type Capsule } from "./capsule.ts";
+import { leaveOneOutCapsule, compileCapsule, controlCapsule, type Capsule } from "./capsule.ts";
 import { INTENT_OBJECTIVE, deterministicIntent, mergeModelIntent } from "./intent.ts";
-import { detectCodeTask, extractGridAnswer, extractIoExamples, type CodeTask, type IoExample, type TaskExamples } from "./examples.ts";
+import { deepEqualJson, detectCodeTask, extractAllGrids, extractGridAnswer, extractIoExamples, type CodeTask, type IoExample, type TaskExamples } from "./examples.ts";
 import { checkCandidateProgram, crossExecute, describeFailures, extractComputeBlock, extractSolutionAndTests, extractSolveProgram, runComputeProgram } from "./execution.ts";
 
 /** Strip fenced code/JSON blocks and kernel metadata from a proposal, keeping its explanatory prose. */
@@ -1449,6 +1449,34 @@ export class FusionKernel {
     if (ex === undefined || p.execution !== undefined || !p.success) return;
     const program = extractSolveProgram(p.raw);
     if (program === undefined) {
+      if (p.directCheck !== undefined) {
+        // Leave-one-out direct answer: the last grid answers the withheld
+        // training input; matching ground truth certifies the reasoning.
+        const grids = extractAllGrids(p.raw);
+        const needed = ex.tests.length + 1;
+        if (grids.length >= needed) {
+          const answered = grids.slice(-needed);
+          const heldOut = answered[answered.length - 1];
+          const testGrid = answered[0];
+          const ok = deepEqualJson(heldOut, ex.examples[p.directCheck.holdOut]?.output);
+          p.finalAnswer = JSON.stringify(testGrid);
+          p.execution = { passed: ok ? 1 : 0, total: 1, verified: ok, testOutputs: ok ? [testGrid] : [], feedback: ok ? "held-out training pair reproduced" : "held-out training pair NOT reproduced" };
+          log.info("kernel direct leave-one-out check", { conversationId: run.ledger.conversationId, proposal: p.id, holdOut: p.directCheck.holdOut, ok });
+          if (ok) {
+            run.executionStats.verified += 1;
+            run.confirmedAnswerKeys.add(normalizeFinalAnswer(p.finalAnswer));
+            if (run.firstVerifiedAt === undefined) {
+              run.firstVerifiedAt = performance.now();
+              setTimeout(() => notifyEvidence(run), run.kcfg.execution_settle_grace_seconds * 1000 + 50);
+            }
+            notifyEvidence(run);
+          }
+        } else if (p.finalAnswer === undefined) {
+          const grid = extractGridAnswer(p.raw);
+          if (grid !== undefined) p.finalAnswer = JSON.stringify(grid);
+        }
+        return;
+      }
       // A direct answer (no program): make its grid votable.
       if (p.finalAnswer === undefined) {
         const grid = extractGridAnswer(p.raw);
@@ -1685,8 +1713,10 @@ export class FusionKernel {
           // read of the grids is a hypothesis the program-synthesis framing can miss.
           // Direct slots in wave 1 always; on example-grounded tasks in every wave (more independent direct reads).
           const isControl = role === "proposer" && (wave === 1 || run.examples !== undefined) && picks.length >= 2 && directIndices.has(i);
+          const loo = isControl && run.examples !== undefined && run.examples.examples.length >= 3 && kcfg.execution_verification;
+          const holdOut = loo ? (i + wave) % run.examples!.examples.length : -1;
           const capsule = isControl
-            ? controlCapsule(ctx.messages, taskStartIndex)
+            ? (loo ? leaveOneOutCapsule(ctx.messages, taskStartIndex, run.examples!.examples, run.examples!.tests, holdOut) : controlCapsule(ctx.messages, taskStartIndex))
             : compileCapsule({
                 messages: ctx.messages,
                 intent,
@@ -1703,7 +1733,7 @@ export class FusionKernel {
             objective: isControl ? "control" : objective,
             readSetHash: capsule.readSetHash,
             modelRouting: pick.routing,
-            strategy: isControl ? `${role}:control:wave${wave}` : `${role}:wave${wave}`,
+            strategy: isControl ? (loo ? `${role}:direct-loo${holdOut}:wave${wave}` : `${role}:control:wave${wave}`) : `${role}:wave${wave}`,
             policyVersion: kcfg.policy_version,
             configFingerprint: run.configFingerprint,
           };
@@ -1712,7 +1742,7 @@ export class FusionKernel {
           if (cached !== undefined && cached.status === "completed") {
             this.noteWork(ctx, run, workKey, true, id, pick, role);
             const parsed = parseProposal(cached.result.content);
-            return settle({ id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: cached.result.content, workKey, cached: true, durationMs: 0, success: true });
+            return settle({ id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: cached.result.content, workKey, cached: true, durationMs: 0, success: true, ...(loo ? { directCheck: { holdOut } } : {}) });
           }
           let result = await runWorker(ctx, this.fallbackRouter, {
             id,
@@ -1785,7 +1815,7 @@ export class FusionKernel {
             this.work.put(workKey, spec, { content: result.content, durationMs: result.durationMs } satisfies CachedProposal, "completed", run.ledger.conversationId);
           }
           const parsed = parseProposal(result.content);
-          return settle({ id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: result.content, workKey, cached: false, durationMs: result.durationMs, success: true });
+          return settle({ id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: result.content, workKey, cached: false, durationMs: result.durationMs, success: true, ...(loo ? { directCheck: { holdOut } } : {}) });
         },
       })),
       Math.min(2, run.pool.proposerFamilyCount),

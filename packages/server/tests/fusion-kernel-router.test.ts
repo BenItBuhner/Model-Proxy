@@ -613,6 +613,52 @@ describe("Fusion kernel engine", () => {
     expect(content).not.toContain("```python");
   });
 
+  it("certifies a direct answer by leave-one-out: a reasoner that reproduces the withheld training pair is trusted like a verified program", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-loo-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const rot = (g: number[][]) => g.map((r) => [...r].reverse()).reverse();
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[4,3],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,6],[7,8]]\nOutput (2x2):\n[[8,7],[6,5]]\n\nTraining pair 3\nInput (2x2):\n[[0,1],[1,0]]\nOutput (2x2):\n[[0,1],[1,0]]\n\nTest input (2x2):\n[[2,3],[4,5]]";
+    const badProgram = (family: string) => ["Rule: transpose.", "```python", "def solve(grid):\n    return [list(r) for r in zip(*grid)]", "```", "```json", JSON.stringify({ answer_summary: family, final_answer: null, key_claims: ["Transpose", "Rows to columns", "Applies"], assumptions: [], risks: [], confidence: 0.5 }), "```"].join("\n");
+    let looPrompts = 0;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        return streamResponse(model, [badProgram(model)]);
+      }
+      const text = allText(messages);
+      if (text.includes("Test input 2:")) {
+        looPrompts += 1;
+        // A competent direct solver: rotate every test input by 180°.
+        const userText = messages.map((m) => String((m as Record<string, unknown>)["content"] ?? "")).join("\n"); // allText() JSON-escapes newlines
+        const inputs = [...userText.matchAll(/Test input \d+:\s*(\[\[[^\]]*\](?:,\[[^\]]*\])*\])/g)].map((m) => JSON.parse(m[1]!) as number[][]);
+        const answer = inputs.map((g, i) => `Test output ${i + 1}:\n\`\`\`json\n${JSON.stringify(rot(g))}\n\`\`\``).join("\n");
+        return streamResponse(model, [`The grid is rotated 180 degrees.\n${answer}`]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-loo-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(looPrompts).toBeGreaterThan(0);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    const execution = trace["execution"] as Record<string, unknown>;
+    expect(execution["verified"] as number).toBeGreaterThanOrEqual(1);
+    expect(execution["artifact"]).toBe(true);
+    expect(result.content ?? "").toContain("[[5,4],[3,2]]");
+    expect(captured.synthesis).toHaveLength(0);
+  });
+
   it("falls back to two families' identical direct grid when no program reproduces the examples", async () => {
     closeOperationalDbForTests();
     setStorageRootForTests(path.join(tmpRoot, `storage-direct-${Date.now()}`));

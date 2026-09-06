@@ -127,6 +127,25 @@ export function extractGridAnswer(text: string): number[][] | undefined {
   return undefined;
 }
 
+/** All JSON grids in a response, in order (fenced blocks first, then loose text). */
+export function extractAllGrids(text: string): number[][][] {
+  const grids: number[][][] = [];
+  const scan = (source: string) => {
+    for (let i = 0; i < source.length; i++) {
+      if (source[i] !== "[" || source[i + 1] !== "[") continue;
+      const parsed = parseJsonValueAt(source, i);
+      if (parsed === undefined) continue;
+      const v = parsed.value;
+      if (Array.isArray(v) && v.length > 0 && v.every((r) => Array.isArray(r) && r.every((x) => Number.isInteger(x)))) grids.push(v as number[][]);
+      i = parsed.end - 1;
+    }
+  };
+  const fenced = [...text.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/gi)].map((m) => m[1] ?? "");
+  if (fenced.length > 0) for (const f of fenced) scan(f);
+  else scan(text);
+  return grids;
+}
+
 export function deepEqualJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }

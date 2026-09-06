@@ -97,6 +97,41 @@ Finish with a fenced json block exactly like:
  * One proposer per wave runs on this so the vote contains the plain
  * base-model prior; the read-set hash covers the verbatim messages.
  */
+/**
+ * Direct-answer capsule with one training pair held out: the reasoner sees the
+ * task's own instructions, k-1 training pairs, the real test input and the
+ * held-out input (as a second test). Its held-out answer is checkable against
+ * ground truth, so a correct one certifies the direct reasoning. `holdOut` is
+ * the index of the withheld pair.
+ */
+export function leaveOneOutCapsule(
+  messages: unknown[],
+  taskStartIndex: number,
+  examples: Array<{ input: unknown; output: unknown }>,
+  tests: unknown[],
+  holdOut: number,
+): Capsule {
+  const base = controlCapsule(messages, taskStartIndex);
+  const fmt = (v: unknown) => JSON.stringify(v);
+  const kept = examples.filter((_, i) => i !== holdOut);
+  const held = examples[holdOut]!;
+  const instructionOnly = base.messages.filter((m) => m.role === "system");
+  const userText = [
+    "Infer the transformation rule from the training pairs below and apply it to EACH test input. Grids are 2D arrays of integers (colors); output dimensions may differ from input dimensions.",
+    ...kept.map((e, i) => `Training pair ${i + 1}\nInput:\n${fmt(e.input)}\nOutput:\n${fmt(e.output)}`),
+    ...tests.map((t, i) => `Test input ${i + 1}:\n${fmt(t)}`),
+    `Test input ${tests.length + 1}:\n${fmt(held.input)}`,
+    `Respond with, for each test input in order, a line \`Test output N:\` followed by the output grid as a JSON array of arrays in its own \`\`\`json fenced block. Put nothing after the last block.`,
+  ].join("\n\n");
+  const out = [...instructionOnly, { role: "user" as const, content: userText }];
+  return {
+    messages: out,
+    readSetHash: stableHash(`loo|${holdOut}|${out.map((m) => `${m.role}:${m.content}`).join("\n\u0000")}`),
+    estimatedTokens: estimateTokens(out.map((m) => m.content).join("\n")),
+    stats: { environmentChars: 0, briefChars: 0, excerptChars: 0, tailMessages: out.length, tailTruncated: false, attachmentChars: 0, totalMessages: out.length },
+  };
+}
+
 export function controlCapsule(messages: unknown[], taskStartIndex: number): Capsule {
   const views = messages.map((m, i) => viewMessage(m, i));
   const out: Array<{ role: "system" | "user"; content: string }> = [];

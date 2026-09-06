@@ -129,6 +129,8 @@ export interface Proposal {
   finalAnswer?: string;
   /** Candidate program (python `solve`) when the task carries examples. */
   program?: string;
+  /** Direct answer produced with training pair `holdOut` withheld; its held-out answer certifies the reasoning. */
+  directCheck?: { holdOut: number };
   /** Result of executing the program against the task's examples. */
   execution?: { passed: number; total: number; verified: boolean; testOutputs: unknown[]; feedback: string; memorized?: boolean; /** Code tasks: cross-executed against every proposer's tests. */ crossValidated?: boolean; score?: number };
   raw: string;
