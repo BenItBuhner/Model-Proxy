@@ -710,15 +710,16 @@ describe("Fusion kernel engine", () => {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
       const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
       const system = systemText(messages);
-      if (system.includes("independent expert reasoners") && String(body["model"]) === "up-glm") {
+      // Scratchpad slots alternate; the second pick (kimi) is a scratchpad slot.
+      if (system.includes("independent expert reasoners") && String(body["model"]) === "up-kimi") {
         captured.proposer.push(body);
         const text = allText(messages);
         if (text.includes("COMPUTE OUTPUT")) {
           computeOutputSeen = text.slice(text.indexOf("COMPUTE OUTPUT"), text.indexOf("COMPUTE OUTPUT") + 200);
-          return streamResponse("up-glm", [proposalText("glm", 1, "750")]);
+          return streamResponse("up-kimi", [proposalText("kimi", 1, "750")]);
         }
         // First round: ask the kernel to count for it.
-        return streamResponse("up-glm", ["Let me count them.\n```python\n# kernel-compute\nprint(sum(1 for n in range(1, 1001) if (n**5 - n) % 60 == 0))\n```\n"]);
+        return streamResponse("up-kimi", ["Let me count them.\n```python\n# kernel-compute\nprint(sum(1 for n in range(1, 1001) if (n**5 - n) % 60 == 0))\n```\n"]);
       }
       return baseFetch(input as string, init);
     }) as unknown as typeof fetch;

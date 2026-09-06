@@ -1606,7 +1606,7 @@ export class FusionKernel {
     return [
       "COMPUTATIONAL SCRATCHPAD: include ONE fenced ```python block whose FIRST line is `# kernel-compute` and the kernel will EXECUTE it (Python 3 with numpy, scipy, sympy; print() what you need; runtime under 20 s) and return the output to you before you finalize — never guess what it prints.",
       mandatory
-        ? "REQUIRED: your FIRST response must NOT contain a final answer. It must state your candidate approach and end with ONE `# kernel-compute` block that tests it against the problem — brute-force the small cases, enumerate configurations, evaluate the geometry numerically (including checks for self-intersection, degenerate cases and which region/set the problem actually refers to), or compute terms/integrals. Only after seeing the output do you finalize in the required format."
+        ? "REQUIRED: your FIRST response must NOT contain a final answer. It must state your candidate approach and end with ONE `# kernel-compute` block that tests it against the problem — brute-force the small cases, enumerate configurations, evaluate the geometry numerically (including checks for self-intersection, degenerate cases and which region/set the problem actually refers to), or compute terms/integrals. Only after seeing the output do you finalize in the required format. A computation that crashes, times out, or finds nothing is NOT evidence: your search space is almost certainly incomplete or your model of the problem is off — never conclude 'no solution' or a degenerate answer from a failed search; fall back to mathematical reasoning and say so."
         : "",
       "You SHOULD use it before committing to an answer whenever the problem has computable structure: counting/combinatorics and number theory (brute-force the small cases of n and compare with your formula), optimization/extremal problems (search small instances for the extremum and the configurations achieving it), geometry (place coordinates and evaluate lengths/areas/angles numerically, e.g. with sympy or floating point), sequences/recurrences (compute terms), probability (enumerate or Monte-Carlo). A disagreement between your reasoning and the computation means your reasoning is wrong until you can explain the gap.",
       "When you include a compute block, do NOT give a final answer in that response — end with what you are checking; you will get the output and then finalize in the required format.",
@@ -1614,8 +1614,10 @@ export class FusionKernel {
   }
 
   /** Last section of an example-grounded proposer capsule: the kernel's format wins over the user's. */
-  private executionResponseFormat(run: KernelRun): string | undefined {
-    if (this.scratchpadEnabled(run)) return this.scratchpadContract(run);
+  private executionResponseFormat(run: KernelRun, scratchpadSlot = true): string | undefined {
+    // Scratchpad only on alternating slots: plain reasoners stay in the vote so a
+    // misleading computation cannot drag every candidate the same way.
+    if (this.scratchpadEnabled(run)) return scratchpadSlot ? this.scratchpadContract(run) : undefined;
     if (!run.kcfg.execution_verification) return undefined;
     if (run.examples === undefined && run.codeTask !== undefined) {
       const entry = run.codeTask.entryPoint !== undefined ? `\`${run.codeTask.entryPoint}\`` : "the requested function";
@@ -1726,7 +1728,7 @@ export class FusionKernel {
                 tokenBudget: kcfg.capsule_tokens,
                 taskStartIndex,
                 strategyNote,
-                responseFormat: role === "proposer" ? this.executionResponseFormat(run) : undefined,
+                responseFormat: role === "proposer" ? this.executionResponseFormat(run, i % 2 === 1) : undefined,
               });
           const spec: WorkSpec = {
             kind: role,
@@ -1768,7 +1770,7 @@ export class FusionKernel {
           }
           // Computational scratchpad: execute the proposer's compute block and
           // let it finalize with the real output (bounded rounds).
-          if (role === "proposer" && !isControl && this.scratchpadEnabled(run)) {
+          if (role === "proposer" && !isControl && i % 2 === 1 && this.scratchpadEnabled(run)) {
             let rounds = 0;
             let history: Array<{ role: "system" | "user" | "assistant"; content: string }> = [...capsule.messages];
             while (rounds < kcfg.compute_rounds && this.remainingSearchMs(run) > 60_000 && !(signal?.aborted ?? false)) {
