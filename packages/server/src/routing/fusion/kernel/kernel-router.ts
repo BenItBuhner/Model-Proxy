@@ -146,6 +146,10 @@ interface KernelRun {
   firstVerifiedAt?: number;
   /** Task domains from the deterministic intent (gates the computational scratchpad). */
   domains: string[];
+  /** Execution-verified proposals accumulated across waves (programs and certified direct answers). */
+  verifiedPool: Proposal[];
+  /** Independent backing of the current artifact: verified proposals and distinct families behind the winning output. */
+  artifactBacking?: { proposals: number; families: number };
   /** Scratchpad executions this run. */
   computeRuns: number;
   /** Verified program output on the test input(s), appended after synthesis as the final artifact. */
@@ -604,6 +608,7 @@ export class FusionKernel {
       executionStats: { programs: 0, verified: 0, repairRounds: 0 },
       artifactKind: "json",
       domains: domainHint.domains,
+      verifiedPool: [],
       computeRuns: 0,
       phase: "prepared",
       abort: new AbortController(),
@@ -1064,6 +1069,8 @@ export class FusionKernel {
           }
         : undefined;
 
+      // A later wave is a fresh attempt: its grace window for a lone verified program starts anew.
+      if (wave > 1) run.firstVerifiedAt = undefined;
       const waveProposals = await this.proposalWave(ctx, run, proposerIntent, searchLedger, wave, widths, taskStartIndex, strategyNote, "proposer", undefined, onProposal);
       proposals.push(...waveProposals);
       await intentPromise;
@@ -1163,10 +1170,16 @@ export class FusionKernel {
         novelClaimsLastWave: novel,
         familyCount: run.pool.proposerFamilyCount,
       });
-      if (decision.escalate && run.verifiedArtifact !== undefined) {
-        // Execution already settled the answer; textual disagreement between
-        // candidates (different but equivalent programs) is not a reason to search on.
-        decision = { escalate: false, reason: "execution-verified artifact settles the task" };
+      if (run.verifiedArtifact !== undefined) {
+        // Execution settled the answer. At the max band an artifact backed by a
+        // single family (one program, no agreeing direct read) gets one
+        // independent second attempt: a program can fit few examples for the
+        // wrong reason, and a second wave's verified programs join the majority.
+        const weak = (run.artifactBacking?.families ?? 1) < 2;
+        const secondAttempt = run.band === "max" && weak && run.examples !== undefined && wave < 2 && this.remainingSearchMs(run) >= 600_000;
+        decision = secondAttempt
+          ? { escalate: true, reason: `execution-verified artifact backed by a single family (${run.artifactBacking?.proposals ?? 1} program(s)); independent second attempt` }
+          : { escalate: false, reason: "execution-verified artifact settles the task" };
       }
       if (decision.escalate) {
         // Another wave only makes sense if a worker call can realistically
@@ -1231,7 +1244,13 @@ export class FusionKernel {
         break;
       }
       await run.narrator.say(`Kernel: ${decision.reason}. Escalating to wave ${wave + 1} with a different strategy.`);
-      strategyNote = escalationStrategyNote(consensus, wave + 1);
+      strategyNote = run.verifiedArtifact !== undefined && run.examples !== undefined
+        ? [
+            "INDEPENDENT SECOND ATTEMPT: a previous attempt found ONE rule that reproduces every training pair, but only a single model family backs it and few training pairs can be fit for the wrong reason.",
+            `Its rule statement: ${truncateMiddle(run.verifiedExplanation ?? "(none)", 1_000, "rule trimmed")}`,
+            "Re-derive the rule from the training pairs from scratch, paying attention to WHY each output looks the way it does (object roles, counts, relative positions, symmetry). If you arrive at a different rule that also reproduces every pair, implement THAT; if you arrive at the same rule, implement it in your own way. Do not copy the previous program.",
+          ].join("\n")
+        : escalationStrategyNote(consensus, wave + 1);
     }
 
     await intentPromise;
@@ -1454,6 +1473,10 @@ export class FusionKernel {
         }
       }
     }
+    // Verified evidence accumulates across waves: a second, independent attempt
+    // at the max band contributes its programs to the same majority.
+    for (const p of verified) if (!run.verifiedPool.includes(p)) run.verifiedPool.push(p);
+    verified = [...run.verifiedPool];
     if (verified.length > 0) {
       // Artifact = the test output backed by the most verified programs; ties → shortest program (Occam).
       const counts = new Map<string, { n: number; shortest: Proposal }>();
@@ -1465,7 +1488,11 @@ export class FusionKernel {
       const winner = [...counts.entries()].sort((a, b) => b[1].n - a[1].n || (a[1].shortest.program?.length ?? 0) - (b[1].shortest.program?.length ?? 0))[0]!;
       run.verifiedArtifact = winner[0];
       run.verifiedExplanation = proseOnly(winner[1].shortest.answer);
-      log.info("kernel execution artifact", { conversationId: run.ledger.conversationId, wave, verifiedPrograms: verified.length, distinctOutputs: counts.size, backing: winner[1].n });
+      const backingFamilies = new Set(verified.filter((p) => p.finalAnswer === winner[0]).map((p) => p.family));
+      // Independent direct reads that agree with the winner count as backing families too.
+      for (const p of [...waveProposals, ...extra]) if (p.success && p.program === undefined && p.execution === undefined && p.finalAnswer !== undefined && normalizeFinalAnswer(p.finalAnswer) === normalizeFinalAnswer(winner[0])) backingFamilies.add(p.family);
+      run.artifactBacking = { proposals: winner[1].n, families: backingFamilies.size };
+      log.info("kernel execution artifact", { conversationId: run.ledger.conversationId, wave, verifiedPrograms: verified.length, distinctOutputs: counts.size, backing: winner[1].n, backingFamilies: backingFamilies.size });
     }
     const durationMs = Math.round(performance.now() - started);
     emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "completed", durationMs, detail: { wave, execution: true, programs: run.executionStats.programs, verified: run.executionStats.verified, repairRounds: round } });
