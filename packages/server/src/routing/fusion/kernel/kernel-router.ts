@@ -1,0 +1,2442 @@
+import type { FusionKernelConfig } from "@model-proxy/contracts/schemas/fusion.ts";
+import { modelConfigLoader } from "../../../config/model-loader.ts";
+import { anthropicToOpenaiRequest } from "../../../format/converters.ts";
+import { createLogger } from "../../../observability/logger.ts";
+import { calculateCosts, resolvePricing } from "../../../observability/pricing.ts";
+import { usageSnapshotFromCounts } from "../../../shared/usage-snapshot.ts";
+import { sleep, stableHash } from "../../../shared/utils.ts";
+import type { FallbackRouter } from "../../fallback.ts";
+import { emitFusion, nowIso } from "../fusion-events.ts";
+import {
+  AsyncEventQueue,
+  ReasoningSummarizer,
+  SummaryPump,
+  paceReasoningText,
+  parseOpenAIDelta,
+  splitSseEvents,
+  type SummarySegment,
+} from "../reasoning-summarizer.ts";
+import type { ResponseFuser } from "../response-fuser.ts";
+import type {
+  ComplexityScore,
+  FusionCostEntry,
+  FusionRequestContext,
+  FusionResult,
+  FusionStep,
+  SubagentResult,
+} from "../types.ts";
+import { assembleStream } from "./assemble.ts";
+import { leaveOneOutCapsule, compileCapsule, controlCapsule, type Capsule } from "./capsule.ts";
+import { INTENT_OBJECTIVE, deterministicIntent, mergeModelIntent } from "./intent.ts";
+import { deepEqualJson, detectCodeTask, extractAllGrids, extractGridAnswer, extractIoExamples, type CodeTask, type IoExample, type TaskExamples } from "./examples.ts";
+import { checkCandidateProgram, crossExecute, describeFailures, extractComputeBlock, extractSolutionAndTests, extractSolveProgram, runComputeProgram } from "./execution.ts";
+
+/** Strip fenced code/JSON blocks and kernel metadata from a proposal, keeping its explanatory prose. */
+function proseOnly(text: string): string {
+  const stripped = text.replace(/```[\s\S]*?```/g, "").replace(/\n{3,}/g, "\n\n").trim();
+  return stripped.length > 1_800 ? `${stripped.slice(0, 1_797)}...` : stripped;
+}
+
+/** A program that embeds example outputs literally is a lookup table, not a rule. */
+function looksMemorized(program: string, examples: IoExample[]): boolean {
+  const compact = program.replace(/\s+/g, "");
+  return examples.some((e) => {
+    const out = JSON.stringify(e.output).replace(/\s+/g, "");
+    if (out.length < 12) return false;
+    if (compact.includes(out)) return true;
+    // Row-level literals of a grid output.
+    if (Array.isArray(e.output) && e.output.length >= 2) {
+      const rows = (e.output as unknown[]).map((r) => JSON.stringify(r).replace(/\s+/g, ""));
+      const hits = rows.filter((r) => r.length >= 8 && compact.includes(r)).length;
+      return hits >= Math.ceil(rows.length * 0.6);
+    }
+    return false;
+  });
+}
+import { hashMessages, truncateMiddle,
+  findLastUserInstruction,
+  messageText,
+} from "./messages.ts";
+import { ModelPool, type PoolPick } from "./model-pool.ts";
+import {
+  decideEscalation,
+  effortBandFor,
+  escalationStrategyNote,
+  parseRequestedKernelEffort,
+  widthsFor,
+  type RequestedKernelEffort,
+} from "./scheduler.ts";
+import { SessionLedgerStore, beginTask, newLedger } from "./session-ledger.ts";
+import { classifyTurn } from "./turn-classifier.ts";
+import type {
+  AnswerVote,
+  Consensus,
+  EffortBand,
+  KernelFinding,
+  KernelLedger,
+  NegativeKind,
+  Proposal,
+  TurnClassification,
+  Verification,
+  WaveWidths,
+  WorkerRole,
+} from "./types.ts";
+import { buildAnswerVote, buildConsensus, isDecisiveVote, normalizeFinalAnswer, novelClaimCount, parseProposal, parseVerdict } from "./waves.ts";
+import { WorkCache, computeWorkKey, type WorkSpec } from "./work-cache.ts";
+import { Semaphore, runWorker } from "./worker.ts";
+
+const log = createLogger("routing.fusion.kernel");
+
+type KernelMode = "fast" | "search" | "continue";
+
+interface Narrator {
+  say(text: string): Promise<void>;
+  segment?: (segment: SummarySegment) => void;
+}
+
+const SILENT_NARRATOR: Narrator = { say: async () => undefined };
+
+interface KernelRun {
+  kcfg: FusionKernelConfig;
+  ledger: KernelLedger;
+  storedHashes: string[];
+  hashes: string[];
+  classification: TurnClassification;
+  mode: KernelMode;
+  band: EffortBand;
+  requested: RequestedKernelEffort;
+  configFingerprint: string;
+  steps: FusionStep[];
+  costs: FusionCostEntry[];
+  notes: SubagentResult[];
+  workKeys: string[];
+  cachedWork: number;
+  totalWork: number;
+  waves: number;
+  agreement: number | undefined;
+  persist: boolean;
+  narrator: Narrator;
+  semaphore: Semaphore;
+  pool: ModelPool;
+  startedAt: number;
+  executorRouting: string;
+  fastRouting: string;
+  repair?: { signature: string; attempts: number; exhausted: boolean };
+  checkpoint?: boolean;
+  /** Wall-clock deadline (performance.now() units) for proposal/verification waves. */
+  searchDeadlineAt: number;
+  /** Workers cancelled by wave quorum (observability). */
+  cancelledWorkers: number;
+  truncatedWorkers: number;
+  /** Waves settled early because the settled subset already decided the outcome. */
+  earlySettles: number;
+  /** Final answer agreed unanimously and confirmed; synthesis runs in presentation mode. */
+  settledAnswer?: string;
+  /** Answer vote from the last settled wave (trace). */
+  lastVote?: AnswerVote;
+  /** Normalized final answers confirmed by a pipelined verifier this run (enables evidence-based early settle). */
+  confirmedAnswerKeys: Set<string>;
+  /** Input/output examples detected in the task (execution verification), if any. */
+  examples?: TaskExamples;
+  /** Code-synthesis task without examples: verified by cross-executing proposer-written tests. */
+  codeTask?: CodeTask;
+  /** Fence language of the verified artifact. */
+  artifactKind: "json" | "python";
+  /** When the first program verified (grace window lets a disagreeing program land before settling). */
+  firstVerifiedAt?: number;
+  /** Task domains from the deterministic intent (gates the computational scratchpad). */
+  domains: string[];
+  /** Execution-verified proposals accumulated across waves (programs and certified direct answers). */
+  verifiedPool: Proposal[];
+  /** Independent backing of the current artifact: verified proposals and distinct families behind the winning output. */
+  artifactBacking?: { proposals: number; families: number };
+  /** Scratchpad executions this run. */
+  computeRuns: number;
+  /** Verified program output on the test input(s), appended after synthesis as the final artifact. */
+  verifiedArtifact?: string;
+  /** Prose from the proposal whose program verified (its rule statement), used as the explanation. */
+  verifiedExplanation?: string;
+  /** Execution statistics for the trace. */
+  executionStats: { programs: number; verified: number; repairRounds: number };
+  /** Coarse phase marker for heartbeat logs. */
+  phase: string;
+  /** Run-level abort: the watchdog trips it when a search outlives its total budget. */
+  abort: AbortController;
+  /** Wakes wave settlement loops when new evidence (e.g. an audit confirmation) arrives. */
+  evidenceWaiters: Array<() => void>;
+}
+
+function notifyEvidence(run: KernelRun): void {
+  const waiters = run.evidenceWaiters.splice(0);
+  for (const wake of waiters) wake();
+}
+
+function waitForEvidence(run: KernelRun): Promise<void> {
+  return new Promise<void>((resolve) => run.evidenceWaiters.push(resolve));
+}
+
+interface QuorumJob<T> {
+  family: string;
+  start: (signal: AbortSignal) => Promise<T>;
+}
+
+/** A launched job: its promise plus a cancel handle for straggler cut-off. */
+interface QuorumEntry<T> {
+  family: string;
+  promise: Promise<T>;
+  cancel: () => void;
+}
+
+interface CachedProposal {
+  content: string;
+  durationMs: number;
+}
+
+interface CachedVerification {
+  content: string;
+  durationMs: number;
+}
+
+interface CachedIntent {
+  content: string;
+}
+
+/**
+ * Fusion Kernel — the `engine: "kernel"` orchestrator.
+ *
+ * The kernel owns durable state (ledger, work cache, negative results) and
+ * dispatches ephemeral bounded-context workers. Per turn it:
+ *   1. classifies the turn deterministically against the ledger;
+ *   2. continues an in-progress task with a single executor step for tool
+ *      continuations (with bounded repair/checkpoint waves when triggered);
+ *   3. runs cross-family proposal → verification → consensus waves for fresh
+ *      tasks, escalating only on measured disagreement;
+ *   4. synthesizes through the existing ResponseFuser so wire protocols,
+ *      tool passthrough and summaries stay identical to the legacy engine.
+ */
+export class FusionKernel {
+  private readonly ledgers = new SessionLedgerStore();
+  private readonly work = new WorkCache();
+  private readonly pools = new Map<string, ModelPool>();
+
+  constructor(
+    private readonly fallbackRouter: FallbackRouter,
+    private readonly responseFuser: ResponseFuser,
+    private readonly summarizer: ReasoningSummarizer,
+  ) {}
+
+  // ── Public API ────────────────────────────────────────────────────
+
+  async route(
+    ctx: FusionRequestContext,
+    score: ComplexityScore,
+    steps: FusionStep[],
+    costs: FusionCostEntry[],
+  ): Promise<FusionResult> {
+    const run = this.prepare(ctx, score, steps, costs, SILENT_NARRATOR);
+    let result: FusionResult;
+    if (run.mode === "fast") {
+      result = await this.fastPath(ctx, run);
+    } else {
+      if (run.mode === "search") await this.runSearch(ctx, run);
+      else await this.runContinuation(ctx, run);
+      this.applySynthesisContext(ctx, run);
+      result = await this.synthesizeAssembled(ctx, run);
+      this.recordAnswer(run, result.content, result.toolCalls);
+    }
+    this.finalize(ctx, run);
+    result.cacheHit = this.searchServedFromCache(run);
+    result.cacheKey = run.workKeys[0];
+    return result;
+  }
+
+  /** True when a search turn ran no fresh worker to completion (everything reused; stragglers cancelled by early settle do not count). */
+  private searchServedFromCache(run: KernelRun): boolean {
+    return run.mode === "search" && run.cachedWork > 0 && run.cachedWork >= run.totalWork - run.cancelledWorkers;
+  }
+
+  /**
+   * Synthesis with a fallback chain the kernel owns: the configured synthesis
+   * routing first, then the other families' primary routings; if every model
+   * fails before producing content, the best verified candidate's own answer
+   * is returned. Internal notes are never shown to the user.
+   */
+  private async *synthesisStream(ctx: FusionRequestContext, run: KernelRun): AsyncGenerator<string, void, unknown> {
+    const primary = ctx.kernelSynthesisRouting ?? run.executorRouting;
+    const alternates = run.kcfg.families
+      .map((f) => f.routing)
+      .filter((r) => r !== primary && !this.isFusionModel(r));
+    const chain = [primary, ...alternates];
+    const failFastCtx: FusionRequestContext = { ...ctx, kernelSynthesisFailFast: true };
+    // Execution-verified artifact: a program that reproduced every task example
+    // produced it. No LLM synthesis is needed (and none should hand-copy a
+    // grid): emit the artifact plus the winning proposal's rule statement.
+    if (run.verifiedArtifact !== undefined) {
+      const explanation = run.verifiedExplanation !== undefined && run.verifiedExplanation.length > 0
+        ? run.verifiedExplanation
+        : `The output below was produced by a program that reproduces every training example.`;
+      run.steps.push({ type: "synthesis", label: "Response Synthesis (execution-verified)", startedAt: nowIso(), durationMs: 0, modelRouting: "kernel", details: { verified: true } });
+      // Explanation first, artifact LAST: clients (and the tasks' own "end with
+      // the output" instructions) read the final block as the answer, and the
+      // explanation may quote small example grids.
+      yield* this.textAsStream(ctx, `${explanation}\n\n\`\`\`${run.artifactKind}\n${run.verifiedArtifact}\n\`\`\``);
+      return;
+    }
+    // The synthesis cap bounds the WHOLE chain: the first attempt gets the
+    // lion's share, fallbacks get what is left (never less than 45 s).
+    const synthesisDeadline = performance.now() + run.kcfg.synthesis_timeout_seconds * 1000;
+    for (let i = 0; i < chain.length; i++) {
+      const routing = chain[i]!;
+      const remaining = synthesisDeadline - performance.now();
+      if (i > 0 && remaining < 45_000) break;
+      const timeoutMs = Math.max(45_000, i === 0 ? Math.round(remaining * 0.6) : remaining);
+      let yieldedContent = false;
+      const controller = new AbortController();
+      const onAbort = () => controller.abort();
+      ctx.signal?.addEventListener("abort", onAbort, { once: true });
+      let timedOut = false;
+      let wakeDeadline: (() => void) | undefined;
+      const deadline = new Promise<"timeout">((resolve) => { wakeDeadline = () => resolve("timeout"); });
+      const timer = setTimeout(() => { timedOut = true; controller.abort(); wakeDeadline?.(); }, timeoutMs);
+      // Consume chunk-by-chunk racing the deadline: kernel progress must not
+      // depend on every layer below honoring the abort signal promptly.
+      const iterator = this.responseFuser.fuseStream({ ...failFastCtx, kernelSynthesisRouting: routing, signal: controller.signal }, run.notes)[Symbol.asyncIterator]();
+      try {
+        const probe = { content: "", toolNames: [] as string[] };
+        for (;;) {
+          const step = await Promise.race([iterator.next(), deadline]);
+          if (step === "timeout") {
+            void iterator.return?.(undefined).catch(() => undefined);
+            throw new Error(`synthesis on ${routing} exceeded ${Math.round(timeoutMs / 1000)}s`);
+          }
+          if (step.done) break;
+          this.observeAnswerChunk(ctx, step.value, probe);
+          if (probe.content.length > 0 || probe.toolNames.length > 0) yieldedContent = true;
+          yield step.value;
+        }
+        if (routing !== primary) run.executorRouting = routing;
+        return;
+      } catch (err) {
+        if (ctx.signal?.aborted === true) throw err;
+        log.warn("kernel synthesis failed", { routing, attempt: i + 1, of: chain.length, yieldedContent, timedOut, error: String(err).slice(0, 300) });
+        if (yieldedContent) break; // partial answer already visible: do not restart on another model
+        if (i + 1 < chain.length) await run.narrator.say(`Kernel: synthesis on ${routing} ${timedOut ? "exceeded its time budget" : "failed"}; switching to ${chain[i + 1]}.`);
+      } finally {
+        clearTimeout(timer);
+        ctx.signal?.removeEventListener("abort", onAbort);
+      }
+    }
+    // Every synthesizer failed (or one failed mid-answer): fall back to the
+    // strongest candidate the search produced rather than leaking notes.
+    const fallback = this.bestCandidateAnswer(run);
+    run.steps.push({ type: "synthesis", label: "Response Synthesis (candidate fallback)", startedAt: nowIso(), durationMs: 0, modelRouting: "kernel", details: { fallback: true } });
+    yield* this.textAsStream(ctx, fallback);
+  }
+
+  /** The vote leader's proposal when there is one, else the best-verified accepted candidate, else the first candidate note. */
+  private bestCandidateAnswer(run: KernelRun): string {
+    const candidates = run.notes.filter((n) => n.subTask.focus_area.startsWith("candidate answer"));
+    if (candidates.length === 0) return "[The fusion kernel could not synthesize a final answer for this request.]";
+    const leaderKey = run.lastVote?.leader?.key;
+    if (leaderKey !== undefined) {
+      const match = candidates.find((n) => {
+        const final = /\**\s*FINAL\s*(?:ANSWER)?\s*:\s*\**\s*([^\n]+)/i.exec(n.content)?.[1];
+        return final !== undefined && normalizeFinalAnswer(final) === leaderKey;
+      });
+      if (match !== undefined) return match.content;
+    }
+    const accepted = candidates.find((n) => /verdicts:.*accept/.test(n.subTask.focus_area));
+    return (accepted ?? candidates[0]!).content;
+  }
+
+  /** Emit plain text as a single terminal chunk in the client's wire protocol. */
+  private async *textAsStream(ctx: FusionRequestContext, text: string, finishReason: string | null = "stop"): AsyncGenerator<string, void, unknown> {
+    const chunk = {
+      id: `chatcmpl-kernel-${Date.now()}`,
+      object: "chat.completion.chunk",
+      created: Math.floor(Date.now() / 1000),
+      model: ctx.logicalModel,
+      choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: finishReason }],
+    };
+    const openai = (async function* () { yield `data: ${JSON.stringify(chunk)}\n\n`; })();
+    if (ctx.clientProtocol === "anthropic") yield* this.responseFuser.convertOpenAIStreamToAnthropic(ctx, openai);
+    else yield* openai;
+  }
+
+  /**
+   * Non-streaming clients still get a streamed upstream synthesis: the stream
+   * is assembled into a complete response here. Long thinking generations
+   * behind a 100s origin timeout only survive when bytes keep flowing.
+   */
+  private async synthesizeAssembled(ctx: FusionRequestContext, run: KernelRun): Promise<FusionResult> {
+    const started = performance.now();
+    // Reasoning summaries are for live clients; skip the summarizer round-trips
+    // when the answer is being assembled server-side.
+    const quietCtx: FusionRequestContext = {
+      ...ctx,
+      fusionConfig: { ...ctx.fusionConfig, summarizer: { ...ctx.fusionConfig.summarizer, enabled: false } },
+    };
+    const assembled = await assembleStream(this.synthesisStream(quietCtx, run), ctx.clientProtocol);
+    const durationMs = Math.round(performance.now() - started);
+    run.steps.push({
+      type: "synthesis",
+      label: run.mode === "continue" ? "Continuation Step" : "Response Synthesis",
+      startedAt: nowIso(),
+      durationMs,
+      modelRouting: run.executorRouting,
+      details: {
+        contentLength: assembled.content?.length ?? 0,
+        hasToolCalls: (assembled.toolCalls?.length ?? 0) > 0,
+        noteCount: run.notes.length,
+        usage: assembled.usage,
+        streamedUpstream: true,
+      },
+    });
+    if (assembled.usage !== undefined) {
+      const pricing = resolvePricing({ requestedModel: run.executorRouting });
+      const cost = calculateCosts(usageSnapshotFromCounts(assembled.usage), pricing);
+      run.costs.push({
+        modelRouting: run.executorRouting,
+        promptTokens: assembled.usage.promptTokens,
+        completionTokens: assembled.usage.completionTokens,
+        totalTokens: assembled.usage.totalTokens,
+        userCostUsd: cost.userCostUsd,
+        typicalCostUsd: cost.typicalCostUsd,
+      });
+    }
+    return {
+      content: assembled.content,
+      reasoningContent: assembled.reasoningContent,
+      toolCalls: assembled.toolCalls,
+      finishReason: assembled.finishReason,
+      wireProtocol: ctx.clientProtocol,
+      subagentResults: run.notes,
+      fusedByModelRouting: run.executorRouting,
+      usage: assembled.usage,
+    };
+  }
+
+  async *stream(ctx: FusionRequestContext, score: ComplexityScore): AsyncGenerator<string, void, unknown> {
+    const steps: FusionStep[] = [];
+    const costs: FusionCostEntry[] = [];
+    const out = new AsyncEventQueue<string>();
+    const narrator: Narrator = {
+      say: async (text: string) => {
+        for await (const chunk of paceReasoningText(ctx, `${text.trim()}\n\n`)) out.push(chunk);
+      },
+    };
+    const run = this.prepare(ctx, score, steps, costs, narrator);
+
+    if (run.mode === "fast") {
+      yield* this.streamFastPath(ctx, run);
+      this.finalize(ctx, run);
+      this.setStreamTrace(ctx, run, false);
+      yield `: fusion-kernel ${JSON.stringify(ctx.kernelTrace ?? {})}\n\n`;
+      return;
+    }
+
+    const pump = this.summarizer.isEnabled(ctx)
+      ? new SummaryPump(this.summarizer, ctx, {
+          onSummary: (label, text) => emitFusion(ctx, { type: "fusion.summary", at: nowIso(), label, text }),
+        })
+      : undefined;
+    if (pump !== undefined) {
+      narrator.segment = (segment) => pump.enqueue(segment);
+      // Single consumer of the pump: forward every summary chunk, then close
+      // the outer queue once the pump has drained (pump.finish() closes it).
+      void (async () => {
+        for await (const chunk of pump.chunks()) out.push(chunk);
+        out.close();
+      })();
+    }
+
+    const searchPromise = (run.mode === "search" ? this.runSearch(ctx, run) : this.runContinuation(ctx, run))
+      .catch((err) => {
+        log.error("kernel pre-synthesis phase failed", { mode: run.mode, error: String(err) });
+        throw err;
+      })
+      .finally(() => {
+        // Never let a slow summarizer backlog delay the answer: drop segments
+        // that have not started summarizing and move on to synthesis.
+        if (pump !== undefined) pump.finish({ discardQueued: true });
+        else out.close();
+      });
+    // Surface rejections through the awaited promise below, not as unhandled.
+    searchPromise.catch(() => undefined);
+
+    for await (const chunk of out) yield chunk;
+    await searchPromise;
+
+    this.applySynthesisContext(ctx, run);
+    const answer = { content: "", toolNames: [] as string[] };
+    for await (const chunk of this.synthesisStream(ctx, run)) {
+      this.observeAnswerChunk(ctx, chunk, answer);
+      yield chunk;
+    }
+    run.steps.push({
+      type: "synthesis",
+      label: run.mode === "continue" ? "Continuation Step" : "Response Synthesis",
+      startedAt: nowIso(),
+      durationMs: 0,
+      modelRouting: run.executorRouting,
+    });
+    this.recordAnswer(run, answer.content, answer.toolNames.length > 0 ? answer.toolNames : undefined);
+    this.finalize(ctx, run);
+    this.setStreamTrace(ctx, run, this.searchServedFromCache(run));
+    // Trailing SSE comment with the kernel summary: ignored by every SSE
+    // client, available to harnesses/observability without a second request.
+    yield `: fusion-kernel ${JSON.stringify(ctx.kernelTrace ?? {})}\n\n`;
+  }
+
+  // ── Preparation / classification ──────────────────────────────────
+
+  private prepare(
+    ctx: FusionRequestContext,
+    score: ComplexityScore,
+    steps: FusionStep[],
+    costs: FusionCostEntry[],
+    narrator: Narrator,
+  ): KernelRun {
+    const kcfg = ctx.fusionConfig.kernel;
+    if (kcfg === undefined) throw new Error("fusion.kernel config missing for engine=kernel");
+    const startedAt = performance.now();
+    const conversationId = ctx.conversationId ?? `ephemeral_${ctx.inputFingerprint ?? ctx.requestId ?? Date.now()}`;
+    const persist = ctx.conversationId !== undefined;
+    const loaded = persist ? this.ledgers.load(conversationId) : undefined;
+    const ledger = loaded?.ledger ?? newLedger(conversationId, ctx.logicalModel);
+    const storedHashes = loaded?.messageHashes ?? [];
+    const hashes = hashMessages(ctx.messages);
+    const classification = classifyTurn(ctx.messages, loaded?.ledger, storedHashes, {
+      maxStepsBeforeReplan: kcfg.continuation.max_steps_before_replan,
+      repairOnError: kcfg.continuation.repair_on_error,
+    });
+    const requested = parseRequestedKernelEffort(ctx.requestData);
+    // Domain hint for the effort floor: the ledger's intent when continuing a
+    // task, otherwise a deterministic read of the current instruction.
+    const instruction = findLastUserInstruction(ctx.messages);
+    const domainHint = {
+      domains: ledger.intent?.domains ?? deterministicIntent(instruction.text, instruction.index).domains,
+      effortByDomain: kcfg.effort_by_domain as Record<string, EffortBand>,
+    };
+    const band = effortBandFor(ctx.resolvedFusionEffort, requested, domainHint);
+    const runtimeEffort = ctx.runtimeEffort ?? score.effort;
+
+    let mode: KernelMode;
+    const continuing =
+      kcfg.continuation.enabled &&
+      ledger.intent !== undefined &&
+      (classification.kind === "tool_continuation" || classification.kind === "trivial_ack");
+    if (continuing) mode = "continue";
+    else if (classification.kind === "replay" && ledger.intent !== undefined) {
+      // Exact replay of the last turn (client retry): reproduce it. A deep
+      // task replays its search — every work key hits the cache — while a
+      // fast task simply re-runs the fast path.
+      mode = ledger.lastSearch !== undefined ? "search" : runtimeEffort <= 1 ? "fast" : "search";
+    } else if (runtimeEffort <= 1 && classification.kind !== "clarification" && band === "F2" && (requested === "auto" || requested === "low")) {
+      // Fast path only when nothing asked for depth: an explicit medium/high/max
+      // effort or a domain floor means the client wants the full search even if
+      // the prompt looks trivial to the complexity heuristic (e.g. numeric grids).
+      mode = "fast";
+    } else mode = "search";
+
+    emitFusion(ctx, { type: "fusion.cache", at: nowIso(), kind: "ledger", hit: loaded !== undefined, detail: loaded !== undefined ? `ledger for ${conversationId.slice(0, 18)}…; task started at message ${ledger.taskStartIndex}` : undefined });
+    emitFusion(ctx, {
+      type: "fusion.phase",
+      at: nowIso(),
+      phase: "turn_classification",
+      status: "completed",
+      durationMs: Math.round(performance.now() - startedAt),
+      detail: {
+        kind: classification.kind,
+        reason: classification.reason,
+        mode,
+        band,
+        requestedEffort: requested,
+        commonPrefix: classification.commonPrefix,
+        deltaCount: classification.deltaCount,
+        historyRewritten: classification.historyRewritten,
+        replan: classification.replan,
+        continuationSteps: ledger.continuationSteps,
+      },
+    });
+    steps.push({
+      type: "turn_classification",
+      label: "Turn Classification",
+      startedAt: nowIso(),
+      durationMs: Math.round(performance.now() - startedAt),
+      details: { kind: classification.kind, reason: classification.reason, mode, band, replan: classification.replan },
+    });
+
+    const configFingerprint = stableHash({ kernel: kcfg, synthesis: ctx.fusionConfig.fusion.model_routing }).slice(0, 16);
+    const synthesisRouting = kcfg.synthesis_routing ?? ctx.fusionConfig.fusion.model_routing;
+    const fastRouting = ctx.fusionConfig.effort_levels[1].model_routing;
+    const deepTask = ledger.lastSearch !== undefined || runtimeEffort >= 2;
+    const executorRouting = mode === "continue" && !deepTask ? fastRouting : synthesisRouting;
+
+    return {
+      kcfg,
+      ledger,
+      storedHashes,
+      hashes,
+      classification,
+      mode,
+      band,
+      requested,
+      configFingerprint,
+      steps,
+      costs,
+      notes: [],
+      workKeys: [],
+      cachedWork: 0,
+      totalWork: 0,
+      waves: 0,
+      agreement: undefined,
+      persist,
+      narrator,
+      semaphore: new Semaphore(kcfg.max_concurrency),
+      pool: this.poolFor(kcfg, configFingerprint),
+      startedAt,
+      executorRouting,
+      fastRouting,
+      searchDeadlineAt: startedAt + kcfg.search_deadline_seconds[band] * 1000,
+      cancelledWorkers: 0,
+      truncatedWorkers: 0,
+      earlySettles: 0,
+      settledAnswer: undefined,
+      confirmedAnswerKeys: new Set<string>(),
+      evidenceWaiters: [],
+      executionStats: { programs: 0, verified: 0, repairRounds: 0 },
+      artifactKind: "json",
+      domains: domainHint.domains,
+      verifiedPool: [],
+      computeRuns: 0,
+      phase: "prepared",
+      abort: new AbortController(),
+    };
+  }
+
+  /** Proposal-wave early settle: ≥2 families already agree above threshold. */
+  private proposalsAlreadyAgree(run: KernelRun, settled: Proposal[], quorumReached: boolean, directTotal = 0): boolean {
+    // Programs that reproduced every task example settle the wave — once two of
+    // them agree on the test output, or once one has stood unchallenged for the
+    // grace window (a second, disagreeing program may still be in flight).
+    const verifiedOutputs = settled.filter((p) => p.execution?.verified === true && p.finalAnswer !== undefined).map((p) => p.finalAnswer!);
+    if (verifiedOutputs.length > 0) {
+      const counts = new Map<string, number>();
+      for (const o of verifiedOutputs) counts.set(o, (counts.get(o) ?? 0) + 1);
+      if ([...counts.values()].some((c) => c >= 2)) return true;
+      // Max band, few training pairs, a single verified program: wait (bounded)
+      // for the direct readers so two families' disagreement can challenge it.
+      const sinceFirst = run.firstVerifiedAt !== undefined ? performance.now() - run.firstVerifiedAt : 0;
+      const directLanded = settled.filter((p) => p.direct === true).length;
+      if (counts.size === 1 && verifiedOutputs.length === 1 && run.band === "max" && (run.examples?.examples.length ?? 99) <= 3 && directLanded < directTotal && sinceFirst < run.kcfg.execution_settle_grace_seconds * 8 * 1000) return false;
+      if (counts.size === 1 && run.firstVerifiedAt !== undefined && sinceFirst >= run.kcfg.execution_settle_grace_seconds * 1000) return true;
+      if (counts.size === 1 && settled.filter((p) => p.success).length >= run.pool.proposerFamilyCount + 1) return true;
+      return false;
+    }
+    const usable = settled.filter((p) => p.success && p.claims.length > 0);
+    if (new Set(usable.map((p) => p.family)).size < 2) return false;
+    // Evidence-based settle for short-answer tasks: two families share the
+    // same final answer AND an independent (pipelined) audit already confirmed
+    // it. Waiting for more proposers would not change the decision, so this
+    // applies even before the numeric quorum (e.g. when the remaining
+    // proposers are all from one slow family).
+    const vote = buildAnswerVote(usable, [], { verifiedWeight: run.kcfg.execution_verified_weight });
+    if (vote?.leader !== undefined && vote.unanimous && vote.leader.families.length >= 2 && run.confirmedAnswerKeys.has(vote.leader.key)) return true;
+    if (!quorumReached) return false;
+    const pre = buildConsensus(usable, []);
+    return pre.claimConsensus >= run.kcfg.agreement_threshold;
+  }
+
+  /** Verification-wave early settle: every settled verdict accepts and at least two candidates were verified. */
+  private verdictsAlreadyAccept(settled: Verification[]): boolean {
+    const usable = settled.filter((v) => v.success);
+    if (usable.length < 2) return false;
+    return usable.every((v) => v.verdict === "accept" && v.issues.length === 0);
+  }
+
+  /** Remaining wall-clock budget for search waves, in ms (0 when exhausted). */
+  private remainingSearchMs(run: KernelRun): number {
+    return Math.max(0, Math.round(run.searchDeadlineAt - performance.now()));
+  }
+
+  /** Expected duration of one more worker call: the slowest successful routing observed this run (default 90s). */
+  private expectedWorkerMs(run: KernelRun): number {
+    const observed = Object.values(run.pool.snapshot())
+      .filter((s) => s.calls > s.failures)
+      .map((s) => s.avgLatencyMs);
+    return observed.length > 0 ? Math.max(...observed) : 90_000;
+  }
+
+  /**
+   * Run a wave of workers in parallel and settle on quorum: once
+   * `wave_quorum` of the jobs (spanning ≥ minFamilies families when the wave
+   * has that many) have finished, stragglers get `straggler_grace_seconds`
+   * and are then cancelled. Cancelled workers return their partial output when
+   * it is substantial (see runWorker), so quorum trades tail latency for at
+   * most a truncated proposal — never for silent data loss.
+   */
+  private launchJobs<T>(run: KernelRun, jobs: QuorumJob<T>[]): QuorumEntry<T>[] {
+    return jobs.map((job) => {
+      const controller = new AbortController();
+      // The run watchdog cancels every outstanding job at once.
+      if (run.abort.signal.aborted) controller.abort();
+      else run.abort.signal.addEventListener("abort", () => controller.abort(), { once: true });
+      return { family: job.family, promise: job.start(controller.signal), cancel: () => controller.abort() };
+    });
+  }
+
+  private async runWithQuorum<T>(
+    run: KernelRun,
+    jobs: QuorumJob<T>[],
+    minFamilies: number,
+    earlySettle?: (settled: T[], quorumReached: boolean) => boolean,
+  ): Promise<T[]> {
+    return this.settleWithQuorum(run, this.launchJobs(run, jobs), minFamilies, earlySettle);
+  }
+
+  /**
+   * `earlySettle(settled, quorumReached)` is consulted whenever at least the
+   * family target has settled: when the already-settled results make the
+   * remaining workers unable to change the decision (two families agree and an
+   * audit confirmed, or claim consensus above threshold once quorum is
+   * reached), stragglers are cancelled immediately instead of after grace.
+   */
+  private async settleWithQuorum<T>(
+    run: KernelRun,
+    entries: QuorumEntry<T>[],
+    minFamilies: number,
+    earlySettle?: (settled: T[], quorumReached: boolean) => boolean,
+  ): Promise<T[]> {
+    const { kcfg } = run;
+    if (entries.length === 0) return [];
+    const results: T[] = new Array<T>(entries.length);
+    const pending = new Map<number, Promise<{ index: number; value: T }>>();
+    entries.forEach((entry, index) => {
+      pending.set(index, entry.promise.then((value) => ({ index, value })));
+    });
+
+    const distinctFamilies = new Set(entries.map((e) => e.family)).size;
+    // Round, not ceil: 0.67 × 3 = 2.01 must mean "two of three", not "all three".
+    const quorumCount = kcfg.wave_quorum >= 1
+      ? entries.length
+      : Math.min(entries.length, Math.max(1, Math.round(entries.length * kcfg.wave_quorum)));
+    const familyTarget = Math.min(minFamilies, distinctFamilies);
+    const settledFamilies = new Set<string>();
+    const settledValues: T[] = [];
+    let graceTimer: Promise<{ index: -1; value: undefined }> | undefined;
+
+    const cancelStragglers = async (): Promise<void> => {
+      for (const index of pending.keys()) entries[index]!.cancel();
+      run.cancelledWorkers += pending.size;
+      const rest = await Promise.all(pending.values());
+      for (const r of rest) results[r.index] = r.value;
+      pending.clear();
+    };
+
+    while (pending.size > 0) {
+      const racers: Array<Promise<{ index: number; value: T | undefined }>> = [...pending.values()];
+      if (graceTimer !== undefined) racers.push(graceTimer);
+      // New evidence (an audit confirming an answer) can make the settled
+      // subset decisive without any new worker result, so wake on it too.
+      if (earlySettle !== undefined && settledFamilies.size >= familyTarget) {
+        racers.push(waitForEvidence(run).then(() => ({ index: -2 as const, value: undefined })));
+      }
+      const outcome = await Promise.race(racers);
+      if (outcome.index === -1) {
+        await cancelStragglers();
+        break;
+      }
+      if (outcome.index !== -2) {
+        pending.delete(outcome.index);
+        results[outcome.index] = outcome.value as T;
+        settledValues.push(outcome.value as T);
+        settledFamilies.add(entries[outcome.index]!.family);
+      }
+      const quorumReached = settledValues.length >= quorumCount && settledFamilies.size >= familyTarget;
+      if (pending.size > 0 && settledFamilies.size >= familyTarget && earlySettle !== undefined && earlySettle(settledValues, quorumReached)) {
+        run.earlySettles += 1;
+        await cancelStragglers();
+        break;
+      }
+      if (pending.size > 0 && quorumReached) {
+        if (graceTimer === undefined) {
+          const graceMs = Math.min(kcfg.straggler_grace_seconds * 1000, this.remainingSearchMs(run));
+          graceTimer = sleep(graceMs).then(() => ({ index: -1 as const, value: undefined }));
+        }
+      }
+    }
+    return results;
+  }
+
+  private proposalMaxTokens(run: KernelRun): number {
+    const byBand = run.kcfg.worker_max_tokens_by_band?.[run.band];
+    return Math.min(run.kcfg.worker_max_tokens, byBand ?? run.kcfg.worker_max_tokens);
+  }
+
+  /**
+   * Effort passed to proposer-class workers. Explicit config wins; otherwise
+   * F3/max requests (an explicit ask for more compute) run proposers at high
+   * reasoning effort, matching what a client would get from the base model.
+   */
+  private proposerReasoningEffort(run: KernelRun, role: WorkerRole): "low" | "medium" | "high" | undefined {
+    const configured = run.kcfg.worker_reasoning_effort[role === "intent" ? "proposer" : role];
+    if (configured !== undefined) return configured;
+    // Example-grounded tasks are verified by execution: several quick program
+    // attempts plus repair beat one exhaustive think that never finishes.
+    // Example-grounded tasks: several quick program attempts filtered by execution beat one exhaustive think.
+    // Code tasks graded by hidden tests reward careful spec reading instead: keep high effort.
+    if (role === "proposer" && run.examples !== undefined && run.kcfg.execution_verification) return run.band === "max" ? "high" : "medium";
+    if (role === "proposer" && run.band !== "F2") return "high";
+    return undefined;
+  }
+
+  /** Worker hard cap for this band, bounded by the remaining search budget (never below 15s). */
+  private workerTimeoutMs(run: KernelRun): number {
+    const seconds = run.kcfg.worker_timeout_seconds_by_band?.[run.band] ?? run.kcfg.worker_timeout_seconds;
+    return Math.max(15_000, Math.min(seconds * 1000, this.remainingSearchMs(run)));
+  }
+
+  private poolFor(kcfg: FusionKernelConfig, fingerprint: string): ModelPool {
+    const existing = this.pools.get(fingerprint);
+    if (existing !== undefined) return existing;
+    // Never let a fusion model act as a worker (unbounded recursion).
+    const safe = kcfg.families.filter((family) => {
+      const routings = [family.routing, ...family.alt_routings];
+      const nested = routings.filter((routing) => this.isFusionModel(routing));
+      if (nested.length > 0) log.warn("kernel family routes to a fusion model; skipping", { family: family.name, nested });
+      return nested.length === 0;
+    });
+    const pool = new ModelPool(safe.length > 0 ? safe : kcfg.families);
+    this.pools.set(fingerprint, pool);
+    return pool;
+  }
+
+  private isFusionModel(routing: string): boolean {
+    try {
+      return modelConfigLoader.loadConfig(routing).fusion?.enabled === true;
+    } catch {
+      return false;
+    }
+  }
+
+  // ── Fast path ─────────────────────────────────────────────────────
+
+  private async fastPath(ctx: FusionRequestContext, run: KernelRun): Promise<FusionResult> {
+    const started = performance.now();
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "fast_path", status: "started", modelRouting: run.fastRouting });
+    this.beginFreshTaskIfNeeded(ctx, run);
+    // Stream upstream even for non-streaming clients (origin-timeout safety), then assemble.
+    const assembled = await assembleStream(this.fastPathUpstreamStream(ctx, run), "openai");
+    const extracted = {
+      content: assembled.content,
+      reasoning: undefined as string | undefined,
+      reasoningContent: assembled.reasoningContent,
+      toolCalls: assembled.toolCalls,
+      finishReason: assembled.finishReason,
+      usage: assembled.usage,
+    };
+    const durationMs = Math.round(performance.now() - started);
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "fast_path", status: "completed", durationMs, modelRouting: run.fastRouting });
+    run.steps.push({
+      type: "effort_1_fast_path",
+      label: "Kernel Fast Path",
+      startedAt: nowIso(),
+      durationMs,
+      modelRouting: run.fastRouting,
+      details: { usage: extracted.usage, hasToolCalls: (extracted.toolCalls?.length ?? 0) > 0 },
+    });
+    if (extracted.usage !== undefined) {
+      const pricing = resolvePricing({ requestedModel: run.fastRouting });
+      const cost = calculateCosts(usageSnapshotFromCounts(extracted.usage), pricing);
+      run.costs.push({
+        modelRouting: run.fastRouting,
+        promptTokens: extracted.usage.promptTokens,
+        completionTokens: extracted.usage.completionTokens,
+        totalTokens: extracted.usage.totalTokens,
+        userCostUsd: cost.userCostUsd,
+        typicalCostUsd: cost.typicalCostUsd,
+      });
+    }
+    this.recordAnswer(run, extracted.content, extracted.toolCalls);
+    return {
+      content: extracted.content,
+      reasoning: extracted.reasoning,
+      reasoningContent: extracted.reasoningContent,
+      toolCalls: extracted.toolCalls,
+      finishReason: extracted.finishReason,
+      wireProtocol: ctx.clientProtocol,
+      subagentResults: [],
+      fusedByModelRouting: run.fastRouting,
+      usage: extracted.usage,
+    };
+  }
+
+  /**
+   * Fast-path upstream stream, always OpenAI-shaped: Anthropic requests are
+   * converted first (the routes are OpenAI-wire) and converted back at the
+   * edge, exactly like the synthesis path.
+   */
+  private fastPathUpstreamStream(ctx: FusionRequestContext, run: KernelRun): AsyncGenerator<string, void, unknown> {
+    const requestData = ctx.clientProtocol === "anthropic"
+      ? anthropicToOpenaiRequest(ctx.requestData)
+      : ctx.requestData;
+    return this.fallbackRouter.streamWithFallback({
+      logicalModel: run.fastRouting,
+      requestData: { ...requestData, model: run.fastRouting, stream: true },
+      targetProtocol: "openai",
+      signal: ctx.signal,
+      principal: ctx.principal,
+      extraHeaders: ctx.extraHeaders,
+    });
+  }
+
+  private async *streamFastPath(ctx: FusionRequestContext, run: KernelRun): AsyncGenerator<string, void, unknown> {
+    const started = performance.now();
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "fast_path", status: "started", modelRouting: run.fastRouting });
+    this.beginFreshTaskIfNeeded(ctx, run);
+    const answer = { content: "", toolNames: [] as string[] };
+    const upstream = this.fastPathUpstreamStream(ctx, run);
+    const stream = ctx.clientProtocol === "anthropic"
+      ? this.responseFuser.convertOpenAIStreamToAnthropic(ctx, upstream)
+      : upstream;
+    for await (const chunk of stream) {
+      this.observeAnswerChunk(ctx, chunk, answer);
+      yield chunk;
+    }
+    const durationMs = Math.round(performance.now() - started);
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "fast_path", status: "completed", durationMs, modelRouting: run.fastRouting });
+    run.steps.push({ type: "effort_1_fast_path", label: "Kernel Fast Path", startedAt: nowIso(), durationMs, modelRouting: run.fastRouting });
+    run.executorRouting = run.fastRouting;
+    this.recordAnswer(run, answer.content, answer.toolNames.length > 0 ? answer.toolNames : undefined);
+  }
+
+  // ── Search (fresh task) ───────────────────────────────────────────
+
+  private beginFreshTaskIfNeeded(ctx: FusionRequestContext, run: KernelRun): void {
+    const c = run.classification;
+    if (c.kind === "fresh_task" || run.ledger.intent === undefined) {
+      const index = c.lastUserIndex >= 0 ? c.lastUserIndex : Math.max(0, ctx.messages.length - 1);
+      const goalText = c.lastUserText.length > 0 ? c.lastUserText : "(no explicit instruction)";
+      run.ledger = beginTask(run.ledger, deterministicIntent(goalText, index), index);
+      return;
+    }
+    if (c.kind === "clarification" && run.ledger.intent !== undefined) {
+      const amended = `${run.ledger.intent.goal}\nAmendment: ${c.lastUserText}`;
+      run.ledger = {
+        ...run.ledger,
+        intent: {
+          ...deterministicIntent(amended, run.ledger.intent.sourceMessageIndex),
+          // Keep the amendment's hash as the active goal so a replay of it is a continuation.
+          goalHash: c.lastUserHash,
+        },
+        continuationSteps: 0,
+      };
+    }
+  }
+
+  private async runSearch(ctx: FusionRequestContext, run: KernelRun): Promise<void> {
+    const { kcfg } = run;
+    // Heartbeat: where the run is and how many workers are in flight, so a
+    // silent stall is diagnosable from the log. Watchdog: a search that
+    // outlives its budget by five minutes aborts every worker and settles.
+    const heartbeat = setInterval(() => {
+      log.info("kernel heartbeat", { conversationId: run.ledger.conversationId, phase: run.phase, elapsedMs: Math.round(performance.now() - run.startedAt), remainingSearchMs: this.remainingSearchMs(run), inFlight: run.semaphore.inFlight, waves: run.waves, workItems: run.totalWork, programs: run.executionStats.programs, verified: run.executionStats.verified });
+    }, 60_000);
+    const watchdog = setTimeout(() => {
+      log.error("kernel run watchdog fired; aborting outstanding workers", { conversationId: run.ledger.conversationId, phase: run.phase, elapsedMs: Math.round(performance.now() - run.startedAt), inFlight: run.semaphore.inFlight });
+      run.abort.abort();
+    }, kcfg.search_deadline_seconds[run.band] * 1000 + 300_000);
+    try {
+      await this.runSearchInner(ctx, run);
+    } finally {
+      clearInterval(heartbeat);
+      clearTimeout(watchdog);
+    }
+  }
+
+  private async runSearchInner(ctx: FusionRequestContext, run: KernelRun): Promise<void> {
+    const { kcfg } = run;
+    this.beginFreshTaskIfNeeded(ctx, run);
+    const priorFindings = run.classification.kind === "clarification" ? run.ledger.findings : [];
+    const taskStartIndex = run.ledger.taskStartIndex;
+
+    // Intent extraction (fast model, cached by work key) runs in parallel with
+    // proposal wave 1 so it never sits on the critical path. Proposers always
+    // see the deterministic intent (stable across replays); verifiers and the
+    // synthesizer see the merged model intent. Skipped when the ledger already
+    // carries a model-extracted intent (replay / rewind).
+    const baseIntent = run.ledger.intent!;
+    const proposerIntent = deterministicIntent(baseIntent.goal.split("\n(Kernel restatement:")[0]!, baseIntent.sourceMessageIndex);
+    // Example-grounded tasks: detect checkable input/output examples in the
+    // task text (the full message, not the truncated intent goal).
+    if (kcfg.execution_verification) {
+      const taskText = messageText(ctx.messages[baseIntent.sourceMessageIndex] ?? ctx.messages[ctx.messages.length - 1]);
+      run.examples = extractIoExamples(taskText);
+      if (run.examples !== undefined) {
+        await run.narrator.say(`Kernel: task carries ${run.examples.examples.length} input/output example(s); candidate programs will be executed against them.`);
+      } else {
+        // Only for tool-less requests: with tools the primary agent writes and
+        // runs code itself, and the kernel's job is planning, not synthesis.
+        const tools = (ctx.requestData as Record<string, unknown>)["tools"];
+        run.codeTask = Array.isArray(tools) && tools.length > 0 ? undefined : detectCodeTask(taskText);
+        if (run.codeTask !== undefined) {
+          await run.narrator.say(`Kernel: code task detected${run.codeTask.entryPoint !== undefined ? ` (\`${run.codeTask.entryPoint}\`)` : ""}; candidate solutions will be cross-executed against every reasoner's tests.`);
+        }
+      }
+    }
+    const intentPromise =
+      kcfg.intent_extraction && baseIntent.extractedBy !== "model"
+        ? this.extractIntent(ctx, run).catch((err) => log.warn("intent extraction failed; using deterministic intent", { error: String(err) }))
+        : Promise.resolve();
+    const widths = widthsFor(kcfg, run.band, run.pool.proposerFamilyCount);
+    await run.narrator.say(
+      `Kernel: new task (${run.band}). Launching ${widths.proposals} independent reasoners across ${run.pool.familyNames.join(", ")}, then cross-family verification.`,
+    );
+
+    // Workers in a search see the ledger WITHOUT this search's own outputs so
+    // an exact replay compiles byte-identical capsules and hits the work cache.
+    const searchLedger: KernelLedger = {
+      ...run.ledger,
+      findings: priorFindings,
+      plan: [],
+      disagreements: [],
+      lastAnswerSummary: undefined,
+      continuationSteps: 0,
+      totalContinuationSteps: 0,
+      lastSearch: undefined,
+      // Execution-derived negatives (tool errors, exhausted repairs) are real
+      // state; a search's own rejected hypotheses are not fed back into it.
+      negatives: run.ledger.negatives.filter((n) => n.kind !== "rejected_hypothesis"),
+    };
+
+    const proposals: Proposal[] = [];
+    const verifications: Verification[] = [];
+    let consensus: Consensus | undefined;
+    let strategyNote: string | undefined;
+    let previousAccepted: string[] = [];
+
+    for (let wave = 1; wave <= widths.maxWaves; wave++) {
+      // A departed client aborts every worker; escalating further would only burn upstream budget.
+      if (ctx.signal?.aborted === true) break;
+      run.waves = wave;
+      run.phase = `proposal wave ${wave}`;
+      const verifyCandidates = widths.verifiersPerCandidate > 0;
+      // Pipelined verification: each candidate's verifiers launch the moment
+      // the candidate lands, overlapping with slower proposers.
+      const pipelined: QuorumEntry<Verification>[] = [];
+      const pipelinedCandidateIds = new Set<string>();
+      let verificationStarted = false;
+      // With adaptive verification only the FIRST landed candidate is verified
+      // eagerly; the rest wait for the wave so the answer vote can decide how
+      // much verification is worth buying.
+      const onProposal = (verifyCandidates && kcfg.pipeline_verification) || (run.examples !== undefined && kcfg.execution_verification)
+        ? async (proposal: Proposal): Promise<void> => {
+            if (!proposal.success || (proposal.answer.length === 0 && proposal.claims.length === 0)) return;
+            // Pipelined execution check: the first verified program settles the wave.
+            if (run.examples !== undefined && kcfg.execution_verification) {
+              await this.checkProposalProgram(run, proposal);
+              if (run.firstVerifiedAt !== undefined) return; // execution evidence exists: no LLM audit needed
+            }
+            if (!(verifyCandidates && kcfg.pipeline_verification)) return;
+            if (this.remainingSearchMs(run) <= 10_000) return;
+            if (kcfg.adaptive_verification && pipelinedCandidateIds.size >= 1) return;
+            // Reserve the slot synchronously: hooks for simultaneously landing
+            // candidates must not all pass the check before the first awaits.
+            pipelinedCandidateIds.add(proposal.id);
+            await intentPromise;
+            const intent = run.ledger.intent ?? baseIntent;
+            if (!verificationStarted) {
+              verificationStarted = true;
+              emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, pipelined: true } });
+              await run.narrator.say(`Kernel: first candidate landed; starting cross-family verification while the other reasoners finish.`);
+            }
+            const launched = this.launchVerification(ctx, run, intent, searchLedger, [proposal], wave, widths, taskStartIndex);
+            pipelined.push(...launched);
+            // Record confirmations as they land so the proposal wave can settle
+            // on "two families agree + one independent audit confirms".
+            if (proposal.finalAnswer !== undefined) {
+              const key = normalizeFinalAnswer(proposal.finalAnswer);
+              for (const entry of launched) {
+                void entry.promise.then((v) => {
+                  if (v.success && (v.finalAnswerCorrect === true || (v.verdict === "accept" && v.finalAnswerCorrect !== false))) {
+                    run.confirmedAnswerKeys.add(key);
+                    notifyEvidence(run);
+                  }
+                }).catch(() => undefined);
+              }
+            }
+          }
+        : undefined;
+
+      // A later wave is a fresh attempt: its grace window for a lone verified program starts anew.
+      if (wave > 1) run.firstVerifiedAt = undefined;
+      const waveProposals = await this.proposalWave(ctx, run, proposerIntent, searchLedger, wave, widths, taskStartIndex, strategyNote, "proposer", undefined, onProposal);
+      proposals.push(...waveProposals);
+      await intentPromise;
+      const intent = run.ledger.intent ?? baseIntent;
+      // Example-grounded execution: run every candidate program against the
+      // task's examples; repair failing programs from concrete feedback.
+      if (run.examples !== undefined && kcfg.execution_verification) {
+        run.phase = `execution phase wave ${wave}`;
+        const repaired = await this.executionPhase(ctx, run, proposerIntent, searchLedger, waveProposals, wave, widths, taskStartIndex);
+        proposals.push(...repaired);
+        waveProposals.push(...repaired);
+      } else if (run.codeTask !== undefined && kcfg.execution_verification) {
+        run.phase = `cross-execution wave ${wave}`;
+        const repaired = await this.codeExecutionPhase(ctx, run, proposerIntent, searchLedger, waveProposals, wave, widths, taskStartIndex);
+        proposals.push(...repaired);
+        waveProposals.push(...repaired);
+      }
+      if (verifyCandidates && this.remainingSearchMs(run) > 10_000) {
+        run.phase = `verification wave ${wave}`;
+        const verifyStarted = performance.now();
+        const candidates = waveProposals.filter((p) => p.success && (p.answer.length > 0 || p.claims.length > 0));
+        const pending = candidates.filter((p) => !pipelinedCandidateIds.has(p.id));
+        const preVote = buildAnswerVote(waveProposals, [], { verifiedWeight: kcfg.execution_verified_weight });
+        const unanimousFamilies = preVote !== undefined && preVote.unanimous
+          ? new Set(waveProposals.filter((p) => p.success && p.finalAnswer !== undefined).map((p) => p.family)).size
+          : 0;
+        let toVerify: Proposal[];
+        let skipVerification = false;
+        if (run.verifiedArtifact !== undefined) {
+          // Ground-truth execution beats any LLM audit: nothing to verify.
+          skipVerification = true;
+          toVerify = [];
+          for (const entry of pipelined) entry.cancel();
+          run.cancelledWorkers += pipelined.length;
+          emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "completed", durationMs: 0, detail: { wave, adaptive: "execution-verified", skipped: true } });
+        } else if (kcfg.adaptive_verification && unanimousFamilies >= 3) {
+          // Three independent families reached the same final answer: that is
+          // stronger evidence than one more audit; skip verification entirely.
+          skipVerification = true;
+          toVerify = [];
+          for (const entry of pipelined) entry.cancel();
+          run.cancelledWorkers += pipelined.length;
+          emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "completed", durationMs: 0, detail: { wave, adaptive: "unanimous-3", vote: preVote?.leader?.answer, skipped: true } });
+          await run.narrator.say(`Kernel: ${unanimousFamilies} model families independently reached "${preVote?.leader?.answer ?? ""}"; skipping the verification wave.`);
+        } else if (kcfg.adaptive_verification && unanimousFamilies >= 2) {
+          // Unanimous across two families: one audit of the leader is enough.
+          toVerify = pipelinedCandidateIds.size > 0 ? [] : candidates.slice(0, 1);
+          emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, adaptive: "unanimous", vote: preVote?.leader?.answer, verifying: toVerify.length + pipelinedCandidateIds.size } });
+          await run.narrator.say(`Kernel: all reasoners agree on "${preVote?.leader?.answer ?? ""}"; running a single cross-family audit instead of a full verification wave.`);
+        } else {
+          toVerify = kcfg.pipeline_verification ? pending : candidates;
+          if (toVerify.length > 0) {
+            emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, candidates: toVerify.length, adaptive: preVote !== undefined ? "split" : "no-vote" } });
+            await run.narrator.say(preVote !== undefined && !preVote.unanimous
+              ? `Kernel: reasoners disagree (${preVote.entries.filter((e) => e.weight > 0).map((e) => `"${e.answer}"`).slice(0, 4).join(" vs ")}); verifying every candidate with cross-family auditors.`
+              : `Kernel: verifying ${toVerify.length} candidate answer(s) with cross-family auditors.`);
+          }
+        }
+        const entries = skipVerification
+          ? []
+          : [...pipelined, ...(toVerify.length > 0 ? this.launchVerification(ctx, run, intent, searchLedger, toVerify, wave, widths, taskStartIndex) : [])];
+        if (skipVerification && pipelined.length > 0) {
+          // Let cancelled audits settle quietly; their partial output is not used.
+          void Promise.all(pipelined.map((e) => e.promise)).catch(() => undefined);
+        }
+        if (entries.length > 0) {
+          const waveVerifications = await this.settleWithQuorum(run, entries, Math.min(2, run.pool.proposerFamilyCount), (settled) => this.verdictsAlreadyAccept(settled));
+          // A failed audit is not evidence. If no verdict succeeded and time
+          // remains, retry once on the leading candidate with a different family
+          // so a unanimous answer is never settled on the strength of an upstream error.
+          if (waveVerifications.every((v) => !v.success) && this.remainingSearchMs(run) > 45_000) {
+            const failedFamilies = new Set(waveVerifications.map((v) => v.family));
+            const leaderKey = preVote?.leader?.key;
+            const leaderCandidate = candidates.find((c) => c.finalAnswer !== undefined && leaderKey !== undefined && normalizeFinalAnswer(c.finalAnswer) === leaderKey) ?? candidates[0];
+            if (leaderCandidate !== undefined) {
+              await run.narrator.say("Kernel: the audit failed upstream; retrying with another model family before settling.");
+              const retry = this.launchVerification(ctx, run, intent, searchLedger, [leaderCandidate], wave, { ...widths, verifiersPerCandidate: 1 }, taskStartIndex, { excludeFamilies: failedFamilies, idSuffix: "-retry" });
+              const retried = await this.settleWithQuorum(run, retry, 1);
+              waveVerifications.push(...retried);
+            }
+          }
+          verifications.push(...waveVerifications);
+          this.recordVerificationWave(ctx, run, waveVerifications, wave, Math.round(performance.now() - verifyStarted));
+        }
+      }
+      consensus = buildConsensus(proposals, verifications, { verifiedWeight: kcfg.execution_verified_weight });
+      run.agreement = consensus.agreement;
+      const acceptedNow = consensus.accepted.map((f) => f.statement);
+      const novel = wave === 1 ? acceptedNow.length : novelClaimCount(previousAccepted, acceptedNow);
+      previousAccepted = acceptedNow;
+
+      let decision = decideEscalation({
+        consensus,
+        wave,
+        widths,
+        agreementThreshold: kcfg.agreement_threshold,
+        novelClaimsLastWave: novel,
+        familyCount: run.pool.proposerFamilyCount,
+      });
+      if (run.verifiedArtifact !== undefined) {
+        // Execution settled the answer. At the max band an artifact backed by a
+        // single family (one program, no agreeing direct read) gets one
+        // independent second attempt: a program can fit few examples for the
+        // wrong reason, and a second wave's verified programs join the majority.
+        const weak = (run.artifactBacking?.families ?? 1) < 2;
+        const secondAttempt = run.band === "max" && weak && run.examples !== undefined && wave < 2 && this.remainingSearchMs(run) >= 600_000;
+        decision = secondAttempt
+          ? { escalate: true, reason: `execution-verified artifact backed by a single family (${run.artifactBacking?.proposals ?? 1} program(s)); independent second attempt` }
+          : { escalate: false, reason: "execution-verified artifact settles the task" };
+      }
+      if (decision.escalate) {
+        // Another wave only makes sense if a worker call can realistically
+        // finish inside the remaining budget; use this run's observed latency.
+        const expectedWorkerMs = this.expectedWorkerMs(run);
+        const needed = Math.round(expectedWorkerMs * 1.2) + 15_000;
+        if (this.remainingSearchMs(run) < needed) {
+          decision = {
+            escalate: false,
+            reason: `search budget (${kcfg.search_deadline_seconds[run.band]}s) cannot fit another wave (~${Math.round(needed / 1000)}s needed, ${Math.round(this.remainingSearchMs(run) / 1000)}s left); settling with agreement ${consensus.agreement}`,
+          };
+        }
+      }
+      emitFusion(ctx, {
+        type: "fusion.phase",
+        at: nowIso(),
+        phase: "escalation",
+        status: "completed",
+        detail: {
+          wave,
+          agreement: consensus.agreement,
+          claimConsensus: consensus.claimConsensus,
+          verifierAcceptRate: consensus.verifierAcceptRate,
+          answerVote: consensus.answerVote !== undefined
+            ? { leader: consensus.answerVote.leader?.answer, leaderShare: consensus.answerVote.leaderShare, unanimous: consensus.answerVote.unanimous, voters: consensus.answerVote.voters, entries: consensus.answerVote.entries.slice(0, 5).map((e) => ({ answer: e.answer, weight: e.weight, families: e.families })) }
+            : undefined,
+          accepted: consensus.accepted.length,
+          disputed: consensus.disputed.length,
+          rejected: consensus.rejected.length,
+          novelClaims: novel,
+          escalate: decision.escalate,
+          reason: decision.reason,
+        },
+      });
+      log.info("kernel wave settled", {
+        conversationId: run.ledger.conversationId,
+        wave,
+        agreement: consensus.agreement,
+        claimConsensus: consensus.claimConsensus,
+        verifierAcceptRate: consensus.verifierAcceptRate,
+        vote: consensus.answerVote !== undefined
+          ? { leader: consensus.answerVote.leader?.answer, share: consensus.answerVote.leaderShare, unanimous: consensus.answerVote.unanimous, voters: consensus.answerVote.voters, entries: consensus.answerVote.entries.slice(0, 4).map((e) => `${e.answer}=${e.weight}(${e.families.join("+")})`) }
+          : undefined,
+        proposals: proposals.filter((p) => p.success).length,
+        verifications: verifications.filter((v) => v.success).length,
+        verdicts: verifications.filter((v) => v.success).map((v) => `${v.family}:${v.verdict}${v.finalAnswerCorrect === undefined ? "" : v.finalAnswerCorrect ? "/✓" : "/✗"}`),
+        escalate: decision.escalate,
+        reason: decision.reason,
+      });
+      run.lastVote = consensus.answerVote;
+      run.steps.push({
+        type: "escalation",
+        label: decision.escalate ? `Escalation Decision (wave ${wave} → ${wave + 1})` : `Search Settled (wave ${wave})`,
+        startedAt: nowIso(),
+        durationMs: 0,
+        details: { agreement: consensus.agreement, reason: decision.reason, accepted: consensus.accepted.length, disputed: consensus.disputed.length },
+      });
+      if (!decision.escalate) {
+        await run.narrator.say(
+          `Kernel: agreement ${consensus.agreement.toFixed(2)} after wave ${wave} (${consensus.accepted.length} verified findings, ${consensus.disputed.length} disputed). Synthesizing.`,
+        );
+        break;
+      }
+      await run.narrator.say(`Kernel: ${decision.reason}. Escalating to wave ${wave + 1} with a different strategy.`);
+      strategyNote = run.verifiedArtifact !== undefined && run.examples !== undefined
+        ? [
+            "INDEPENDENT SECOND ATTEMPT: a previous attempt found ONE rule that reproduces every training pair, but only a single model family backs it and few training pairs can be fit for the wrong reason.",
+            `Its rule statement: ${truncateMiddle(run.verifiedExplanation ?? "(none)", 1_000, "rule trimmed")}`,
+            "Re-derive the rule from the training pairs from scratch, paying attention to WHY each output looks the way it does (object roles, counts, relative positions, symmetry). If you arrive at a different rule that also reproduces every pair, implement THAT; if you arrive at the same rule, implement it in your own way. Do not copy the previous program.",
+          ].join("\n")
+        : escalationStrategyNote(consensus, wave + 1);
+    }
+
+    await intentPromise;
+    const finalConsensus = consensus ?? buildConsensus(proposals, verifications, { verifiedWeight: kcfg.execution_verified_weight });
+    this.applyConsensusToLedger(run, finalConsensus, priorFindings);
+    run.ledger.lastSearch = {
+      at: nowIso(),
+      effort: run.band,
+      waves: run.waves,
+      agreement: finalConsensus.agreement,
+      proposals: proposals.length,
+      verifications: verifications.length,
+      workKeys: run.workKeys.slice(0, 64),
+      cachedWork: run.cachedWork,
+      kind: "search",
+    };
+    run.notes = this.buildSearchNotes(finalConsensus, proposals, verifications);
+    ctx.kernelBrief = this.searchBrief(run, finalConsensus, proposals.length, verifications.length);
+    // Adaptive synthesis depth: a unanimous, verifier-confirmed final answer is
+    // settled — the synthesizer presents the best derivation instead of
+    // re-solving the task with deep thinking. Split votes keep full depth.
+    const vote = finalConsensus.answerVote;
+    run.settledAnswer = run.verifiedArtifact ?? (isDecisiveVote(vote, verifications) ? vote?.leader?.answer : undefined);
+  }
+
+  private async extractIntent(ctx: FusionRequestContext, run: KernelRun): Promise<void> {
+    const { kcfg } = run;
+    const base = run.ledger.intent!;
+    const started = performance.now();
+    const routing = kcfg.fast_routing ?? ctx.fusionConfig.summarizer.model_routing;
+    const capsule = compileCapsule({
+      messages: ctx.messages,
+      intent: base,
+      ledger: undefined,
+      role: "intent",
+      objective: INTENT_OBJECTIVE,
+      tokenBudget: Math.min(kcfg.capsule_tokens, 12_000),
+      taskStartIndex: run.ledger.taskStartIndex,
+    });
+    const spec: WorkSpec = {
+      kind: "intent",
+      objective: INTENT_OBJECTIVE,
+      readSetHash: capsule.readSetHash,
+      modelRouting: routing,
+      strategy: "intent:v1",
+      policyVersion: kcfg.policy_version,
+      configFingerprint: run.configFingerprint,
+    };
+    const workKey = computeWorkKey(spec);
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "intent", status: "started", modelRouting: routing });
+    const cached = this.work.get<CachedIntent>(workKey);
+    let raw: string | undefined;
+    if (cached !== undefined && cached.status === "completed") {
+      raw = cached.result.content;
+      this.noteWork(ctx, run, workKey, true, "intent");
+    } else {
+      const result = await runWorker(ctx, this.fallbackRouter, {
+        id: "intent",
+        role: "intent",
+        focus: "intent extraction",
+        routing,
+        messages: capsule.messages,
+        maxTokens: 1_200,
+        timeoutMs: Math.min(45_000, kcfg.worker_timeout_seconds * 1000),
+        idleTimeoutMs: Math.min(20_000, kcfg.worker_idle_timeout_seconds * 1000),
+        reasoningEffort: kcfg.worker_reasoning_effort.intent,
+        temperature: 0,
+        semaphore: run.semaphore,
+        emitEvents: false,
+      });
+      this.accountWorker(run, routing, capsule, result.content);
+      if (result.success) {
+        raw = result.content;
+        this.work.put(workKey, spec, { content: result.content } satisfies CachedIntent, "completed", run.ledger.conversationId);
+      }
+      this.noteWork(ctx, run, workKey, false, "intent");
+    }
+    if (raw !== undefined) run.ledger.intent = mergeModelIntent(base, raw);
+    const durationMs = Math.round(performance.now() - started);
+    emitFusion(ctx, {
+      type: "fusion.phase",
+      at: nowIso(),
+      phase: "intent",
+      status: "completed",
+      durationMs,
+      modelRouting: routing,
+      detail: { cached: cached !== undefined, extractedBy: run.ledger.intent?.extractedBy, domains: run.ledger.intent?.domains },
+    });
+    run.steps.push({ type: "intent", label: "Intent Extraction", startedAt: nowIso(), durationMs, modelRouting: routing, details: { cached: cached !== undefined, domains: run.ledger.intent?.domains } });
+  }
+
+  /**
+   * Execute candidate programs against the task examples. Verified programs
+   * (all examples reproduced) override the proposal's declared final answer
+   * with their test output; when none verifies and budget remains, bounded
+   * repair waves feed the best failing program plus its concrete failures back
+   * to the reasoners. Returns any repair-wave proposals.
+   */
+  private async executionPhase(
+    ctx: FusionRequestContext,
+    run: KernelRun,
+    intent: NonNullable<KernelLedger["intent"]>,
+    ledgerView: KernelLedger,
+    waveProposals: Proposal[],
+    wave: number,
+    widths: WaveWidths,
+    taskStartIndex: number,
+  ): Promise<Proposal[]> {
+    const ex = run.examples!;
+    const started = performance.now();
+    const check = (p: Proposal) => this.checkProposalProgram(run, p);
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, execution: true, examples: ex.examples.length } });
+    await Promise.all(waveProposals.filter((p) => p.success).map(check));
+    const extra: Proposal[] = [];
+    let round = 0;
+    let pool = waveProposals;
+    while (
+      !pool.some((p) => p.execution?.verified === true) &&
+      run.verifiedArtifact === undefined &&
+      round < run.kcfg.execution_repair_rounds &&
+      this.remainingSearchMs(run) > 90_000
+    ) {
+      round += 1;
+      run.executionStats.repairRounds += 1;
+      run.phase = `execution repair round ${round} (wave ${wave})`;
+      // Only program-bearing candidates can be repaired (leave-one-out direct answers also carry execution results).
+      const best = [...waveProposals, ...extra].filter((p) => p.execution !== undefined && p.program !== undefined).sort((a, b) => (b.execution!.passed - a.execution!.passed) || (a.execution!.memorized ? 1 : 0) - (b.execution!.memorized ? 1 : 0))[0];
+      const note = best !== undefined
+        ? [
+            `EXECUTION FEEDBACK (repair round ${round}): no candidate program reproduces every example yet.`,
+            `Best program so far (${best.execution!.passed}/${best.execution!.total} examples${best.execution!.memorized ? ", but it hard-codes example outputs — that does not count" : ""}):`,
+            "```python",
+            truncateMiddle(best.program!, 6_000, "program trimmed"),
+            "```",
+            best.execution!.feedback,
+            "Diagnose why it fails on those examples, fix the rule (do not special-case examples), and return the complete corrected program.",
+          ].join("\n")
+        : [
+            `EXECUTION FEEDBACK (repair round ${round}): no reasoner delivered a runnable program in time.`,
+            "Write the program FIRST — a complete `def solve(x)` in a ```python block — using the simplest rule consistent with all examples, then briefly justify it. Keep reasoning short; the kernel executes and checks the program for you.",
+          ].join("\n");
+      await run.narrator.say(best !== undefined
+        ? `Kernel: no program reproduces all ${ex.examples.length} examples yet (best ${best.execution!.passed}/${best.execution!.total}); running repair round ${round} with concrete failures.`
+        : `Kernel: no runnable program arrived in time; running repair round ${round} asking for the program first.`);
+      const repairs = await this.proposalWave(ctx, run, intent, ledgerView, wave, widths, taskStartIndex, note, "proposer", Math.min(widths.proposals, 3));
+      await Promise.all(repairs.filter((p) => p.success).map(check));
+      extra.push(...repairs);
+      pool = repairs;
+    }
+    let verified = [...waveProposals, ...extra].filter((p) => p.execution?.verified === true && p.finalAnswer !== undefined);
+    const distinctOutputs = (pool: Proposal[]) => new Set(pool.map((p) => p.finalAnswer!)).size;
+    // Independent direct reads (no program) that agree across >= 2 families on
+    // an output no verified program produced: with a lone verified program this
+    // is a conflict worth a discrimination wave, not a vote to be outweighed.
+    const directAgreementAgainst = (): Proposal[] | undefined => {
+      const direct = [...waveProposals, ...extra].filter((p) => p.success && p.program === undefined && p.finalAnswer !== undefined && /^\s*\[\s*\[/.test(p.finalAnswer));
+      const groups = new Map<string, Proposal[]>();
+      for (const p of direct) { const key = normalizeFinalAnswer(p.finalAnswer!); groups.set(key, [...(groups.get(key) ?? []), p]); }
+      const verifiedKeys = new Set(verified.map((p) => normalizeFinalAnswer(p.finalAnswer!)));
+      return [...groups.entries()].filter(([key, ps]) => !verifiedKeys.has(key) && new Set(ps.map((p) => p.family)).size >= 2).sort((a, b) => b[1].length - a[1].length)[0]?.[1];
+    };
+    const loneProgramConflict = verified.length === 1 && ex.examples.length <= 3 ? directAgreementAgainst() : undefined;
+    if (loneProgramConflict !== undefined && this.remainingSearchMs(run) > 90_000) {
+      run.executionStats.repairRounds += 1;
+      run.phase = `execution discrimination (wave ${wave})`;
+      const prog = verified[0]!;
+      const dims = (out: string) => { try { const g = JSON.parse(out) as unknown[]; return Array.isArray(g) ? `${g.length}x${Array.isArray(g[0]) ? (g[0] as unknown[]).length : 1}` : "scalar"; } catch { return "?"; } };
+      const note = [
+        `EXECUTION FEEDBACK (discrimination): one program reproduces all ${ex.examples.length} training pairs but ${new Set(loneProgramConflict.map((p) => p.family)).size} independent reasoners who read the grids directly agree on a DIFFERENT test output. With so few training pairs a program can fit them for the wrong reason.`,
+        `Candidate rule 1 (verified program, test output ${dims(prog.finalAnswer!)}):\n${truncateMiddle(proseOnly(prog.answer), 1_200, "rule trimmed")}\n\`\`\`python\n${truncateMiddle(prog.program ?? "", 3_000, "program trimmed")}\n\`\`\``,
+        `Candidate rule 2 (direct reasoning, test output ${dims(loneProgramConflict[0]!.finalAnswer!)}):\n${truncateMiddle(proseOnly(loneProgramConflict[0]!.answer), 1_500, "rule trimmed")}\n\`\`\`json\n${truncateMiddle(loneProgramConflict[0]!.finalAnswer!, 2_000, "grid trimmed")}\n\`\`\``,
+        "Decide which rule the task intends — the one that explains WHY every training output looks the way it does — and return the complete program for the intended rule (fix or reuse candidate 1 if it is right; implement candidate 2's rule if that is the intended one).",
+      ].join("\n\n");
+      await run.narrator.say("Kernel: a lone verified program disagrees with two families' direct reads; running a discrimination wave.");
+      const judges = await this.proposalWave(ctx, run, intent, ledgerView, wave, widths, taskStartIndex, note, "proposer", Math.min(widths.proposals, 3));
+      await Promise.all(judges.filter((p) => p.success).map(check));
+      extra.push(...judges);
+      verified = [...waveProposals, ...extra].filter((p) => p.execution?.verified === true && p.finalAnswer !== undefined);
+    }
+    if (distinctOutputs(verified) > 1 && this.remainingSearchMs(run) > 90_000) {
+      // Every candidate reproduces the examples yet they disagree on the test:
+      // the rule is underdetermined. One discrimination wave sees the competing
+      // rules side by side and argues for the intended one.
+      run.executionStats.repairRounds += 1;
+      run.phase = `execution discrimination (wave ${wave})`;
+      const groups = new Map<string, Proposal[]>();
+      for (const p of verified) groups.set(p.finalAnswer!, [...(groups.get(p.finalAnswer!) ?? []), p]);
+      const summary = [...groups.entries()].map(([out, ps], i) => {
+        const dims = (() => { try { const g = JSON.parse(out) as unknown[]; return Array.isArray(g) ? `${g.length}x${Array.isArray(g[0]) ? (g[0] as unknown[]).length : 1}` : "scalar"; } catch { return "?"; } })();
+        return `Candidate rule ${i + 1} (${ps.length} program(s), test output ${dims}):\n${truncateMiddle(proseOnly(ps[0]!.answer), 1_200, "rule trimmed")}\n\`\`\`python\n${truncateMiddle(ps[0]!.program ?? "", 3_000, "program trimmed")}\n\`\`\``;
+      }).join("\n\n");
+      const note = [
+        `EXECUTION FEEDBACK (discrimination): ${groups.size} different rules each reproduce ALL ${ex.examples.length} training pairs but produce DIFFERENT outputs on the test input, so the examples underdetermine the rule.`,
+        summary,
+        "Decide which rule the task intends: prefer the interpretation that explains WHY every training output looks the way it does (object roles, symmetry, counting, relative positions) over one that merely fits, and prefer the simpler, more natural rule when both explain equally well. Then return the complete program for the intended rule (you may reuse or fix one of the candidates).",
+      ].join("\n\n");
+      await run.narrator.say(`Kernel: ${groups.size} verified rules disagree on the test output; running a discrimination wave.`);
+      const judges = await this.proposalWave(ctx, run, intent, ledgerView, wave, widths, taskStartIndex, note, "proposer", Math.min(widths.proposals, 3));
+      await Promise.all(judges.filter((p) => p.success).map(check));
+      extra.push(...judges);
+      verified = [...waveProposals, ...extra].filter((p) => p.execution?.verified === true && p.finalAnswer !== undefined);
+    }
+    if (verified.length === 0) {
+      // No program reproduced the examples: fall back to independent direct
+      // answers. Two families producing the identical grid is strong evidence.
+      const direct = [...waveProposals, ...extra].filter((p) => p.success && p.program === undefined && p.finalAnswer !== undefined && /^\s*\[\s*\[/.test(p.finalAnswer));
+      const groups = new Map<string, Proposal[]>();
+      for (const p of direct) {
+        const key = normalizeFinalAnswer(p.finalAnswer!);
+        groups.set(key, [...(groups.get(key) ?? []), p]);
+      }
+      const agreed = [...groups.values()].filter((ps) => new Set(ps.map((p) => p.family)).size >= 2).sort((a, b) => b.length - a.length)[0];
+      if (agreed !== undefined) {
+        let grid: unknown;
+        try { grid = JSON.parse(agreed[0]!.finalAnswer!.replace(/\s+/g, "")); } catch { grid = undefined; }
+        if (Array.isArray(grid)) {
+          run.verifiedArtifact = JSON.stringify(grid);
+          run.verifiedExplanation = `${new Set(agreed.map((p) => p.family)).size} independent reasoners produced this output grid directly from the examples (no program reproduced every training pair).`;
+          run.executionStats.verified = 0;
+          log.info("kernel direct-answer agreement artifact", { conversationId: run.ledger.conversationId, wave, families: [...new Set(agreed.map((p) => p.family))] });
+        }
+      }
+    }
+    // Verified evidence accumulates across waves: a second, independent attempt
+    // at the max band contributes its programs to the same majority.
+    for (const p of verified) if (!run.verifiedPool.includes(p)) run.verifiedPool.push(p);
+    verified = [...run.verifiedPool];
+    if (verified.length > 0) {
+      // Artifact = the test output backed by the most verified programs; ties → shortest program (Occam).
+      const counts = new Map<string, { n: number; shortest: Proposal }>();
+      for (const p of verified) {
+        const cur = counts.get(p.finalAnswer!);
+        if (cur === undefined) counts.set(p.finalAnswer!, { n: 1, shortest: p });
+        else counts.set(p.finalAnswer!, { n: cur.n + 1, shortest: (p.program?.length ?? Infinity) < (cur.shortest.program?.length ?? Infinity) ? p : cur.shortest });
+      }
+      const winner = [...counts.entries()].sort((a, b) => b[1].n - a[1].n || (a[1].shortest.program?.length ?? 0) - (b[1].shortest.program?.length ?? 0))[0]!;
+      run.verifiedArtifact = winner[0];
+      run.verifiedExplanation = proseOnly(winner[1].shortest.answer);
+      const backingFamilies = new Set(verified.filter((p) => p.finalAnswer === winner[0]).map((p) => p.family));
+      // Independent direct reads that agree with the winner count as backing families too.
+      for (const p of [...waveProposals, ...extra]) if (p.success && p.program === undefined && p.execution === undefined && p.finalAnswer !== undefined && normalizeFinalAnswer(p.finalAnswer) === normalizeFinalAnswer(winner[0])) backingFamilies.add(p.family);
+      run.artifactBacking = { proposals: winner[1].n, families: backingFamilies.size };
+      log.info("kernel execution artifact", { conversationId: run.ledger.conversationId, wave, verifiedPrograms: verified.length, distinctOutputs: counts.size, backing: winner[1].n, backingFamilies: backingFamilies.size });
+    }
+    const durationMs = Math.round(performance.now() - started);
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "completed", durationMs, detail: { wave, execution: true, programs: run.executionStats.programs, verified: run.executionStats.verified, repairRounds: round } });
+    run.steps.push({ type: "verification", label: `Execution Check (wave ${wave})`, startedAt: nowIso(), durationMs, modelRouting: "python3", details: { programs: run.executionStats.programs, verified: run.executionStats.verified, repairRounds: round, examples: ex.examples.length } });
+    log.info("kernel execution phase", { conversationId: run.ledger.conversationId, wave, programs: run.executionStats.programs, verified: run.executionStats.verified, repairRounds: round, durationMs, artifact: run.verifiedArtifact !== undefined });
+    return extra;
+  }
+
+  /**
+   * Execute one proposal's program against the task examples (idempotent). A
+   * verified program overrides the declared final answer with its test output,
+   * becomes the run's artifact if none exists yet, and wakes the wave so it can
+   * settle immediately — execution is stronger evidence than any audit.
+   */
+  private async checkProposalProgram(run: KernelRun, p: Proposal): Promise<void> {
+    const ex = run.examples;
+    if (ex === undefined || p.execution !== undefined || !p.success) return;
+    const program = extractSolveProgram(p.raw);
+    if (program === undefined) {
+      if (p.directCheck !== undefined) {
+        // Leave-one-out direct answer: the last grid answers the withheld
+        // training input; matching ground truth certifies the reasoning.
+        const grids = extractAllGrids(p.raw);
+        const needed = ex.tests.length + 1;
+        if (grids.length >= needed) {
+          const answered = grids.slice(-needed);
+          const heldOut = answered[answered.length - 1];
+          const testGrid = answered[0];
+          const ok = deepEqualJson(heldOut, ex.examples[p.directCheck.holdOut]?.output);
+          p.finalAnswer = JSON.stringify(testGrid);
+          p.execution = { passed: ok ? 1 : 0, total: 1, verified: ok, testOutputs: ok ? [testGrid] : [], feedback: ok ? "held-out training pair reproduced" : "held-out training pair NOT reproduced" };
+          log.info("kernel direct leave-one-out check", { conversationId: run.ledger.conversationId, proposal: p.id, holdOut: p.directCheck.holdOut, ok });
+          if (ok) {
+            run.executionStats.verified += 1;
+            run.confirmedAnswerKeys.add(normalizeFinalAnswer(p.finalAnswer));
+            if (run.firstVerifiedAt === undefined) {
+              run.firstVerifiedAt = performance.now();
+              setTimeout(() => notifyEvidence(run), run.kcfg.execution_settle_grace_seconds * 1000 + 50);
+          setTimeout(() => notifyEvidence(run), run.kcfg.execution_settle_grace_seconds * 8 * 1000 + 50);
+            }
+            notifyEvidence(run);
+          }
+        } else if (p.finalAnswer === undefined) {
+          const grid = extractGridAnswer(p.raw);
+          if (grid !== undefined) p.finalAnswer = JSON.stringify(grid);
+        }
+        return;
+      }
+      // A direct answer (no program): make its grid votable.
+      if (p.finalAnswer === undefined) {
+        const grid = extractGridAnswer(p.raw);
+        if (grid !== undefined) p.finalAnswer = JSON.stringify(grid);
+      }
+      return;
+    }
+    p.program = program;
+    run.executionStats.programs += 1;
+    log.info("kernel execution check start", { conversationId: run.ledger.conversationId, proposal: p.id, programChars: program.length });
+    const result = await checkCandidateProgram(program, ex.examples, ex.tests, run.kcfg.execution_timeout_seconds * 1000);
+    log.info("kernel execution check done", { conversationId: run.ledger.conversationId, proposal: p.id, passed: result.passed, total: result.total, durationMs: result.durationMs, error: result.error?.slice(0, 120) });
+    const memorized = result.passed === result.total && looksMemorized(program, ex.examples);
+    const verified = result.passed === result.total && result.total > 0 && !memorized;
+    p.execution = { passed: result.passed, total: result.total, verified, testOutputs: result.testOutputs, feedback: describeFailures(result), memorized };
+    if (verified) {
+      run.executionStats.verified += 1;
+      if (result.testOutputs.length > 0) {
+        p.finalAnswer = JSON.stringify(result.testOutputs[0]);
+        run.confirmedAnswerKeys.add(normalizeFinalAnswer(p.finalAnswer));
+        if (run.firstVerifiedAt === undefined) {
+          run.firstVerifiedAt = performance.now();
+          // Wake the wave when the grace window ends so it can settle on a lone verified program.
+          setTimeout(() => notifyEvidence(run), run.kcfg.execution_settle_grace_seconds * 1000 + 50);
+          setTimeout(() => notifyEvidence(run), run.kcfg.execution_settle_grace_seconds * 8 * 1000 + 50);
+        }
+      }
+      notifyEvidence(run);
+    }
+  }
+
+  /**
+   * Code tasks without examples: cross-execute every solution against every
+   * proposer's tests (CodeT-style agreement). The best-scoring solution becomes
+   * the artifact when it passes at least 75% of the usable tests; otherwise one
+   * repair round feeds the failing tests back, then the normal search continues.
+   */
+  private async codeExecutionPhase(
+    ctx: FusionRequestContext,
+    run: KernelRun,
+    intent: NonNullable<KernelLedger["intent"]>,
+    ledgerView: KernelLedger,
+    waveProposals: Proposal[],
+    wave: number,
+    widths: WaveWidths,
+    taskStartIndex: number,
+  ): Promise<Proposal[]> {
+    const started = performance.now();
+    const timeoutMs = Math.max(run.kcfg.execution_timeout_seconds, 60) * 1000;
+    const extra: Proposal[] = [];
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, crossExecution: true } });
+
+    const evaluate = async (pool: Proposal[]): Promise<Proposal | undefined> => {
+      const parsed = pool.filter((p) => p.success).map((p) => ({ p, ...extractSolutionAndTests(p.raw) }));
+      const withSolution = parsed.filter((x) => x.solution !== undefined);
+      const testSets = parsed.map((x) => x.tests).filter((t): t is string => t !== undefined);
+      run.executionStats.programs = withSolution.length;
+      if (withSolution.length === 0 || testSets.length === 0) return undefined;
+      const result = await crossExecute(withSolution.map((x) => x.solution!), testSets, timeoutMs);
+      withSolution.forEach((x, i) => {
+        const score = result.scores[i]!;
+        const fraction = score.total > 0 ? score.passed / score.total : 0;
+        x.p.program = x.solution;
+        x.p.finalAnswer = x.solution;
+        x.p.execution = { passed: score.passed, total: score.total, verified: false, crossValidated: true, score: fraction, testOutputs: [], feedback: score.failures.slice(0, 6).join("\n") };
+      });
+      log.info("kernel cross-execution", { conversationId: run.ledger.conversationId, wave, solutions: withSolution.length, testSets: testSets.length, totalTests: result.totalTests, scores: result.scores.map((s) => `${s.passed}/${s.total}`) });
+      return [...withSolution].sort((a, b) => (b.p.execution!.score! - a.p.execution!.score!) || (a.solution!.length - b.solution!.length))[0]?.p;
+    };
+
+    let best = await evaluate(waveProposals);
+    let round = 0;
+    while (
+      best !== undefined &&
+      (best.execution?.score ?? 0) < 1 &&
+      round < Math.min(1, run.kcfg.execution_repair_rounds) &&
+      this.remainingSearchMs(run) > 90_000
+    ) {
+      round += 1;
+      run.executionStats.repairRounds += 1;
+      run.phase = `cross-execution repair round ${round} (wave ${wave})`;
+      const note = [
+        `EXECUTION FEEDBACK (repair round ${round}): the best solution so far passes ${best.execution!.passed}/${best.execution!.total} of the tests written by the reasoners.`,
+        "```python",
+        truncateMiddle(best.program ?? "", 6_000, "solution trimmed"),
+        "```",
+        "Failing tests and errors:",
+        best.execution!.feedback.length > 0 ? best.execution!.feedback : "(none recorded)",
+        "Judge each failing test against the task specification: fix the solution where the test is right, and write your own tests where a test is wrong. Return the complete corrected solution and your tests in the required format.",
+      ].join("\n");
+      await run.narrator.say(`Kernel: best solution passes ${best.execution!.passed}/${best.execution!.total} cross-tests; running a repair round with the failing tests.`);
+      const repairs = await this.proposalWave(ctx, run, intent, ledgerView, wave, widths, taskStartIndex, note, "proposer", Math.min(widths.proposals, 3));
+      extra.push(...repairs);
+      best = await evaluate([...waveProposals, ...extra]);
+    }
+
+    if (best !== undefined && (best.execution?.score ?? 0) >= 0.75 && best.program !== undefined && run.verifiedArtifact === undefined) {
+      run.executionStats.verified = 1;
+      run.verifiedArtifact = best.program;
+      run.artifactKind = "python";
+      run.verifiedExplanation = proseOnly(best.answer);
+      run.confirmedAnswerKeys.add(normalizeFinalAnswer(best.program));
+    }
+    const durationMs = Math.round(performance.now() - started);
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "completed", durationMs, detail: { wave, crossExecution: true, solutions: run.executionStats.programs, bestScore: best?.execution?.score, repairRounds: round, artifact: run.verifiedArtifact !== undefined } });
+    run.steps.push({ type: "verification", label: `Cross-Execution (wave ${wave})`, startedAt: nowIso(), durationMs, modelRouting: "python3", details: { solutions: run.executionStats.programs, bestScore: best?.execution?.score, repairRounds: round } });
+    log.info("kernel cross-execution phase", { conversationId: run.ledger.conversationId, wave, solutions: run.executionStats.programs, bestScore: best?.execution?.score, repairRounds: round, durationMs, artifact: run.verifiedArtifact !== undefined });
+    return extra;
+  }
+
+  /** Extra contract for tasks that ship checkable examples: the reasoner must also deliver a program the kernel can execute. */
+  private executionContract(run: KernelRun): string {
+    const ex = run.examples;
+    if (ex === undefined && run.codeTask !== undefined && run.kcfg.execution_verification) {
+      return "\n\nCODE TASK: deliver the complete solution AND a block of standalone assertion tests; the kernel cross-executes every reasoner's solution against every reasoner's tests and selects by agreement.";
+    }
+    if (ex === undefined || !run.kcfg.execution_verification) return "";
+    return `\n\nEXAMPLE-GROUNDED TASK: the task provides ${ex.examples.length} input/output example(s)${ex.tests.length > 0 ? ` and ${ex.tests.length} test input(s)` : ""}. Your deliverable is a PROGRAM, not a hand-computed answer: infer the general rule and implement it as \`def solve(x)\`. The kernel executes it on every example and on the test input(s); only a program reproducing every example counts as verified.`;
+  }
+
+  private scratchpadEnabled(run: KernelRun): boolean {
+    // Max band only: at F3 the mandatory computation displaced plain reasoning
+    // and regressed solved Apex problems; at max it recovered unsolved ones.
+    return run.kcfg.compute_scratchpad && run.band === "max" && run.examples === undefined && run.codeTask === undefined && run.domains.some((d) => run.kcfg.compute_scratchpad_domains.includes(d));
+  }
+
+  /** Scratchpad contract for math/science proposers; at F3/max the first computation is mandatory. */
+  private scratchpadContract(run: KernelRun): string {
+    const mandatory = run.band !== "F2";
+    return [
+      "COMPUTATIONAL SCRATCHPAD: include ONE fenced ```python block whose FIRST line is `# kernel-compute` and the kernel will EXECUTE it (Python 3 with numpy, scipy, sympy; print() what you need; runtime under 20 s) and return the output to you before you finalize — never guess what it prints.",
+      mandatory
+        ? "REQUIRED: your FIRST response must NOT contain a final answer. It must state your candidate approach and end with ONE `# kernel-compute` block that tests it against the problem — brute-force the small cases, enumerate configurations, evaluate the geometry numerically (including checks for self-intersection, degenerate cases and which region/set the problem actually refers to), or compute terms/integrals. Only after seeing the output do you finalize in the required format. A computation that crashes, times out, or finds nothing is NOT evidence: your search space is almost certainly incomplete or your model of the problem is off — never conclude 'no solution' or a degenerate answer from a failed search; fall back to mathematical reasoning and say so."
+        : "",
+      "You SHOULD use it before committing to an answer whenever the problem has computable structure: counting/combinatorics and number theory (brute-force the small cases of n and compare with your formula), optimization/extremal problems (search small instances for the extremum and the configurations achieving it), geometry (place coordinates and evaluate lengths/areas/angles numerically, e.g. with sympy or floating point), sequences/recurrences (compute terms), probability (enumerate or Monte-Carlo). A disagreement between your reasoning and the computation means your reasoning is wrong until you can explain the gap.",
+      "When you include a compute block, do NOT give a final answer in that response — end with what you are checking; you will get the output and then finalize in the required format.",
+    ].join("\n");
+  }
+
+  /** Last section of an example-grounded proposer capsule: the kernel's format wins over the user's. */
+  private executionResponseFormat(run: KernelRun, scratchpadSlot = true): string | undefined {
+    // Max band only (see scratchpadEnabled); the direct/control slots stay plain so the vote
+    // always contains uncomputed reasoning next to the computed proposals.
+    if (this.scratchpadEnabled(run)) return scratchpadSlot ? this.scratchpadContract(run) : undefined;
+    if (!run.kcfg.execution_verification) return undefined;
+    if (run.examples === undefined && run.codeTask !== undefined) {
+      const entry = run.codeTask.entryPoint !== undefined ? `\`${run.codeTask.entryPoint}\`` : "the requested function";
+      return [
+        "This format OVERRIDES any output-format instructions in the conversation above; those apply to the kernel's final answer to the user, not to you.",
+        "1. `Approach:` one or two sentences.",
+        `2. ONE fenced \`\`\`python block with the COMPLETE, self-contained solution (all imports, the full definition of ${entry}, exactly the signature the task specifies). No example usage, no prints, no tests in this block. Follow the specification LITERALLY: use exactly the constants, formats, defaults, return types, column/key names, plot titles/labels and error behaviors it states; do not add validation, normalization or fallbacks the specification does not ask for (for example, do not pre-check that a file exists — let the library call raise), because hidden tests may mock library calls and check exact values.`,
+        "3. ONE fenced ```python block whose FIRST line is `# kernel-tests`, containing 5-10 independent test functions named `test_*` that use plain `assert` statements. Derive each test from a literal statement of the specification (a stated format, default, return type/shape, raised exception via try/except, or edge case); do not test behaviors the specification leaves open. Tests may reference the solution's functions directly (they run in the solution's namespace) and may import stdlib modules such as tempfile/os; they must be deterministic, need no network, and must not rely on files or state your solution did not create. The kernel executes EVERY reasoner's tests against EVERY reasoner's solution, so write tests you are confident a correct implementation of the specification passes.",
+        "4. The fenced ```json metadata block from your system contract, with \"final_answer\": null.",
+        "Keep prose short; put your effort into a correct solution and sharp tests.",
+      ].join("\n");
+    }
+    if (run.examples === undefined) return undefined;
+    return [
+      "This format OVERRIDES any output-format instructions in the conversation above; those apply to the kernel's final answer to the user, not to you.",
+      "1. `Rule:` one or two sentences stating the transformation precisely.",
+      "2. A fenced ```python block defining `def solve(x)` that implements the rule for ANY input of this kind (standard library only; never hard-code or look up example outputs). Inputs/outputs are plain Python lists/ints/strings exactly as shown in the examples. A grid helper library is available via `from arc_utils import *`: connected_components(g, background=None, diagonal=False, by_color=True) -> [{color, cells, bbox, size}], extract(g, comp_or_bbox), crop, paste(base, patch, r, c, transparent), translate, flood_fill, bbox, bbox_of_color, cells_of_color, color_counts, background_color, replace_color, transpose/flip_h/flip_v/rotate_cw/rotate_ccw/rotate_180/all_symmetries, tile, scale_up/scale_down, overlay, find_subgrid, outline, hollow, is_symmetric_h/v, neighbors4/8, new_grid, dims. Prefer these over re-implementing object detection.",
+      "3. The fenced ```json metadata block from your system contract, with \"final_answer\": null.",
+      "Do NOT output any answer grid or test output — the kernel executes your program to produce it. A response without a ```python solve() block is discarded. Keep prose short; put your effort into the rule and the code.",
+    ].join("\n");
+  }
+
+  private proposerObjective(intent: KernelLedger["intent"], role: WorkerRole): string {
+    const goal = truncateMiddle(intent?.goal ?? "", 3_000, "goal trimmed");
+    if (role === "repair") {
+      return `A tool action taken by the primary agent toward this goal failed (see the most recent tool result). Diagnose the most likely root cause and recommend the single best next action plus one fallback, avoiding the failed strategy.\nGoal: ${goal}`;
+    }
+    if (role === "checkpoint") {
+      return `Review the primary agent's progress toward this goal. State what is done, what remains, what is drifting, and give the precise remaining plan as ordered steps.\nGoal: ${goal}`;
+    }
+    const deliverables = intent?.deliverables.length ? `\nExpected deliverables: ${intent.deliverables.join("; ")}` : "";
+    return `Solve this task as completely and precisely as possible. If it is a question, give the answer with the reasoning that justifies it. If it requires actions in the user's environment, specify the exact actions the primary agent should take, in order, with exact commands/code/edits. Surface risks and what would change your answer.\nGoal: ${goal}${deliverables}`;
+  }
+
+  private async proposalWave(
+    ctx: FusionRequestContext,
+    run: KernelRun,
+    intent: NonNullable<KernelLedger["intent"]>,
+    ledgerView: KernelLedger,
+    wave: number,
+    widths: WaveWidths,
+    taskStartIndex: number,
+    strategyNote: string | undefined,
+    role: WorkerRole = "proposer",
+    widthOverride?: number,
+    onProposal?: (proposal: Proposal) => Promise<void>,
+  ): Promise<Proposal[]> {
+    const { kcfg } = run;
+    const started = performance.now();
+    const picks = run.pool.proposers(widthOverride ?? widths.proposals);
+    // Direct-answer (verbatim task) slots: the control proposer, plus on
+    // example-grounded tasks a second one at the max band — taken from the
+    // END of the pick list and from DISTINCT families, so their agreement is
+    // independent evidence when no program reproduces the examples.
+    const directSlots = !kcfg.control_proposer ? 0 : run.examples !== undefined && kcfg.execution_verification && run.band === "max" ? Math.min(3, run.pool.proposerFamilyCount) : 1;
+    const directIndices = new Set<number>();
+    const directFamilies = new Set<string>();
+    for (let j = picks.length - 1; j >= 1 && directIndices.size < directSlots; j--) {
+      if (directFamilies.has(picks[j]!.family)) continue;
+      directFamilies.add(picks[j]!.family);
+      directIndices.add(j);
+    }
+    const hooks: Promise<void>[] = [];
+    const settle = (proposal: Proposal): Proposal => {
+      if (onProposal !== undefined) hooks.push(onProposal(proposal).catch((err) => log.warn("proposal hook failed", { id: proposal.id, error: String(err) })));
+      return proposal;
+    };
+    const maxTokens = this.proposalMaxTokens(run);
+    const objective = this.proposerObjective(intent, role) + (role === "proposer" ? this.executionContract(run) : "");
+    const phase = role === "repair" ? "repair" : role === "checkpoint" ? "checkpoint" : "proposal";
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase, status: "started", detail: { wave, count: picks.length, routings: picks.map((p) => p.routing) } });
+    emitFusion(ctx, {
+      type: "fusion.subtasks",
+      at: nowIso(),
+      subTasks: picks.map((pick, i) => ({
+        id: `${role}-w${wave}-${i + 1}`,
+        focus: `${role} · ${pick.family}`,
+        model: pick.routing,
+        description: objective.slice(0, 200),
+      })),
+    });
+
+    const timeoutMs = this.workerTimeoutMs(run);
+    const results = await this.runWithQuorum<Proposal>(
+      run,
+      picks.map((pick, i) => ({
+        family: pick.family,
+        start: async (signal): Promise<Proposal> => {
+          const id = `${role}-w${wave}-${i + 1}`;
+          // Control arm: the last first-wave proposer answers the user's
+          // messages verbatim (no kernel framing) so the vote always includes
+          // the plain base-model prior and framing drift becomes visible.
+          // Direct-answer proposers: the control proposer (verbatim task), plus on
+          // example-grounded tasks one more at the max band — a member's direct
+          // read of the grids is a hypothesis the program-synthesis framing can miss.
+          // Direct slots in wave 1 always; on example-grounded tasks in every wave (more independent direct reads).
+          const isControl = role === "proposer" && (wave === 1 || run.examples !== undefined) && picks.length >= 2 && directIndices.has(i);
+          const loo = isControl && run.examples !== undefined && run.examples.examples.length >= 3 && kcfg.execution_verification;
+          const holdOut = loo ? (i + wave) % run.examples!.examples.length : -1;
+          const capsule = isControl
+            ? (loo ? leaveOneOutCapsule(ctx.messages, taskStartIndex, run.examples!.examples, run.examples!.tests, holdOut) : controlCapsule(ctx.messages, taskStartIndex))
+            : compileCapsule({
+                messages: ctx.messages,
+                intent,
+                ledger: ledgerView,
+                role,
+                objective,
+                tokenBudget: kcfg.capsule_tokens,
+                taskStartIndex,
+                strategyNote,
+                responseFormat: role === "proposer" ? this.executionResponseFormat(run, true) : undefined,
+              });
+          const spec: WorkSpec = {
+            kind: role,
+            objective: isControl ? "control" : objective,
+            readSetHash: capsule.readSetHash,
+            modelRouting: pick.routing,
+            strategy: isControl ? (loo ? `${role}:direct-loo${holdOut}:wave${wave}` : `${role}:control:wave${wave}`) : `${role}:wave${wave}`,
+            policyVersion: kcfg.policy_version,
+            configFingerprint: run.configFingerprint,
+          };
+          const workKey = computeWorkKey(spec);
+          const cached = this.work.get<CachedProposal>(workKey);
+          if (cached !== undefined && cached.status === "completed") {
+            this.noteWork(ctx, run, workKey, true, id, pick, role);
+            const parsed = parseProposal(cached.result.content);
+            return settle({ id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: cached.result.content, workKey, cached: true, durationMs: 0, success: true, ...(isControl ? { direct: true } : {}), ...(loo ? { directCheck: { holdOut } } : {}) });
+          }
+          let result = await runWorker(ctx, this.fallbackRouter, {
+            id,
+            role,
+            focus: `${role} · ${pick.family}`,
+            routing: pick.routing,
+            messages: capsule.messages,
+            maxTokens,
+            timeoutMs,
+            deadlineAt: run.searchDeadlineAt,
+            idleTimeoutMs: kcfg.worker_idle_timeout_seconds * 1000,
+            reasoningEffort: this.proposerReasoningEffort(run, role),
+            onSegment: run.narrator.segment,
+            semaphore: run.semaphore,
+            signal,
+          });
+          run.pool.recordOutcome(pick.routing, result.success, result.durationMs);
+          this.accountWorker(run, pick.routing, capsule, result.content);
+          this.noteWork(ctx, run, workKey, false, id, pick, role);
+          if (result.truncated === true) run.truncatedWorkers += 1;
+          if (!result.success) {
+            return settle({ id, family: pick.family, routing: pick.routing, wave, answer: "", claims: [], assumptions: [], risks: [], confidence: undefined, raw: "", workKey, cached: false, durationMs: result.durationMs, success: false, error: result.error });
+          }
+          // Computational scratchpad: execute the proposer's compute block and
+          // let it finalize with the real output (bounded rounds).
+          if (role === "proposer" && !isControl && this.scratchpadEnabled(run)) {
+            let rounds = 0;
+            let history: Array<{ role: "system" | "user" | "assistant"; content: string }> = [...capsule.messages];
+            while (rounds < kcfg.compute_rounds && this.remainingSearchMs(run) > 60_000 && !(signal?.aborted ?? false)) {
+              const code = extractComputeBlock(result.content);
+              if (code === undefined) break;
+              rounds += 1;
+              run.computeRuns += 1;
+              const out = await runComputeProgram(code, kcfg.compute_timeout_seconds * 1000);
+              log.info("kernel scratchpad run", { conversationId: run.ledger.conversationId, id, round: rounds, exitCode: out.exitCode, timedOut: out.timedOut, durationMs: out.durationMs, stdoutChars: out.stdout.length, stdoutHead: out.stdout.slice(0, 200), stderrTail: out.stderr.slice(-300) });
+              await run.narrator.say(`Kernel: ran ${pick.family}'s scratchpad computation (${out.timedOut ? "timed out" : `exit ${out.exitCode}, ${out.durationMs} ms`}).`);
+              const feedback = [
+                `COMPUTE OUTPUT (round ${rounds}${out.timedOut ? ", TIMED OUT" : `, exit ${out.exitCode}, ${out.durationMs} ms`}):`,
+                "```",
+                out.stdout.trim().length > 0 ? out.stdout.trim() : "(no stdout)",
+                out.stderr.trim().length > 0 ? `\n[stderr]\n${out.stderr.trim()}` : "",
+                "```",
+                rounds < kcfg.compute_rounds
+                  ? "Use this output to finish. Return your complete final proposal in the required format. Include another `# kernel-compute` block ONLY if one more computation is essential."
+                  : "Use this output to finish. Return your complete final proposal in the required format now (no further compute blocks will run).",
+              ].join("\n");
+              history = [...history, { role: "assistant", content: result.content }, { role: "user", content: feedback }];
+              const followUp = await runWorker(ctx, this.fallbackRouter, {
+                id: `${id}-c${rounds}`,
+                role,
+                focus: `${role} · ${pick.family} · compute round ${rounds}`,
+                routing: pick.routing,
+                messages: history,
+                maxTokens,
+                timeoutMs: Math.min(timeoutMs, Math.max(15_000, this.remainingSearchMs(run) - 30_000)),
+                idleTimeoutMs: kcfg.worker_idle_timeout_seconds * 1000,
+                reasoningEffort: this.proposerReasoningEffort(run, role),
+                onSegment: run.narrator.segment,
+                semaphore: run.semaphore,
+                signal,
+              });
+              run.pool.recordOutcome(pick.routing, followUp.success, followUp.durationMs);
+              if (!followUp.success) break; // keep the pre-compute proposal rather than nothing
+              result = { ...followUp, durationMs: result.durationMs + followUp.durationMs };
+            }
+          }
+          // Truncated output is usable evidence for this turn but is not
+          // cached: a replay should get the chance to finish it.
+          if (result.truncated !== true) {
+            this.work.put(workKey, spec, { content: result.content, durationMs: result.durationMs } satisfies CachedProposal, "completed", run.ledger.conversationId);
+          }
+          const parsed = parseProposal(result.content);
+          return settle({ id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: result.content, workKey, cached: false, durationMs: result.durationMs, success: true, ...(isControl ? { direct: true } : {}), ...(loo ? { directCheck: { holdOut } } : {}) });
+        },
+      })),
+      Math.min(2, run.pool.proposerFamilyCount),
+      role === "proposer" ? (settled, quorumReached) => this.proposalsAlreadyAgree(run, settled, quorumReached, directIndices.size) : undefined,
+    );
+    log.info("kernel proposal wave results", { conversationId: run.ledger.conversationId, role, wave, results: results.length, succeeded: results.filter((r) => r.success).length, hooks: hooks.length, elapsedMs: Math.round(performance.now() - started) });
+    await Promise.all(hooks);
+    log.info("kernel proposal wave hooks done", { conversationId: run.ledger.conversationId, role, wave, elapsedMs: Math.round(performance.now() - started) });
+
+    const durationMs = Math.round(performance.now() - started);
+    const succeeded = results.filter((r) => r.success).length;
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase, status: "completed", durationMs, detail: { wave, total: results.length, succeeded, cached: results.filter((r) => r.cached).length, cancelled: run.cancelledWorkers, truncated: run.truncatedWorkers } });
+    run.steps.push({
+      type: phase,
+      label: role === "proposer" ? `Proposal Wave ${wave}` : role === "repair" ? "Repair Wave" : "Checkpoint Wave",
+      startedAt: nowIso(),
+      durationMs,
+      details: {
+        wave,
+        total: results.length,
+        succeeded,
+        cached: results.filter((r) => r.cached).length,
+        workers: results.map((r) => ({ id: r.id, family: r.family, model: r.routing, success: r.success, cached: r.cached, durationMs: r.durationMs, claims: r.claims.length, confidence: r.confidence })),
+      },
+    });
+    return results;
+  }
+
+  private async verificationWave(
+    ctx: FusionRequestContext,
+    run: KernelRun,
+    intent: NonNullable<KernelLedger["intent"]>,
+    ledgerView: KernelLedger,
+    proposals: Proposal[],
+    wave: number,
+    widths: WaveWidths,
+    taskStartIndex: number,
+  ): Promise<Verification[]> {
+    const candidates = proposals.filter((p) => p.success && (p.answer.length > 0 || p.claims.length > 0));
+    if (candidates.length === 0) return [];
+    const started = performance.now();
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "started", detail: { wave, candidates: candidates.length } });
+    await run.narrator.say(`Kernel: verifying ${candidates.length} candidate answer(s) with cross-family auditors.`);
+    const entries = this.launchVerification(ctx, run, intent, ledgerView, candidates, wave, widths, taskStartIndex);
+    const results = await this.settleWithQuorum(run, entries, Math.min(2, run.pool.proposerFamilyCount));
+    this.recordVerificationWave(ctx, run, results, wave, Math.round(performance.now() - started));
+    return results;
+  }
+
+  /** Launch cross-family verifiers for the given candidates; returns running entries for quorum settlement. */
+  private launchVerification(
+    ctx: FusionRequestContext,
+    run: KernelRun,
+    intent: NonNullable<KernelLedger["intent"]>,
+    ledgerView: KernelLedger,
+    candidates: Proposal[],
+    wave: number,
+    widths: WaveWidths,
+    taskStartIndex: number,
+    options: { excludeFamilies?: Set<string>; idSuffix?: string } = {},
+  ): QuorumEntry<Verification>[] {
+    const { kcfg } = run;
+    const jobs: Array<{ candidate: Proposal; pick: PoolPick; id: string }> = [];
+    for (const candidate of candidates) {
+      const picks = run.pool.verifiersFor(candidate.family, widths.verifiersPerCandidate, options.excludeFamilies);
+      picks.forEach((pick, i) => jobs.push({ candidate, pick, id: `verify-w${wave}-${candidate.id.replace(/^[a-z]+-w\d+-/, "")}-${i + 1}${options.idSuffix ?? ""}` }));
+    }
+    const timeoutMs = this.workerTimeoutMs(run);
+    return this.launchJobs<Verification>(
+      run,
+      jobs.map(({ candidate, pick, id }) => ({
+        family: pick.family,
+        start: async (signal): Promise<Verification> => {
+          const objective = `Audit candidate ${candidate.id} (produced by another model family) against the goal. Try hard to falsify it: check every key claim, the arithmetic/logic, the completeness against the deliverables, and the safety of any recommended actions.`;
+          const capsule = compileCapsule({
+            messages: ctx.messages,
+            intent,
+            ledger: ledgerView,
+            role: "verifier",
+            objective,
+            tokenBudget: kcfg.capsule_tokens,
+            taskStartIndex,
+            attachments: [
+              { title: `Candidate ${candidate.id} answer`, text: truncateMiddle(candidate.answer, 16_000, "candidate trimmed") },
+              { title: "Candidate key claims", text: candidate.claims.map((c, i) => `${i + 1}. ${c}`).join("\n") || "(none extracted)" },
+            ],
+          });
+          const spec: WorkSpec = {
+            kind: "verifier",
+            objective: `${objective}|${candidate.workKey}`,
+            readSetHash: capsule.readSetHash,
+            modelRouting: pick.routing,
+            strategy: `verify:wave${wave}`,
+            policyVersion: kcfg.policy_version,
+            configFingerprint: run.configFingerprint,
+          };
+          const workKey = computeWorkKey(spec);
+          const cached = this.work.get<CachedVerification>(workKey);
+          if (cached !== undefined && cached.status === "completed") {
+            this.noteWork(ctx, run, workKey, true, id, pick, "verifier");
+            const parsed = parseVerdict(cached.result.content);
+            return { id, proposalId: candidate.id, family: pick.family, routing: pick.routing, ...parsed, raw: cached.result.content, workKey, cached: true, durationMs: 0, success: true };
+          }
+          const result = await runWorker(ctx, this.fallbackRouter, {
+            id,
+            role: "verifier",
+            focus: `verifier · ${pick.family} → ${candidate.family}`,
+            routing: pick.routing,
+            messages: capsule.messages,
+            maxTokens: Math.min(kcfg.worker_max_tokens, kcfg.verifier_max_tokens),
+            timeoutMs,
+            deadlineAt: run.searchDeadlineAt,
+            idleTimeoutMs: kcfg.worker_idle_timeout_seconds * 1000,
+            reasoningEffort: kcfg.worker_reasoning_effort.verifier,
+            onSegment: run.narrator.segment,
+            semaphore: run.semaphore,
+            temperature: 0.2,
+            signal,
+          });
+          run.pool.recordOutcome(pick.routing, result.success, result.durationMs);
+          this.accountWorker(run, pick.routing, capsule, result.content);
+          this.noteWork(ctx, run, workKey, false, id, pick, "verifier");
+          if (result.truncated === true) run.truncatedWorkers += 1;
+          if (!result.success) {
+            return { id, proposalId: candidate.id, family: pick.family, routing: pick.routing, verdict: "revise", issues: [], correctClaims: [], confidence: undefined, raw: "", workKey, cached: false, durationMs: result.durationMs, success: false, error: result.error };
+          }
+          if (result.truncated !== true) {
+            this.work.put(workKey, spec, { content: result.content, durationMs: result.durationMs } satisfies CachedVerification, "completed", run.ledger.conversationId);
+          }
+          const parsed = parseVerdict(result.content);
+          return { id, proposalId: candidate.id, family: pick.family, routing: pick.routing, ...parsed, raw: result.content, workKey, cached: false, durationMs: result.durationMs, success: true };
+        },
+      })),
+    );
+  }
+
+  private recordVerificationWave(ctx: FusionRequestContext, run: KernelRun, results: Verification[], wave: number, durationMs: number): void {
+    const verdicts = { accept: 0, revise: 0, reject: 0 };
+    for (const v of results) if (v.success) verdicts[v.verdict] += 1;
+    emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase: "verification", status: "completed", durationMs, detail: { wave, total: results.length, ...verdicts, cached: results.filter((r) => r.cached).length, cancelled: run.cancelledWorkers, truncated: run.truncatedWorkers } });
+    run.steps.push({
+      type: "verification",
+      label: `Verification Wave ${wave}`,
+      startedAt: nowIso(),
+      durationMs,
+      details: { wave, total: results.length, ...verdicts, cached: results.filter((r) => r.cached).length, verifiers: results.map((v) => ({ id: v.id, candidate: v.proposalId, family: v.family, model: v.routing, verdict: v.verdict, issues: v.issues.length, success: v.success })) },
+    });
+  }
+
+  private applyConsensusToLedger(run: KernelRun, consensus: Consensus, priorFindings: KernelFinding[]): void {
+    const wave = run.waves;
+    const toFinding = (f: Consensus["accepted"][number], i: number, prefix: string): KernelFinding => ({
+      id: `${prefix}-${wave}-${i + 1}`,
+      statement: f.statement,
+      status: f.status,
+      support: f.support,
+      contradictedBy: f.contradictedBy,
+      note: f.note,
+      wave,
+    });
+    const findings: KernelFinding[] = [
+      ...priorFindings.filter((f) => f.status === "accepted").slice(-20),
+      ...consensus.accepted.map((f, i) => toFinding(f, i, "acc")),
+      ...consensus.disputed.map((f, i) => toFinding(f, i, "dis")),
+      ...consensus.rejected.map((f, i) => toFinding(f, i, "rej")),
+    ];
+    run.ledger.findings = findings;
+    run.ledger.disagreements = [
+      ...consensus.disputed.map((f) => `${f.statement}${f.note !== undefined ? ` — ${f.note}` : ""}`),
+      ...consensus.openIssues,
+    ].slice(0, 30);
+    // Plan: deliverables plus imperative accepted findings become pending steps.
+    const imperative = /^(add|implement|create|write|run|use|change|update|replace|remove|refactor|fix|install|configure|verify|test|check|compute|apply|set|define|move|rename|migrate)\b/i;
+    const steps = [
+      ...(run.ledger.intent?.deliverables ?? []),
+      ...consensus.accepted.map((f) => f.statement).filter((s) => imperative.test(s)),
+    ];
+    run.ledger.plan = [...new Set(steps)].slice(0, 24).map((text, i) => ({ id: `step-${i + 1}`, text, status: "pending" as const }));
+    for (const rejected of consensus.rejected.slice(0, 10)) {
+      this.pushNegative(run, `rej:${stableHash(rejected.statement).slice(0, 16)}`, "rejected_hypothesis", `${rejected.statement}${rejected.note !== undefined ? ` (${rejected.note})` : ""}`);
+    }
+  }
+
+  private buildSearchNotes(consensus: Consensus, proposals: Proposal[], verifications: Verification[]): SubagentResult[] {
+    const notes: SubagentResult[] = [];
+    const mk = (id: string, focus: string, description: string, model: string, content: string, durationMs = 0): SubagentResult => ({
+      subTask: { id, description, focus_area: focus, suggested_model_routing: model },
+      success: true,
+      usedModelRouting: model,
+      content,
+      durationMs,
+    });
+    const vote = consensus.answerVote;
+    if (vote !== undefined && vote.leader !== undefined) {
+      const lines = vote.entries.filter((e) => e.weight > 0).map((e, i) =>
+        `${i + 1}. "${e.answer}" — weight ${e.weight.toFixed(1)}; asserted by ${e.families.length > 0 ? e.families.join(", ") : "(verifier correction only)"}${e.verifierConfirms > 0 ? `; confirmed by ${e.verifierConfirms} verifier(s)` : ""}${e.verifierRejects > 0 ? `; rejected by ${e.verifierRejects} verifier(s)` : ""}`,
+      );
+      const verdict = vote.unanimous
+        ? `UNANIMOUS: every reasoner reached "${vote.leader.answer}".`
+        : `SPLIT (leader share ${(vote.leaderShare * 100).toFixed(0)}%): re-derive the decisive step yourself before committing.`;
+      notes.push(mk(
+        "answer-vote",
+        vote.unanimous ? "FINAL ANSWER VOTE — unanimous" : "FINAL ANSWER VOTE — split",
+        "Weighted vote over the final answers declared by independent reasoners and verifiers",
+        "kernel",
+        `${verdict}\n${lines.join("\n")}`,
+      ));
+    }
+    if (consensus.accepted.length > 0) {
+      notes.push(mk(
+        "consensus",
+        "VERIFIED CONSENSUS — reliable",
+        "Findings independently supported by ≥2 model families or confirmed by a cross-family verifier",
+        "kernel",
+        consensus.accepted.map((f, i) => `${i + 1}. ${f.statement} [supported by: ${f.support.join(", ")}]`).join("\n"),
+      ));
+    }
+    if (consensus.disputed.length > 0 || consensus.openIssues.length > 0 || consensus.rejected.length > 0) {
+      const parts: string[] = [];
+      if (consensus.disputed.length > 0) {
+        parts.push("DISPUTED (resolve with your own reasoning; state residual uncertainty):");
+        parts.push(...consensus.disputed.map((f, i) => `${i + 1}. ${f.statement}${f.note !== undefined ? ` — verifier: ${f.note}` : ""} [asserted by: ${f.support.join(", ")}]`));
+      }
+      if (consensus.openIssues.length > 0) {
+        parts.push("OPEN ISSUES raised by verifiers:");
+        parts.push(...consensus.openIssues.map((issue, i) => `${i + 1}. ${issue}`));
+      }
+      if (consensus.rejected.length > 0) {
+        parts.push("REJECTED (refuted — do not use):");
+        parts.push(...consensus.rejected.map((f, i) => `${i + 1}. ${f.statement}${f.note !== undefined ? ` — ${f.note}` : ""}`));
+      }
+      notes.push(mk("disputes", "DISPUTED / OPEN / REJECTED", "Points with verifier objections or refutations", "kernel", parts.join("\n")));
+    }
+    // Full candidate answers, strongest first (accepted verdicts, then confidence), bounded per note.
+    const verdictScore = (p: Proposal): number => {
+      const vs = verifications.filter((v) => v.success && v.proposalId === p.id);
+      if (vs.length === 0) return 0.5;
+      return vs.reduce((s, v) => s + (v.verdict === "accept" ? 1 : v.verdict === "revise" ? 0.5 : 0), 0) / vs.length;
+    };
+    const ranked = proposals
+      .filter((p) => p.success && p.answer.length > 0)
+      .sort((a, b) => verdictScore(b) - verdictScore(a) || (b.confidence ?? 0) - (a.confidence ?? 0) || b.wave - a.wave);
+    const perNoteChars = Math.max(3_000, Math.floor(60_000 / Math.max(1, ranked.length)));
+    for (const p of ranked) {
+      const vs = verifications.filter((v) => v.success && v.proposalId === p.id);
+      const verdictText = vs.length > 0 ? vs.map((v) => `${v.family}: ${v.verdict}${v.issues.length > 0 ? ` (${v.issues.length} issue(s))` : ""}`).join("; ") : "unverified";
+      notes.push(mk(
+        p.id,
+        `candidate answer · ${p.family} · wave ${p.wave} · verdicts: ${verdictText}`,
+        `Independent proposal from ${p.family}${p.confidence !== undefined ? ` (self-confidence ${p.confidence.toFixed(2)})` : ""}`,
+        p.routing,
+        truncateMiddle(p.answer, perNoteChars, "candidate trimmed"),
+        p.durationMs,
+      ));
+    }
+    return notes;
+  }
+
+  private searchBrief(run: KernelRun, consensus: Consensus, proposalCount: number, verificationCount: number): string {
+    const { kcfg } = run;
+    return [
+      "KERNEL SYNTHESIS BRIEF",
+      `- ${proposalCount} independent reasoner(s) across families [${run.pool.familyNames.join(", ")}] proposed answers over ${run.waves} wave(s); ${verificationCount} cross-family verifier(s) audited them. Agreement ${consensus.agreement.toFixed(2)} (threshold ${kcfg.agreement_threshold}).`,
+      run.verifiedArtifact !== undefined
+        ? `- EXECUTION-VERIFIED RESULT: a candidate program reproduced ALL ${run.examples?.examples.length ?? 0} of the task's input/output examples and was run on the test input. The kernel has ALREADY EMITTED that verified output as the JSON block at the start of the response. Your job is to explain the inferred rule and how it maps the test input to that output, concisely. Do NOT write out any output grid, array, or JSON yourself — no code fences at all.`
+        : "",
+      "- Notes labelled VERIFIED CONSENSUS are supported by ≥2 model families or confirmed by a verifier: treat them as reliable and build the answer on them.",
+      "- Notes labelled DISPUTED need your own judgment; resolve them explicitly and state residual uncertainty where it remains. REJECTED items were refuted: do not use them.",
+      "- Candidate answers are full independent attempts ranked by verifier verdicts; merge the best specifics (exact values, code, steps) rather than averaging prose.",
+      consensus.answerVote !== undefined
+        ? consensus.answerVote.unanimous
+          ? "- The FINAL ANSWER VOTE is unanimous and verified: the answer is SETTLED. Do not re-solve the task from scratch — present the clearest candidate derivation (fix only obvious slips), keep it concise, and state that final answer in exactly the format the user requested."
+          : "- The FINAL ANSWER VOTE is split: do not pick by popularity or persuasiveness alone — locate the step where the derivations diverge, work it out yourself, then commit to one answer in exactly the format the user requested."
+        : "",
+      "- Produce ONE complete, final, user-facing answer for the goal. If the correct next step is an action in the user's environment and tools are available, emit structured tool calls instead of describing them.",
+      consensus.agreement < kcfg.agreement_threshold
+        ? "- Agreement stayed below threshold: be explicit about what is uncertain and why, and prefer verifiable statements."
+        : "",
+    ].filter((line) => line.length > 0).join("\n");
+  }
+
+  // ── Continuation ──────────────────────────────────────────────────
+
+  private async runContinuation(ctx: FusionRequestContext, run: KernelRun): Promise<void> {
+    const { kcfg, classification } = run;
+    const intent = run.ledger.intent!;
+    const started = performance.now();
+    emitFusion(ctx, {
+      type: "fusion.phase",
+      at: nowIso(),
+      phase: "continuation",
+      status: "started",
+      modelRouting: run.executorRouting,
+      detail: { kind: classification.kind, step: run.ledger.continuationSteps + 1, replan: classification.replan },
+    });
+
+    const notes: SubagentResult[] = [];
+    const replan = classification.replan;
+
+    if (replan.reasons.includes("tool_error") && replan.errorSignature !== undefined && kcfg.continuation.repair_on_error) {
+      const prior = this.work.getNegative(run.ledger.conversationId, replan.errorSignature);
+      const attempts = prior?.attempts ?? 0;
+      if (attempts < kcfg.continuation.max_repairs_per_signature) {
+        const newAttempts = this.work.recordNegative(run.ledger.conversationId, replan.errorSignature, "tool_error", replan.errorExcerpt ?? "tool error");
+        this.pushNegative(run, replan.errorSignature, "tool_error", replan.errorExcerpt ?? "tool error", newAttempts);
+        run.repair = { signature: replan.errorSignature, attempts: newAttempts, exhausted: false };
+        await run.narrator.say(`Kernel: a tool step failed (${truncateMiddle(replan.errorExcerpt ?? "error", 140)}). Running a bounded cross-family repair diagnosis before continuing.`);
+        const widths = widthsFor(kcfg, run.band, run.pool.proposerFamilyCount);
+        const repairWidth = Math.min(widths.proposals, run.pool.proposerFamilyCount);
+        const proposals = await this.proposalWave(ctx, run, intent, run.ledger, run.ledger.lastSearch?.waves ?? 1, widths, run.ledger.taskStartIndex, undefined, "repair", repairWidth);
+        const verifications = run.band === "F2"
+          ? []
+          : await this.verificationWave(ctx, run, intent, run.ledger, proposals, 1, { ...widths, verifiersPerCandidate: 1 }, run.ledger.taskStartIndex);
+        const consensus = buildConsensus(proposals, verifications);
+        run.agreement = consensus.agreement;
+        run.waves = 1;
+        for (const f of consensus.accepted.slice(0, 8)) {
+          run.ledger.findings.push({ id: `repair-${stableHash(f.statement).slice(0, 8)}`, statement: f.statement, status: "accepted", support: f.support, contradictedBy: [], note: "repair", wave: 0 });
+        }
+        notes.push(...this.buildSearchNotes(consensus, proposals, verifications).map((n) => ({ ...n, subTask: { ...n.subTask, focus_area: `REPAIR · ${n.subTask.focus_area}` } })));
+        run.ledger.lastSearch = { at: nowIso(), effort: run.band, waves: 1, agreement: consensus.agreement, proposals: proposals.length, verifications: verifications.length, workKeys: run.workKeys.slice(0, 32), cachedWork: run.cachedWork, kind: "repair" };
+      } else {
+        this.work.recordNegative(run.ledger.conversationId, replan.errorSignature, "repair_exhausted", replan.errorExcerpt ?? "tool error");
+        this.pushNegative(run, replan.errorSignature, "repair_exhausted", `${replan.errorExcerpt ?? "tool error"} (repeated ${attempts + 1}×)`, attempts + 1);
+        run.repair = { signature: replan.errorSignature, attempts: attempts + 1, exhausted: true };
+        await run.narrator.say("Kernel: this failure repeated after a repair attempt; forcing a strategy change instead of another repair wave.");
+      }
+    }
+
+    if (replan.reasons.includes("step_budget") && run.ledger.lastSearch !== undefined) {
+      run.checkpoint = true;
+      await run.narrator.say(`Kernel: ${run.ledger.continuationSteps} steps since the last plan review; running a bounded checkpoint across families.`);
+      const widths = widthsFor(kcfg, run.band, run.pool.proposerFamilyCount);
+      const proposals = await this.proposalWave(ctx, run, intent, run.ledger, (run.ledger.lastSearch?.waves ?? 0) + 1, widths, run.ledger.taskStartIndex, undefined, "checkpoint", run.pool.proposerFamilyCount);
+      const consensus = buildConsensus(proposals, []);
+      const remaining = consensus.accepted.concat(consensus.disputed).map((f) => f.statement).slice(0, 20);
+      if (remaining.length > 0) {
+        run.ledger.plan = remaining.map((text, i) => ({ id: `ckpt-${i + 1}`, text, status: "pending" as const }));
+      }
+      notes.push(...this.buildSearchNotes(consensus, proposals, []).map((n) => ({ ...n, subTask: { ...n.subTask, focus_area: `CHECKPOINT · ${n.subTask.focus_area}` } })));
+      run.ledger.continuationSteps = 0;
+      run.ledger.lastSearch = { ...(run.ledger.lastSearch ?? { at: nowIso(), effort: run.band, waves: 0, agreement: 0, proposals: 0, verifications: 0, workKeys: [], cachedWork: 0, kind: "checkpoint" as const }), at: nowIso(), kind: "checkpoint", waves: 1, proposals: proposals.length, agreement: consensus.agreement };
+    }
+
+    run.notes = notes;
+    ctx.kernelBrief = this.continuationBrief(run);
+    run.ledger.continuationSteps += 1;
+    run.ledger.totalContinuationSteps += 1;
+    const durationMs = Math.round(performance.now() - started);
+    emitFusion(ctx, {
+      type: "fusion.phase",
+      at: nowIso(),
+      phase: "continuation",
+      status: "completed",
+      durationMs,
+      modelRouting: run.executorRouting,
+      detail: { repair: run.repair, checkpoint: run.checkpoint === true, notes: notes.length, step: run.ledger.continuationSteps },
+    });
+    run.steps.push({
+      type: "continuation",
+      label: "Plan Continuation",
+      startedAt: nowIso(),
+      durationMs,
+      modelRouting: run.executorRouting,
+      details: { kind: classification.kind, step: run.ledger.continuationSteps, repair: run.repair, checkpoint: run.checkpoint === true, reusedSearch: run.ledger.lastSearch?.kind },
+    });
+  }
+
+  private continuationBrief(run: KernelRun): string {
+    const ledger = run.ledger;
+    const intent = ledger.intent!;
+    const lines: string[] = [
+      "KERNEL CONTINUATION BRIEF",
+      "You are continuing an in-progress task. The deep planning for it already happened; do NOT restart planning, re-explain the task, or re-answer earlier parts. Read the latest tool results in the conversation and take the next correct step: emit the next tool call(s) if an action is needed, or give the final answer if the goal is achieved.",
+      `Goal: ${truncateMiddle(intent.goal, 1_500, "goal trimmed")}`,
+    ];
+    if (intent.constraints.length > 0) lines.push(`Constraints: ${intent.constraints.slice(0, 8).join("; ")}`);
+    if (intent.acceptance.length > 0) lines.push(`Done when: ${intent.acceptance.slice(0, 6).join("; ")}`);
+    if (ledger.plan.length > 0) lines.push(`Plan: ${ledger.plan.slice(0, 16).map((s, i) => `${i + 1}. ${s.text}`).join(" | ")}`);
+    const accepted = ledger.findings.filter((f) => f.status === "accepted").slice(-12);
+    if (accepted.length > 0) lines.push(`Verified findings: ${accepted.map((f) => f.statement).join(" | ")}`);
+    if (ledger.negatives.length > 0) {
+      lines.push(`Do NOT repeat (already failed): ${ledger.negatives.slice(-6).map((n) => n.detail).join(" | ")}`);
+    }
+    if (run.repair !== undefined) {
+      lines.push(run.repair.exhausted
+        ? `The most recent tool failure has now repeated ${run.repair.attempts} time(s) with the same signature. Do not retry the same action; choose a materially different approach or report the blocker precisely.`
+        : "The most recent tool step failed; the REPAIR notes below contain a cross-family diagnosis and recommended next action. Follow the best-supported recommendation.");
+    }
+    if (run.checkpoint === true) lines.push("A CHECKPOINT review of remaining work is attached; align the next steps to it.");
+    if (ledger.lastAnswerSummary !== undefined) lines.push(`Your previous turn (summary): ${truncateMiddle(ledger.lastAnswerSummary, 800, "trimmed")}`);
+    lines.push(`Steps executed so far on this task: ${ledger.totalContinuationSteps}.`);
+    return lines.join("\n");
+  }
+
+  // ── Shared helpers ────────────────────────────────────────────────
+
+  private applySynthesisContext(ctx: FusionRequestContext, run: KernelRun): void {
+    run.phase = "synthesis";
+    ctx.kernelSynthesisRouting = run.executorRouting;
+    // Settled answers only need presentation (low). Contested searches get real
+    // but bounded thinking (medium): the synthesizer resolves the split from
+    // rich evidence rather than re-solving the task open-endedly for many
+    // minutes after the search already spent its budget.
+    ctx.kernelSynthesisReasoningEffort = run.kcfg.synthesis_reasoning_effort
+      ?? (run.settledAnswer !== undefined ? "low" : run.mode === "search" ? "medium" : undefined);
+    if (ctx.kernelBrief === undefined) ctx.kernelBrief = "KERNEL BRIEF\nAnswer the current request from the conversation context.";
+  }
+
+  private noteWork(ctx: FusionRequestContext, run: KernelRun, workKey: string, hit: boolean, id: string, pick?: PoolPick, role?: WorkerRole): void {
+    run.totalWork += 1;
+    if (hit) run.cachedWork += 1;
+    run.workKeys.push(workKey);
+    emitFusion(ctx, { type: "fusion.cache", at: nowIso(), kind: "work", hit, detail: `${id}${pick !== undefined ? ` ${pick.routing}` : ""} ${workKey.slice(0, 12)}` });
+    if (hit && pick !== undefined && role !== undefined) {
+      emitFusion(ctx, { type: "fusion.subagent", at: nowIso(), id, focus: `${role} · ${pick.family}`, model: pick.routing, status: "completed", role, durationMs: 0, detail: { stage: "work_cache_reused", workKey } });
+    }
+  }
+
+  private accountWorker(run: KernelRun, routing: string, capsule: Capsule, content: string): void {
+    const promptTokens = capsule.estimatedTokens;
+    const completionTokens = Math.ceil(content.length / 4);
+    const pricing = resolvePricing({ requestedModel: routing });
+    const cost = calculateCosts(usageSnapshotFromCounts({ promptTokens, completionTokens, totalTokens: promptTokens + completionTokens }), pricing);
+    run.costs.push({ modelRouting: routing, promptTokens, completionTokens, totalTokens: promptTokens + completionTokens, userCostUsd: cost.userCostUsd, typicalCostUsd: cost.typicalCostUsd });
+  }
+
+  private pushNegative(run: KernelRun, signature: string, kind: NegativeKind, detail: string, attempts = 1): void {
+    const existing = run.ledger.negatives.findIndex((n) => n.signature === signature);
+    const entry = { signature, kind, detail: truncateMiddle(detail, 300, "trimmed"), attempts, at: nowIso() };
+    if (existing >= 0) run.ledger.negatives[existing] = { ...entry, attempts: Math.max(attempts, run.ledger.negatives[existing]!.attempts) };
+    else run.ledger.negatives.push(entry);
+  }
+
+  private recordAnswer(run: KernelRun, content: string | null | undefined, toolCalls: unknown[] | undefined): void {
+    const names = (toolCalls ?? []).map((tc) => {
+      if (typeof tc === "string") return tc;
+      const obj = tc as Record<string, unknown>;
+      const fn = obj?.["function"] as Record<string, unknown> | undefined;
+      return typeof fn?.["name"] === "string" ? (fn["name"] as string) : typeof obj?.["name"] === "string" ? (obj["name"] as string) : "tool";
+    });
+    const parts: string[] = [];
+    if (content !== null && content !== undefined && content.trim().length > 0) parts.push(truncateMiddle(content.replace(/\s+/g, " ").trim(), 1_600, "trimmed"));
+    if (names.length > 0) parts.push(`[issued tool calls: ${names.slice(0, 8).join(", ")}]`);
+    if (parts.length > 0) run.ledger.lastAnswerSummary = parts.join(" ");
+  }
+
+  /** Tee the outgoing synthesis stream to capture the answer for the ledger (OpenAI or Anthropic SSE). */
+  private observeAnswerChunk(ctx: FusionRequestContext, chunk: string, acc: { content: string; toolNames: string[] }): void {
+    if (acc.content.length > 8_000) return;
+    for (const event of splitSseEvents(chunk)) {
+      if (ctx.clientProtocol === "anthropic") {
+        const dataLine = event.split("\n").find((line) => line.startsWith("data:"));
+        if (dataLine === undefined) continue;
+        try {
+          const payload = JSON.parse(dataLine.replace(/^data:\s?/, "")) as Record<string, unknown>;
+          const delta = payload["delta"] as Record<string, unknown> | undefined;
+          if (payload["type"] === "content_block_delta" && delta?.["type"] === "text_delta" && typeof delta["text"] === "string") acc.content += delta["text"];
+          const block = payload["content_block"] as Record<string, unknown> | undefined;
+          if (payload["type"] === "content_block_start" && block?.["type"] === "tool_use" && typeof block["name"] === "string") acc.toolNames.push(block["name"] as string);
+        } catch {
+          // ignore non-JSON events
+        }
+        continue;
+      }
+      const parsed = parseOpenAIDelta(event);
+      if (parsed === null) continue;
+      if (parsed.content.length > 0) acc.content += parsed.content;
+      for (const delta of parsed.toolCallDeltas) {
+        const fn = delta["function"] as Record<string, unknown> | undefined;
+        if (typeof fn?.["name"] === "string" && fn["name"].length > 0) acc.toolNames.push(fn["name"] as string);
+      }
+    }
+  }
+
+  private finalize(ctx: FusionRequestContext, run: KernelRun): void {
+    if (run.persist) this.ledgers.save(run.ledger, run.hashes, run.kcfg.policy_version);
+    log.info("kernel turn complete", {
+      conversationId: run.ledger.conversationId,
+      turn: run.classification.kind,
+      mode: run.mode,
+      band: run.band,
+      waves: run.waves,
+      agreement: run.agreement,
+      workItems: run.totalWork,
+      cachedWorkItems: run.cachedWork,
+      cancelledWorkers: run.cancelledWorkers,
+      earlySettles: run.earlySettles,
+      continuationSteps: run.ledger.totalContinuationSteps,
+      executor: run.executorRouting,
+      totalMs: Math.round(performance.now() - run.startedAt),
+    });
+    ctx.kernelTrace = {
+      engine: "kernel",
+      turn: run.classification.kind,
+      turnReason: run.classification.reason,
+      mode: run.mode,
+      band: run.band,
+      requestedEffort: run.requested,
+      waves: run.waves,
+      agreement: run.agreement,
+      workItems: run.totalWork,
+      cachedWorkItems: run.cachedWork,
+      cancelledWorkers: run.cancelledWorkers,
+      truncatedWorkers: run.truncatedWorkers,
+      earlySettles: run.earlySettles,
+      settledAnswer: run.settledAnswer,
+      execution: run.examples !== undefined || run.codeTask !== undefined ? { examples: run.examples?.examples.length ?? 0, codeTask: run.codeTask !== undefined, ...run.executionStats, artifact: run.verifiedArtifact !== undefined } : undefined,
+      computeRuns: run.computeRuns > 0 ? run.computeRuns : undefined,
+      vote: run.lastVote !== undefined
+        ? { leader: run.lastVote.leader?.answer, share: run.lastVote.leaderShare, unanimous: run.lastVote.unanimous, voters: run.lastVote.voters, entries: run.lastVote.entries.slice(0, 4).map((e) => ({ answer: e.answer, weight: e.weight, families: e.families })) }
+        : undefined,
+      searchBudgetSeconds: run.kcfg.search_deadline_seconds[run.band],
+      continuationSteps: run.ledger.continuationSteps,
+      totalContinuationSteps: run.ledger.totalContinuationSteps,
+      findings: run.ledger.findings.length,
+      negatives: run.ledger.negatives.length,
+      executorRouting: run.executorRouting,
+      repair: run.repair,
+      checkpoint: run.checkpoint === true,
+      pool: run.pool.snapshot(),
+      phases: run.steps.filter((s) => s.durationMs > 0).map((s) => `${s.type}:${Math.round(s.durationMs / 1000)}s`),
+      totalMs: Math.round(performance.now() - run.startedAt),
+    };
+  }
+
+  private setStreamTrace(ctx: FusionRequestContext, run: KernelRun, cacheHit: boolean): void {
+    const totalTokens = run.costs.reduce((t, c) => t + c.totalTokens, 0);
+    const totalCostUsd = run.costs.reduce((t, c) => t + c.userCostUsd, 0);
+    ctx.streamFusionTrace = {
+      version: 1,
+      effort: ctx.runtimeEffort ?? 2,
+      complexityScore: 0,
+      complexityReason: "",
+      steps: run.steps,
+      subTaskCount: run.notes.length,
+      subTasks: run.notes.map((n) => ({ id: n.subTask.id, focus: n.subTask.focus_area, model: n.usedModelRouting, description: n.subTask.description.slice(0, 200) })),
+      summaries: ctx.fusionSummaries,
+      subagentDetails: run.notes.map((n) => ({ id: n.subTask.id, focus_area: n.subTask.focus_area, success: n.success, modelRouting: n.usedModelRouting, durationMs: n.durationMs, outputLength: n.content.length })),
+      costs: run.costs,
+      totalCostUsd,
+      totalTokens,
+      cacheHit,
+      cacheKey: run.workKeys[0],
+      conversationId: ctx.conversationId,
+      turnId: ctx.turnId,
+      fusionRunId: ctx.fusionRunId,
+      fusionEffort: ctx.resolvedFusionEffort,
+      fusedByModelRouting: run.executorRouting,
+      requestId: ctx.requestId,
+      kernel: ctx.kernelTrace,
+    };
+  }
+}

@@ -151,6 +151,183 @@ export const FusionSchedulerConfigSchema = z
 
 export type FusionSchedulerConfig = z.infer<typeof FusionSchedulerConfigSchema>;
 
+// ── Fusion Kernel (engine: "kernel") ───────────────────────────────────
+
+/**
+ * One model family in the kernel's pool. `routing` is an existing logical
+ * model; `alt_routings` are same-family alternates used to widen parallel
+ * sampling (e.g. `glm-5.3-alt`). Verifiers are always drawn from a different
+ * family than the candidate they audit.
+ */
+export const FusionKernelFamilySchema = z
+  .object({
+    name: z.string().min(1),
+    routing: z.string().min(1),
+    alt_routings: z.array(z.string().min(1)).default([]),
+    /** Relative share of extra sampling width when the wave is wider than the family count. */
+    weight: z.number().positive().default(1),
+    /** Exclude this family from proposing (verify/synthesize only). */
+    propose: z.boolean().default(true),
+    /** Exclude this family from verifying (propose only). */
+    verify: z.boolean().default(true),
+  })
+  .strict();
+
+export type FusionKernelFamily = z.infer<typeof FusionKernelFamilySchema>;
+
+const EffortWidthSchema = z
+  .object({
+    F2: z.number().int().min(1).max(64),
+    F3: z.number().int().min(1).max(64),
+    max: z.number().int().min(1).max(128),
+  })
+  .strict();
+
+export const FusionKernelConfigSchema = z
+  .object({
+    /** Model families that participate in proposal/verification waves. */
+    families: z.array(FusionKernelFamilySchema).min(1),
+    /** Final synthesis / executor routing. Defaults to `fusion.model_routing`. */
+    synthesis_routing: z.string().min(1).optional(),
+    /** Fast, cheap routing for intent extraction and light structured passes. Defaults to the summarizer routing. */
+    fast_routing: z.string().min(1).optional(),
+    /** `reasoning_effort` forwarded to the synthesis/executor model (unset = model default, i.e. deepest). */
+    synthesis_reasoning_effort: z.enum(["low", "medium", "high"]).optional(),
+    /** Target input tokens per worker context capsule (hard cap for proposers/verifiers). */
+    capsule_tokens: z.number().int().min(2_000).max(200_000).default(24_000),
+    /** Max output tokens for proposal/verification workers (ceiling; see worker_max_tokens_by_band). */
+    worker_max_tokens: z.number().int().min(256).max(65_536).default(6_000),
+    /** Optional per-band proposal output budgets; each is capped by worker_max_tokens. */
+    worker_max_tokens_by_band: z
+      .object({ F2: z.number().int().min(256), F3: z.number().int().min(256), max: z.number().int().min(256) })
+      .strict()
+      .optional(),
+    /** Max output tokens for verifiers (they are terse by contract). */
+    verifier_max_tokens: z.number().int().min(256).max(32_768).default(2_500),
+    /** Start verifying each candidate as soon as it lands instead of after the whole proposal wave settles. */
+    pipeline_verification: z.boolean().default(true),
+    /**
+     * Vote-adaptive verification: when proposals declare final answers and the
+     * vote is unanimous across ≥2 families, verify only the leading candidate;
+     * when the vote is split, verify every candidate. Off = verify all.
+     */
+    adaptive_verification: z.boolean().default(true),
+    /**
+     * Control proposer: one reasoner per first wave receives the user's
+     * messages verbatim with no kernel framing, so the vote always contains
+     * the plain base-model answer and framing-induced drift is detectable.
+     */
+    control_proposer: z.boolean().default(true),
+    /**
+     * Example-grounded execution verification. When a task ships input/output
+     * examples (ARC-style grids, labelled Input/Output pairs), proposers also
+     * emit a Python `solve()` program; the kernel executes it on every example
+     * and on the test inputs. A program reproducing all examples is verified
+     * evidence (dominant vote weight) and its test output becomes the final
+     * artifact; failures feed bounded repair waves. Runs model-written Python
+     * on the proxy host — enable only where that is acceptable.
+     */
+    execution_verification: z.boolean().default(false),
+    execution_timeout_seconds: z.number().int().min(1).max(120).default(10),
+    execution_repair_rounds: z.number().int().min(0).max(6).default(2),
+    execution_verified_weight: z.number().min(1).max(10).default(3),
+    /** After the first verified program, wait this long for a possibly-disagreeing second program before settling on one. */
+    execution_settle_grace_seconds: z.number().min(0).max(600).default(45),
+    /**
+     * Computational scratchpad: proposers on the listed domains may emit ONE
+     * `# kernel-compute` python block per round; the kernel executes it and
+     * returns its stdout before the proposer finalizes (brute force, numeric
+     * checks, enumeration). Same host-execution caveat as execution_verification.
+     */
+    compute_scratchpad: z.boolean().default(false),
+    compute_scratchpad_domains: z.array(z.string()).default(["math", "science"]),
+    compute_timeout_seconds: z.number().int().min(1).max(300).default(30),
+    compute_rounds: z.number().int().min(0).max(4).default(2),
+    /** Hard wall-clock cap per synthesis attempt; on expiry the kernel moves to the next synthesizer or the best verified candidate. */
+    synthesis_timeout_seconds: z.number().int().min(30).max(3600).default(600),
+    /**
+     * `reasoning_effort` forwarded to upstream thinking models per worker role
+     * (omitted roles use the model default). Verifiers and intent extraction
+     * are terse by contract, so lower effort there cuts latency without
+     * touching proposal depth.
+     */
+    worker_reasoning_effort: z
+      .object({
+        proposer: z.enum(["low", "medium", "high"]).optional(),
+        verifier: z.enum(["low", "medium", "high"]).optional(),
+        intent: z.enum(["low", "medium", "high"]).optional(),
+        repair: z.enum(["low", "medium", "high"]).optional(),
+        checkpoint: z.enum(["low", "medium", "high"]).optional(),
+      })
+      .strict()
+      .default({}),
+    /** Per-worker hard wall clock cap (also bounded by the band's search deadline). */
+    worker_timeout_seconds: z.number().int().positive().default(300),
+    /**
+     * Per-band override of worker_timeout_seconds. Hard problems at high/max
+     * effort need thinking models to run far longer than the F2 cap; a worker
+     * cut off mid-reasoning contributes only truncated evidence.
+     */
+    worker_timeout_seconds_by_band: z
+      .object({ F2: z.number().int().positive().optional(), F3: z.number().int().positive().optional(), max: z.number().int().positive().optional() })
+      .strict()
+      .optional(),
+    /** Abort a worker whose upstream stream has produced no bytes (content or reasoning) for this long. */
+    worker_idle_timeout_seconds: z.number().int().positive().default(60),
+    /** Parallel proposals per wave, by effort band. */
+    proposal_width: EffortWidthSchema.default({ F2: 3, F3: 6, max: 9 }),
+    /** Cross-family verifiers per surviving candidate, by effort band. */
+    verifiers_per_candidate: EffortWidthSchema.default({ F2: 1, F3: 2, max: 3 }),
+    /** Maximum proposal waves (escalations) before synthesis, by effort band. */
+    max_waves: EffortWidthSchema.default({ F2: 2, F3: 3, max: 4 }),
+    /**
+     * Domain-aware effort floor, applied only when the client did not request
+     * an effort explicitly (`auto`): a fresh task whose detected domains match
+     * runs at least at the given band (e.g. math/science at F3), since short
+     * hard problems score low on generic complexity heuristics.
+     */
+    effort_by_domain: z
+      .record(z.string(), z.enum(["F2", "F3", "max"]))
+      .default({ math: "F3", science: "F3" }),
+    /** Agreement score (0-1) at or above which the search stops escalating. */
+    agreement_threshold: z.number().min(0).max(1).default(0.62),
+    /** Max concurrent upstream worker calls across all waves. */
+    max_concurrency: z.number().int().min(1).max(128).default(12),
+    /**
+     * Fraction of a wave's workers that must finish (across ≥2 families when
+     * available) before stragglers are put on the grace clock. 1 = wait for all.
+     */
+    wave_quorum: z.number().min(0.34).max(1).default(0.67),
+    /** After quorum, stragglers get this long before they are cancelled (partial output ≥ 800 chars is kept). */
+    straggler_grace_seconds: z.number().int().min(0).max(600).default(25),
+    /** Total proposal+verification budget per effort band; when exceeded the search settles with what it has. */
+    search_deadline_seconds: z
+      .object({ F2: z.number().int().positive(), F3: z.number().int().positive(), max: z.number().int().positive() })
+      .strict()
+      .default({ F2: 300, F3: 600, max: 1800 }),
+    /** Run a fast LLM intent parse for F2+ fresh tasks (cached by work key). */
+    intent_extraction: z.boolean().default(true),
+    /** Tool-continuation policy. */
+    continuation: z
+      .object({
+        /** Reuse the plan for tool-continuation turns instead of re-searching. */
+        enabled: z.boolean().default(true),
+        /** Force a bounded replan after this many continuation steps. */
+        max_steps_before_replan: z.number().int().min(1).max(200).default(14),
+        /** Run a bounded repair wave when a tool result carries an error signal. */
+        repair_on_error: z.boolean().default(true),
+        /** Identical failure signatures get at most this many repair waves. */
+        max_repairs_per_signature: z.number().int().min(0).max(5).default(1),
+      })
+      .strict()
+      .default({}),
+    /** Bump to invalidate every cached work item produced under older prompts/policies. */
+    policy_version: z.number().int().min(1).default(1),
+  })
+  .strict();
+
+export type FusionKernelConfig = z.infer<typeof FusionKernelConfigSchema>;
+
 // ── Top-level Fusion Config ───────────────────────────────────────────
 
 export const FusionConfigSchema = z
@@ -184,7 +361,21 @@ export const FusionConfigSchema = z
 
     // Bounded scheduler controls for optional nested Fusion.
     scheduler: FusionSchedulerConfigSchema.default({}),
+
+    /**
+     * Orchestration engine. `legacy` is the divider → sealed subagents →
+     * synthesis pipeline. `kernel` is the epistemic kernel: durable per-
+     * conversation ledger, tool-continuation without re-decomposition,
+     * content-addressed work cache, bounded capsules, and cross-family
+     * proposal/verification waves. `kernel` requires the `kernel` block.
+     */
+    engine: z.enum(["legacy", "kernel"]).default("legacy"),
+    kernel: FusionKernelConfigSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (val) => val.engine !== "kernel" || val.kernel !== undefined,
+    { message: "fusion.kernel is required when fusion.engine is \"kernel\"", path: ["kernel"] },
+  );
 
 export type FusionConfig = z.infer<typeof FusionConfigSchema>;

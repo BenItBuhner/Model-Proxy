@@ -21,10 +21,13 @@ import type { RequestEvent } from "@model-proxy/contracts/api/events.ts";
 import { formatCount, formatDurationMs, formatUsd } from "@/lib/format";
 import {
   derivePipelineState,
+  isKernelPipeline,
   PHASE_LABEL,
   stateFromTrace,
   type FusionTraceLike,
+  type KernelTraceLike,
   type PhaseState,
+  type PipelineState,
   type SubagentState,
 } from "./fusion-pipeline-state";
 
@@ -70,6 +73,7 @@ export function FusionPipelineView({
   const succeeded = state.subagents.filter((s) => s.status === "completed").length;
   const failed = state.subagents.filter((s) => s.status === "failed").length;
   const subagentDecision = state.phases.find((phase) => phase.key === "subagent_execution");
+  const kernel = isKernelPipeline(state);
 
   return (
     <Panel
@@ -86,6 +90,7 @@ export function FusionPipelineView({
       toolbar={
         state.started !== undefined ? (
           <span className="flex items-center gap-2">
+            {kernel ? <Badge tone="warning">kernel</Badge> : null}
             <Badge tone="phosphor">effort {state.started.effort}</Badge>
             {state.started.fusionEffort !== undefined ? (
               <Badge tone="bone">{state.started.fusionEffort}</Badge>
@@ -148,12 +153,14 @@ export function FusionPipelineView({
           <SubagentDecisionPanel phase={subagentDecision} />
         ) : null}
 
+        {kernel ? <KernelSummaryPanel state={state} trace={trace} /> : null}
+
         {/* Subagent lanes */}
         {state.subagents.length > 0 ? (
           <div className="space-y-1.5">
             <div className="flex items-baseline justify-between">
               <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-bone-300">
-                subagents ({state.subagents.length})
+                {kernel ? "workers" : "subagents"} ({state.subagents.length})
               </span>
               <span className="font-mono text-[10px] text-bone-400">
                 {succeeded} ok{failed > 0 ? ` · ${failed} failed` : ""}
@@ -373,6 +380,99 @@ function SubagentDecisionPanel({ phase }: { phase: PhaseState }): React.ReactEle
   );
 }
 
+/**
+ * Kernel engine summary: what the turn classifier decided, how wide the
+ * search went, how much agreement it reached, and how much work was reused.
+ * Live values come from phase details; completed values from the trace.
+ */
+function KernelSummaryPanel({
+  state,
+  trace,
+}: {
+  state: PipelineState;
+  trace: FusionTraceLike | undefined;
+}): React.ReactElement | null {
+  const kernelTrace: KernelTraceLike | undefined = trace?.kernel;
+  const turnPhase = state.phases.find((phase) => phase.key === "turn_classification");
+  const consensusPhase = state.phases.find((phase) => phase.key === "escalation");
+  const continuationPhase = state.phases.find((phase) => phase.key === "continuation");
+
+  const turn = kernelTrace?.turn ?? asString(turnPhase?.detail?.["kind"]);
+  const turnReason = kernelTrace?.turnReason ?? asString(turnPhase?.detail?.["reason"]);
+  const mode = kernelTrace?.mode ?? asString(turnPhase?.detail?.["mode"]);
+  const band = kernelTrace?.band ?? asString(turnPhase?.detail?.["band"]);
+  const requestedEffort = kernelTrace?.requestedEffort ?? asString(turnPhase?.detail?.["requestedEffort"]);
+  const waves = kernelTrace?.waves ?? asNumber(consensusPhase?.detail?.["wave"]);
+  const agreement = kernelTrace?.agreement ?? asNumber(consensusPhase?.detail?.["agreement"]);
+  const accepted = asNumber(consensusPhase?.detail?.["accepted"]);
+  const disputed = asNumber(consensusPhase?.detail?.["disputed"]);
+  const workCaches = state.caches.filter((cache) => cache.kind === "work");
+  const workItems = kernelTrace?.workItems ?? (workCaches.length > 0 ? workCaches.length : undefined);
+  const cachedWork = kernelTrace?.cachedWorkItems ?? (workCaches.length > 0 ? workCaches.filter((c) => c.hit).length : undefined);
+  const continuationSteps = kernelTrace?.totalContinuationSteps ?? asNumber(continuationPhase?.detail?.["step"]);
+  const executor = kernelTrace?.executorRouting ?? continuationPhase?.modelRouting;
+  const repair = kernelTrace?.repair ?? asRecord(continuationPhase?.detail?.["repair"]);
+  const checkpoint = kernelTrace?.checkpoint ?? continuationPhase?.detail?.["checkpoint"] === true;
+  const ledgerHit = state.caches.find((cache) => cache.kind === "ledger")?.hit;
+  const answerVote = asRecord(consensusPhase?.detail?.["answerVote"]);
+  const voteLeader = asString(answerVote?.["leader"]);
+  const voteShare = asNumber(answerVote?.["leaderShare"]);
+  const voteUnanimous = answerVote?.["unanimous"] === true;
+
+  if (turn === undefined && mode === undefined && kernelTrace === undefined) return null;
+
+  const modeTone: BadgeTone = mode === "continue" ? "phosphor" : mode === "search" ? "warning" : "muted";
+
+  return (
+    <div className="space-y-2 rounded-sm bg-ink-900 px-3 py-2 shadow-edge">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-bone-300">kernel</span>
+        {mode !== undefined ? <Badge tone={modeTone}>{mode}</Badge> : null}
+        {turn !== undefined ? <Badge tone="bone">{turn.replace(/_/g, " ")}</Badge> : null}
+        {band !== undefined ? <Badge tone="muted">{band}</Badge> : null}
+        {requestedEffort !== undefined && requestedEffort !== "auto" ? <Badge tone="muted">effort:{requestedEffort}</Badge> : null}
+        {ledgerHit === true ? <Badge tone="phosphor">ledger resumed</Badge> : null}
+        {repair !== undefined ? <Badge tone="warning">{repair["exhausted"] === true ? "repair exhausted" : "repair"}</Badge> : null}
+        {checkpoint ? <Badge tone="warning">checkpoint</Badge> : null}
+      </div>
+      {turnReason !== undefined ? (
+        <div className="font-mono text-[10px] leading-4 text-bone-500">{turnReason}</div>
+      ) : null}
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1 border-t border-ink-700 pt-2 sm:grid-cols-4">
+        {waves !== undefined && waves > 0 ? <MiniStat label="waves" value={`${waves}`} /> : null}
+        {agreement !== undefined ? <MiniStat label="agreement" value={agreement.toFixed(2)} /> : null}
+        {accepted !== undefined ? <MiniStat label="verified" value={`${accepted}`} /> : null}
+        {disputed !== undefined ? <MiniStat label="disputed" value={`${disputed}`} /> : null}
+        {workItems !== undefined ? (
+          <MiniStat label="work items" value={cachedWork !== undefined ? `${cachedWork}/${workItems} reused` : `${workItems}`} />
+        ) : null}
+        {continuationSteps !== undefined && continuationSteps > 0 ? <MiniStat label="tool steps" value={`${continuationSteps}`} /> : null}
+        {executor !== undefined ? <MiniStat label="executor" value={executor} /> : null}
+        {voteLeader !== undefined ? (
+          <MiniStat
+            label="answer vote"
+            value={`${voteLeader.slice(0, 18)}${voteUnanimous ? " · unanimous" : voteShare !== undefined ? ` · ${Math.round(voteShare * 100)}%` : ""}`}
+          />
+        ) : null}
+      </div>
+      {agreement !== undefined ? (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-mono text-[8px] uppercase tracking-[0.14em] text-bone-300">cross-family agreement</span>
+            <span className="font-mono text-[10px] text-bone-600">{Math.round(agreement * 100)}%</span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-ink-700">
+            <div
+              className="h-full rounded-full bg-phosphor-500 transition-all duration-700"
+              style={{ width: `${Math.round(Math.min(1, Math.max(0, agreement)) * 100)}%` }}
+            />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function DecisionSignalList({
   title,
   tone,
@@ -470,6 +570,7 @@ function SubagentLane({
           <Badge tone={tone} className={isActive && live ? "animate-pulse" : ""}>
             {label}
           </Badge>
+          {agent.role !== undefined ? <Badge tone="muted">{agent.role}</Badge> : null}
           <span className="truncate font-mono text-[11px] text-bone-700">{agent.id}</span>
           <span className="hidden truncate font-mono text-[10px] text-bone-400 sm:inline">{agent.focus}</span>
         </div>
@@ -623,6 +724,10 @@ function MiniStat({ label, value }: { label: string; value: string }): React.Rea
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

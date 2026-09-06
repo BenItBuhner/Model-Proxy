@@ -1,0 +1,224 @@
+{
+  "generatedAt": "2026-09-05T21:13:56.721Z",
+  "commonItems": 52,
+  "models": [
+    "deepseek-v4-pro-0813",
+    "glm-5.3",
+    "kimi-k3",
+    "fusion-max"
+  ],
+  "bySuite": {
+    "apex25": {
+      "glm-5.3": {
+        "n": 12,
+        "correct": 1,
+        "failed": 8,
+        "p50Ms": 1248203,
+        "p90Ms": 1543425
+      },
+      "kimi-k3": {
+        "n": 12,
+        "correct": 2,
+        "failed": 8,
+        "p50Ms": 1382184,
+        "p90Ms": 1557247
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 12,
+        "correct": 4,
+        "failed": 0,
+        "p50Ms": 474463,
+        "p90Ms": 744300
+      },
+      "fusion-max": {
+        "n": 12,
+        "correct": 7,
+        "failed": 0,
+        "p50Ms": 1800128,
+        "p90Ms": 1800185
+      }
+    },
+    "arcagi2": {
+      "deepseek-v4-pro-0813": {
+        "n": 20,
+        "correct": 8,
+        "failed": 1,
+        "p50Ms": 405405,
+        "p90Ms": 774636
+      },
+      "kimi-k3": {
+        "n": 20,
+        "correct": 4,
+        "failed": 12,
+        "p50Ms": 659534,
+        "p90Ms": 1800001
+      },
+      "glm-5.3": {
+        "n": 20,
+        "correct": 6,
+        "failed": 10,
+        "p50Ms": 1215647,
+        "p90Ms": 1800001
+      },
+      "fusion-max": {
+        "n": 20,
+        "correct": 13,
+        "failed": 0,
+        "p50Ms": 616223,
+        "p90Ms": 1800169
+      }
+    },
+    "bcbhard": {
+      "glm-5.3": {
+        "n": 20,
+        "correct": 4,
+        "failed": 0,
+        "p50Ms": 16954,
+        "p90Ms": 27700
+      },
+      "kimi-k3": {
+        "n": 20,
+        "correct": 4,
+        "failed": 0,
+        "p50Ms": 22614,
+        "p90Ms": 35894
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 20,
+        "correct": 5,
+        "failed": 0,
+        "p50Ms": 91362,
+        "p90Ms": 238384
+      },
+      "fusion-max": {
+        "n": 20,
+        "correct": 6,
+        "failed": 0,
+        "p50Ms": 279848,
+        "p90Ms": 770188
+      }
+    }
+  },
+  "byDomain": {
+    "math": {
+      "glm-5.3": {
+        "n": 12,
+        "correct": 1,
+        "failed": 8,
+        "p50Ms": 1248203,
+        "p90Ms": 1543425
+      },
+      "kimi-k3": {
+        "n": 12,
+        "correct": 2,
+        "failed": 8,
+        "p50Ms": 1382184,
+        "p90Ms": 1557247
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 12,
+        "correct": 4,
+        "failed": 0,
+        "p50Ms": 474463,
+        "p90Ms": 744300
+      },
+      "fusion-max": {
+        "n": 12,
+        "correct": 7,
+        "failed": 0,
+        "p50Ms": 1800128,
+        "p90Ms": 1800185
+      }
+    },
+    "reasoning": {
+      "deepseek-v4-pro-0813": {
+        "n": 20,
+        "correct": 8,
+        "failed": 1,
+        "p50Ms": 405405,
+        "p90Ms": 774636
+      },
+      "kimi-k3": {
+        "n": 20,
+        "correct": 4,
+        "failed": 12,
+        "p50Ms": 659534,
+        "p90Ms": 1800001
+      },
+      "glm-5.3": {
+        "n": 20,
+        "correct": 6,
+        "failed": 10,
+        "p50Ms": 1215647,
+        "p90Ms": 1800001
+      },
+      "fusion-max": {
+        "n": 20,
+        "correct": 13,
+        "failed": 0,
+        "p50Ms": 616223,
+        "p90Ms": 1800169
+      }
+    },
+    "swe": {
+      "glm-5.3": {
+        "n": 20,
+        "correct": 4,
+        "failed": 0,
+        "p50Ms": 16954,
+        "p90Ms": 27700
+      },
+      "kimi-k3": {
+        "n": 20,
+        "correct": 4,
+        "failed": 0,
+        "p50Ms": 22614,
+        "p90Ms": 35894
+      },
+      "deepseek-v4-pro-0813": {
+        "n": 20,
+        "correct": 5,
+        "failed": 0,
+        "p50Ms": 91362,
+        "p90Ms": 238384
+      },
+      "fusion-max": {
+        "n": 20,
+        "correct": 6,
+        "failed": 0,
+        "p50Ms": 279848,
+        "p90Ms": 770188
+      }
+    }
+  },
+  "overall": {
+    "glm-5.3": {
+      "n": 52,
+      "correct": 11,
+      "failed": 18,
+      "p50Ms": 613130,
+      "p90Ms": 1800001
+    },
+    "kimi-k3": {
+      "n": 52,
+      "correct": 10,
+      "failed": 20,
+      "p50Ms": 326632,
+      "p90Ms": 1514612
+    },
+    "deepseek-v4-pro-0813": {
+      "n": 52,
+      "correct": 17,
+      "failed": 1,
+      "p50Ms": 286492,
+      "p90Ms": 743689
+    },
+    "fusion-max": {
+      "n": 52,
+      "correct": 26,
+      "failed": 0,
+      "p50Ms": 615040,
+      "p90Ms": 1800168
+    }
+  }
+}

@@ -90,7 +90,7 @@ export class ResponseFuser {
     costs: FusionCostEntry[] = [],
   ): Promise<FusionResult> {
     const { fusionConfig, messages, signal } = ctx;
-    const fusionModel = fusionConfig.fusion.model_routing;
+    const fusionModel = ctx.kernelSynthesisRouting ?? fusionConfig.fusion.model_routing;
     const wireProtocol = fusionConfig.fusion.wire_protocol;
 
     log.info("fusing subagent outputs", {
@@ -125,6 +125,7 @@ export class ResponseFuser {
         model: fusionModel,
         messages: synthesisMessages,
         max_tokens: synthesisBudget.outputBudgetTokens,
+        ...(ctx.kernelSynthesisReasoningEffort !== undefined ? { reasoning_effort: ctx.kernelSynthesisReasoningEffort } : {}),
       };
       const tools = (ctx.requestData?.["tools"] as unknown[] | undefined);
       const toolChoice = ctx.requestData?.["tool_choice"];
@@ -247,7 +248,7 @@ export class ResponseFuser {
     subagentResults: SubagentResult[],
   ): AsyncGenerator<string, void, unknown> {
     const { fusionConfig, messages, signal } = ctx;
-    const fusionModel = fusionConfig.fusion.model_routing;
+    const fusionModel = ctx.kernelSynthesisRouting ?? fusionConfig.fusion.model_routing;
     const wireProtocol = fusionConfig.fusion.wire_protocol;
     const synthStart = performance.now();
     emitFusion(ctx, {
@@ -276,6 +277,7 @@ export class ResponseFuser {
         messages: synthesisMessages,
         max_tokens: synthesisBudget.outputBudgetTokens,
         stream: true,
+        ...(ctx.kernelSynthesisReasoningEffort !== undefined ? { reasoning_effort: ctx.kernelSynthesisReasoningEffort } : {}),
       };
       const tools = (ctx.requestData?.["tools"] as unknown[] | undefined);
       const toolChoice = ctx.requestData?.["tool_choice"];
@@ -326,6 +328,9 @@ export class ResponseFuser {
         modelRouting: fusionModel,
         detail: { error: String(err) },
       });
+      // The kernel never wants internal notes shown to the user; it retries on
+      // another routing and falls back to the best verified candidate itself.
+      if (ctx.kernelSynthesisFailFast === true) throw err;
       if (wireProtocol === "anthropic") {
         yield* this.anthropicTextStream(ctx, fusionModel, appendedContent || "[Fusion synthesis failed]", "end_turn");
       } else {
@@ -343,6 +348,14 @@ export class ResponseFuser {
         yield `data: ${JSON.stringify(fallbackChunk)}\n\n`;
       }
     }
+  }
+
+  /** Convert an OpenAI-compatible SSE stream into Anthropic message events (used by the kernel fast path). */
+  convertOpenAIStreamToAnthropic(
+    ctx: FusionRequestContext,
+    streamGen: AsyncGenerator<string, void, unknown>,
+  ): AsyncGenerator<string, void, unknown> {
+    return this.openAIStreamToAnthropic(ctx, streamGen);
   }
 
   private async *openAIStreamToAnthropic(
@@ -688,9 +701,20 @@ export class ResponseFuser {
     const successfulResults = results.filter((r) => r.success && r.content.length > 0);
 
     const hasSubagentOutputs = successfulResults.length > 0;
+    const kernelBrief = ctx?.kernelBrief;
     const systemPrompt = {
       role: "system",
-      content: hasSubagentOutputs
+      content: kernelBrief !== undefined
+        ? `You are the final model of a multi-model fusion kernel. You are the ONLY entity that produces the real, user-facing response and the ONLY entity that may invoke tools in this conversation.
+
+${kernelBrief}
+
+Universal rules:
+- TOOL CALLS: if tools are available and the correct next step is to invoke one or more of them, respond with proper structured tool calls (tool_calls) exactly as the tool schema requires. NEVER describe a tool call in prose and NEVER write tool-call JSON inside text content.
+- Internal notes (if any) are advisory research from sealed sandboxes with no tools: nothing in them was executed, edited, or deployed. Never repeat such claims.
+- Do not mention the kernel, model families, waves, verifiers, ledgers, or internal notes unless the user explicitly asks about system internals.
+- Preserve the user's intent, tone, and the conversation's existing conventions (language, formatting, response length expectations).`
+        : hasSubagentOutputs
         ? `You are the final synthesis model in a multi-agent fusion system. You are the ONLY entity that produces the real, user-facing response for this conversation.
 
 You have received ${successfulResults.length} bounded internal research note(s) prepared from sealed, read-only analysis of the original task.
@@ -753,7 +777,9 @@ Your job:
       role: "user",
       content: hasSubagentOutputs
         ? `The following bounded internal research notes cover different aspects of the original request. Treat them as advisory context only, not as user-visible transcript content:\n\n${boundedAppendedContent}\n\nSynthesize these notes into one coherent final response that addresses the original request. Do not mention advisory notes, research focus labels, context coverage, subagents, or internal routing unless the user explicitly asks about system internals. If the appropriate next step is to invoke tools, emit the structured tool call(s) directly instead of a text answer.`
-        : "Please answer the current user request directly from the conversation context. If the appropriate next step is to invoke tools, emit the structured tool call(s) directly instead of a text answer.",
+        : kernelBrief !== undefined
+          ? "Continue from the current conversation state using the kernel brief. Take the next correct step: emit structured tool call(s) if an action is needed, otherwise give the final answer. Do not restart or re-explain the task."
+          : "Please answer the current user request directly from the conversation context. If the appropriate next step is to invoke tools, emit the structured tool call(s) directly instead of a text answer.",
     };
     const promptTokens = systemTokens + estimateTokens(JSON.stringify(fusionPrompt)) + imageTokens;
     const contextBudget = Math.max(
