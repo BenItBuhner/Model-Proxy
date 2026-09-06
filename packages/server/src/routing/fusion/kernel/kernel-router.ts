@@ -1374,6 +1374,34 @@ export class FusionKernel {
     }
     let verified = [...waveProposals, ...extra].filter((p) => p.execution?.verified === true && p.finalAnswer !== undefined);
     const distinctOutputs = (pool: Proposal[]) => new Set(pool.map((p) => p.finalAnswer!)).size;
+    // Independent direct reads (no program) that agree across >= 2 families on
+    // an output no verified program produced: with a lone verified program this
+    // is a conflict worth a discrimination wave, not a vote to be outweighed.
+    const directAgreementAgainst = (): Proposal[] | undefined => {
+      const direct = [...waveProposals, ...extra].filter((p) => p.success && p.program === undefined && p.finalAnswer !== undefined && /^\s*\[\s*\[/.test(p.finalAnswer));
+      const groups = new Map<string, Proposal[]>();
+      for (const p of direct) { const key = normalizeFinalAnswer(p.finalAnswer!); groups.set(key, [...(groups.get(key) ?? []), p]); }
+      const verifiedKeys = new Set(verified.map((p) => normalizeFinalAnswer(p.finalAnswer!)));
+      return [...groups.entries()].filter(([key, ps]) => !verifiedKeys.has(key) && new Set(ps.map((p) => p.family)).size >= 2).sort((a, b) => b[1].length - a[1].length)[0]?.[1];
+    };
+    const loneProgramConflict = verified.length === 1 && ex.examples.length <= 3 ? directAgreementAgainst() : undefined;
+    if (loneProgramConflict !== undefined && this.remainingSearchMs(run) > 90_000) {
+      run.executionStats.repairRounds += 1;
+      run.phase = `execution discrimination (wave ${wave})`;
+      const prog = verified[0]!;
+      const dims = (out: string) => { try { const g = JSON.parse(out) as unknown[]; return Array.isArray(g) ? `${g.length}x${Array.isArray(g[0]) ? (g[0] as unknown[]).length : 1}` : "scalar"; } catch { return "?"; } };
+      const note = [
+        `EXECUTION FEEDBACK (discrimination): one program reproduces all ${ex.examples.length} training pairs but ${new Set(loneProgramConflict.map((p) => p.family)).size} independent reasoners who read the grids directly agree on a DIFFERENT test output. With so few training pairs a program can fit them for the wrong reason.`,
+        `Candidate rule 1 (verified program, test output ${dims(prog.finalAnswer!)}):\n${truncateMiddle(proseOnly(prog.answer), 1_200, "rule trimmed")}\n\`\`\`python\n${truncateMiddle(prog.program ?? "", 3_000, "program trimmed")}\n\`\`\``,
+        `Candidate rule 2 (direct reasoning, test output ${dims(loneProgramConflict[0]!.finalAnswer!)}):\n${truncateMiddle(proseOnly(loneProgramConflict[0]!.answer), 1_500, "rule trimmed")}\n\`\`\`json\n${truncateMiddle(loneProgramConflict[0]!.finalAnswer!, 2_000, "grid trimmed")}\n\`\`\``,
+        "Decide which rule the task intends — the one that explains WHY every training output looks the way it does — and return the complete program for the intended rule (fix or reuse candidate 1 if it is right; implement candidate 2's rule if that is the intended one).",
+      ].join("\n\n");
+      await run.narrator.say("Kernel: a lone verified program disagrees with two families' direct reads; running a discrimination wave.");
+      const judges = await this.proposalWave(ctx, run, intent, ledgerView, wave, widths, taskStartIndex, note, "proposer", Math.min(widths.proposals, 3));
+      await Promise.all(judges.filter((p) => p.success).map(check));
+      extra.push(...judges);
+      verified = [...waveProposals, ...extra].filter((p) => p.execution?.verified === true && p.finalAnswer !== undefined);
+    }
     if (distinctOutputs(verified) > 1 && this.remainingSearchMs(run) > 90_000) {
       // Every candidate reproduces the examples yet they disagree on the test:
       // the rule is underdetermined. One discrimination wave sees the competing

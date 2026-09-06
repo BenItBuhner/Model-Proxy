@@ -613,6 +613,56 @@ describe("Fusion kernel engine", () => {
     expect(content).not.toContain("```python");
   });
 
+  it("treats a lone verified program that two families' direct reads contradict as a conflict and lets the discrimination wave decide", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-lone-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    // Two symmetric training grids: identity fits them, but the intended rule is transpose.
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[2,1]]\nOutput (2x2):\n[[1,2],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,0],[0,5]]\nOutput (2x2):\n[[5,0],[0,5]]\n\nTest input (2x2):\n[[1,2],[3,4]]";
+    const withProgram = (family: string, rule: string, program: string) =>
+      [`Rule: ${rule}`, "```python", program, "```", "```json", JSON.stringify({ answer_summary: `${family}: ${rule}`, final_answer: null, key_claims: ["Grid rule", "Applies to test", "Consistent"], assumptions: [], risks: [], confidence: 0.6 }), "```"].join("\n");
+    const identity = "def solve(grid):\n    return [list(r) for r in grid]";
+    const transpose = "def solve(grid):\n    return [list(r) for r in zip(*grid)]";
+    let discriminationPrompts = 0;
+    let identityGiven = false;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        if (allText(messages).includes("EXECUTION FEEDBACK (discrimination)")) {
+          discriminationPrompts += 1;
+          return streamResponse(model, [withProgram(model, "the grid is transposed", transpose)]);
+        }
+        // Exactly one synthesizer fits the examples (identity); the others fail the examples.
+        if (!identityGiven) { identityGiven = true; return streamResponse(model, [withProgram(model, "the grid is unchanged", identity)]); }
+        return streamResponse(model, [withProgram(model, "mirror left-right", "def solve(grid):\n    return [list(reversed(r)) for r in grid]")]);
+      }
+      if (!system.includes("final model of a multi-model fusion kernel") && !system.includes("adversarial") && allText(messages).includes("Test input")) {
+        // Direct readers (verbatim task; only 2 pairs so no leave-one-out) see the transpose.
+        return streamResponse(model, ["The grid is transposed.\n```json\n[[1,3],[2,4]]\n```"]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-lone-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "max" }; // three direct slots
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(discriminationPrompts).toBeGreaterThan(0);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    expect((trace["execution"] as Record<string, unknown>)["artifact"]).toBe(true);
+    expect(result.content ?? "").toContain("[[1,3],[2,4]]");
+    expect(result.content ?? "").not.toContain("[[1,2],[3,4]]");
+  });
+
   it("certifies a direct answer by leave-one-out: a reasoner that reproduces the withheld training pair is trusted like a verified program", async () => {
     closeOperationalDbForTests();
     setStorageRootForTests(path.join(tmpRoot, `storage-loo-${Date.now()}`));
