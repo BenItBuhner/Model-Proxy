@@ -710,7 +710,6 @@ describe("Fusion kernel engine", () => {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
       const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
       const system = systemText(messages);
-      // Scratchpad slots alternate; the second pick (kimi) is a scratchpad slot.
       if (system.includes("independent expert reasoners") && String(body["model"]) === "up-kimi") {
         captured.proposer.push(body);
         const text = allText(messages);

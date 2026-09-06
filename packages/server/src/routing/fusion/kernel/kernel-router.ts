@@ -1617,8 +1617,8 @@ export class FusionKernel {
 
   /** Last section of an example-grounded proposer capsule: the kernel's format wins over the user's. */
   private executionResponseFormat(run: KernelRun, scratchpadSlot = true): string | undefined {
-    // Scratchpad only on alternating slots: plain reasoners stay in the vote so a
-    // misleading computation cannot drag every candidate the same way.
+    // Max band only (see scratchpadEnabled); the direct/control slots stay plain so the vote
+    // always contains uncomputed reasoning next to the computed proposals.
     if (this.scratchpadEnabled(run)) return scratchpadSlot ? this.scratchpadContract(run) : undefined;
     if (!run.kcfg.execution_verification) return undefined;
     if (run.examples === undefined && run.codeTask !== undefined) {
@@ -1730,7 +1730,7 @@ export class FusionKernel {
                 tokenBudget: kcfg.capsule_tokens,
                 taskStartIndex,
                 strategyNote,
-                responseFormat: role === "proposer" ? this.executionResponseFormat(run, i % 2 === 1) : undefined,
+                responseFormat: role === "proposer" ? this.executionResponseFormat(run, true) : undefined,
               });
           const spec: WorkSpec = {
             kind: role,
@@ -1772,7 +1772,7 @@ export class FusionKernel {
           }
           // Computational scratchpad: execute the proposer's compute block and
           // let it finalize with the real output (bounded rounds).
-          if (role === "proposer" && !isControl && i % 2 === 1 && this.scratchpadEnabled(run)) {
+          if (role === "proposer" && !isControl && this.scratchpadEnabled(run)) {
             let rounds = 0;
             let history: Array<{ role: "system" | "user" | "assistant"; content: string }> = [...capsule.messages];
             while (rounds < kcfg.compute_rounds && this.remainingSearchMs(run) > 60_000 && !(signal?.aborted ?? false)) {
