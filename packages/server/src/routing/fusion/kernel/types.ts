@@ -131,6 +131,8 @@ export interface Proposal {
   program?: string;
   /** Direct answer produced with training pair `holdOut` withheld; its held-out answer certifies the reasoning. */
   directCheck?: { holdOut: number };
+  /** Direct-answer (verbatim task) proposer, as opposed to a program synthesizer. */
+  direct?: boolean;
   /** Result of executing the program against the task's examples. */
   execution?: { passed: number; total: number; verified: boolean; testOutputs: unknown[]; feedback: string; memorized?: boolean; /** Code tasks: cross-executed against every proposer's tests. */ crossValidated?: boolean; score?: number };
   raw: string;

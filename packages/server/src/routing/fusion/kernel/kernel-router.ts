@@ -608,7 +608,7 @@ export class FusionKernel {
   }
 
   /** Proposal-wave early settle: ≥2 families already agree above threshold. */
-  private proposalsAlreadyAgree(run: KernelRun, settled: Proposal[], quorumReached: boolean): boolean {
+  private proposalsAlreadyAgree(run: KernelRun, settled: Proposal[], quorumReached: boolean, directTotal = 0): boolean {
     // Programs that reproduced every task example settle the wave — once two of
     // them agree on the test output, or once one has stood unchallenged for the
     // grace window (a second, disagreeing program may still be in flight).
@@ -617,7 +617,12 @@ export class FusionKernel {
       const counts = new Map<string, number>();
       for (const o of verifiedOutputs) counts.set(o, (counts.get(o) ?? 0) + 1);
       if ([...counts.values()].some((c) => c >= 2)) return true;
-      if (counts.size === 1 && run.firstVerifiedAt !== undefined && performance.now() - run.firstVerifiedAt >= run.kcfg.execution_settle_grace_seconds * 1000) return true;
+      // Max band, few training pairs, a single verified program: wait (bounded)
+      // for the direct readers so two families' disagreement can challenge it.
+      const sinceFirst = run.firstVerifiedAt !== undefined ? performance.now() - run.firstVerifiedAt : 0;
+      const directLanded = settled.filter((p) => p.direct === true).length;
+      if (counts.size === 1 && verifiedOutputs.length === 1 && run.band === "max" && (run.examples?.examples.length ?? 99) <= 3 && directLanded < directTotal && sinceFirst < run.kcfg.execution_settle_grace_seconds * 8 * 1000) return false;
+      if (counts.size === 1 && run.firstVerifiedAt !== undefined && sinceFirst >= run.kcfg.execution_settle_grace_seconds * 1000) return true;
       if (counts.size === 1 && settled.filter((p) => p.success).length >= run.pool.proposerFamilyCount + 1) return true;
       return false;
     }
@@ -1496,6 +1501,7 @@ export class FusionKernel {
             if (run.firstVerifiedAt === undefined) {
               run.firstVerifiedAt = performance.now();
               setTimeout(() => notifyEvidence(run), run.kcfg.execution_settle_grace_seconds * 1000 + 50);
+          setTimeout(() => notifyEvidence(run), run.kcfg.execution_settle_grace_seconds * 8 * 1000 + 50);
             }
             notifyEvidence(run);
           }
@@ -1529,6 +1535,7 @@ export class FusionKernel {
           run.firstVerifiedAt = performance.now();
           // Wake the wave when the grace window ends so it can settle on a lone verified program.
           setTimeout(() => notifyEvidence(run), run.kcfg.execution_settle_grace_seconds * 1000 + 50);
+          setTimeout(() => notifyEvidence(run), run.kcfg.execution_settle_grace_seconds * 8 * 1000 + 50);
         }
       }
       notifyEvidence(run);
@@ -1774,7 +1781,7 @@ export class FusionKernel {
           if (cached !== undefined && cached.status === "completed") {
             this.noteWork(ctx, run, workKey, true, id, pick, role);
             const parsed = parseProposal(cached.result.content);
-            return settle({ id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: cached.result.content, workKey, cached: true, durationMs: 0, success: true, ...(loo ? { directCheck: { holdOut } } : {}) });
+            return settle({ id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: cached.result.content, workKey, cached: true, durationMs: 0, success: true, ...(isControl ? { direct: true } : {}), ...(loo ? { directCheck: { holdOut } } : {}) });
           }
           let result = await runWorker(ctx, this.fallbackRouter, {
             id,
@@ -1847,11 +1854,11 @@ export class FusionKernel {
             this.work.put(workKey, spec, { content: result.content, durationMs: result.durationMs } satisfies CachedProposal, "completed", run.ledger.conversationId);
           }
           const parsed = parseProposal(result.content);
-          return settle({ id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: result.content, workKey, cached: false, durationMs: result.durationMs, success: true, ...(loo ? { directCheck: { holdOut } } : {}) });
+          return settle({ id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: result.content, workKey, cached: false, durationMs: result.durationMs, success: true, ...(isControl ? { direct: true } : {}), ...(loo ? { directCheck: { holdOut } } : {}) });
         },
       })),
       Math.min(2, run.pool.proposerFamilyCount),
-      role === "proposer" ? (settled, quorumReached) => this.proposalsAlreadyAgree(run, settled, quorumReached) : undefined,
+      role === "proposer" ? (settled, quorumReached) => this.proposalsAlreadyAgree(run, settled, quorumReached, directIndices.size) : undefined,
     );
     log.info("kernel proposal wave results", { conversationId: run.ledger.conversationId, role, wave, results: results.length, succeeded: results.filter((r) => r.success).length, hooks: hooks.length, elapsedMs: Math.round(performance.now() - started) });
     await Promise.all(hooks);
