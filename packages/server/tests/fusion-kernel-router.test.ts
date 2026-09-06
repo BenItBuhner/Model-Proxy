@@ -668,6 +668,44 @@ describe("Fusion kernel engine", () => {
     expect(result.content ?? "").not.toContain("[[1,2],[3,4]]");
   });
 
+  it("repairs from the best failing PROGRAM even when an unverified leave-one-out direct answer scored higher", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-repair-loo-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[4,3],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,6],[7,8]]\nOutput (2x2):\n[[8,7],[6,5]]\n\nTraining pair 3\nInput (2x2):\n[[0,1],[1,0]]\nOutput (2x2):\n[[0,1],[1,0]]\n\nTest input (2x2):\n[[2,3],[4,5]]";
+    const badProgram = (family: string) => ["Rule: transpose.", "```python", "def solve(grid):\n    return [list(r) for r in zip(*grid)]", "```", "```json", JSON.stringify({ answer_summary: family, final_answer: null, key_claims: ["Transpose", "Rows to columns", "Applies"], assumptions: [], risks: [], confidence: 0.5 }), "```"].join("\n");
+    let repairPrompts = 0;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        if (allText(messages).includes("EXECUTION FEEDBACK (repair round")) repairPrompts += 1;
+        return streamResponse(model, [badProgram(model)]); // programs keep failing
+      }
+      if (allText(messages).includes("Test input 2:")) {
+        // Direct reader answers both test inputs wrongly (0/1 on the withheld pair — but it "scored" via execution).
+        return streamResponse(model, ["Guess.\nTest output 1:\n```json\n[[9,9],[9,9]]\n```\nTest output 2:\n```json\n[[9,9],[9,9]]\n```"]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-repair-loo-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 1, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(repairPrompts).toBeGreaterThan(0);
+    expect(result.content ?? "").not.toHaveLength(0);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    expect((trace["execution"] as Record<string, unknown>)["repairRounds"] as number).toBeGreaterThanOrEqual(1);
+  });
+
   it("treats a lone verified program that two families' direct reads contradict as a conflict and lets the discrimination wave decide", async () => {
     closeOperationalDbForTests();
     setStorageRootForTests(path.join(tmpRoot, `storage-lone-${Date.now()}`));
@@ -751,7 +789,8 @@ describe("Fusion kernel engine", () => {
     }) as unknown as typeof fetch;
 
     const ctx = makeCtx([{ role: "user", content: task }], `conv-loo-${Date.now()}`);
-    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
+    // One repair round: the best-so-far candidate must be a program, never the direct answer (which also carries execution results).
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 1, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
     delete (ctx.requestData as Record<string, unknown>)["tools"];
     const result = await router.route(ctx);
 

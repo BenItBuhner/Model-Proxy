@@ -1376,7 +1376,8 @@ export class FusionKernel {
       round += 1;
       run.executionStats.repairRounds += 1;
       run.phase = `execution repair round ${round} (wave ${wave})`;
-      const best = [...waveProposals, ...extra].filter((p) => p.execution !== undefined).sort((a, b) => (b.execution!.passed - a.execution!.passed) || (a.execution!.memorized ? 1 : 0) - (b.execution!.memorized ? 1 : 0))[0];
+      // Only program-bearing candidates can be repaired (leave-one-out direct answers also carry execution results).
+      const best = [...waveProposals, ...extra].filter((p) => p.execution !== undefined && p.program !== undefined).sort((a, b) => (b.execution!.passed - a.execution!.passed) || (a.execution!.memorized ? 1 : 0) - (b.execution!.memorized ? 1 : 0))[0];
       const note = best !== undefined
         ? [
             `EXECUTION FEEDBACK (repair round ${round}): no candidate program reproduces every example yet.`,
