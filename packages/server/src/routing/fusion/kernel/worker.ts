@@ -53,6 +53,8 @@ export interface WorkerRequest {
   maxTokens: number;
   /** Hard wall-clock cap. */
   timeoutMs: number;
+  /** Absolute deadline (performance.now() basis); the effective timeout is clipped to it AFTER the semaphore is acquired, so queued workers cannot outlive the search. */
+  deadlineAt?: number;
   /** Abort when no upstream bytes arrive for this long (stalled socket / dead upstream). */
   idleTimeoutMs?: number;
   temperature?: number;
@@ -109,7 +111,21 @@ export async function runWorker(
   const controller = new AbortController();
   let idleAborted = false;
   let lastActivity = performance.now();
-  const timer = setTimeout(() => controller.abort(), req.timeoutMs);
+  // Clip to the absolute deadline now that a slot is held: time spent queued
+  // behind the semaphore must not extend the search.
+  let effectiveTimeoutMs = req.timeoutMs;
+  if (req.deadlineAt !== undefined) {
+    const left = req.deadlineAt - performance.now();
+    if (left < 5_000) {
+      release();
+      if (emitEvents) {
+        emitFusion(ctx, { type: "fusion.subagent", at: nowIso(), id: req.id, focus: req.focus, model: req.routing, status: "failed", durationMs: 0, error: "search budget exhausted before start", role: req.role });
+      }
+      return { content: "", success: false, error: "search budget exhausted before start", durationMs: 0, attemptedToolCalls: false };
+    }
+    effectiveTimeoutMs = Math.min(req.timeoutMs, left);
+  }
+  const timer = setTimeout(() => controller.abort(), effectiveTimeoutMs);
   const idleTimer = req.idleTimeoutMs !== undefined && req.idleTimeoutMs > 0
     ? setInterval(() => {
         if (performance.now() - lastActivity > req.idleTimeoutMs!) {
