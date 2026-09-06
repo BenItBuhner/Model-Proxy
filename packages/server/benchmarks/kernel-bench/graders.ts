@@ -74,7 +74,7 @@ export function evaluateMathAnswer(normalized: string): number | undefined {
   s = s.replace(/[{]/g, "(").replace(/[}]/g, ")");
   s = s.replace(/sqrt\(([^()]*)\)/g, "Math.sqrt($1)");
   s = s.replace(/sqrt(\d+(?:\.\d+)?)/g, "Math.sqrt($1)");
-  s = s.replace(/\bpi\b/g, "Math.PI");
+  s = s.replace(/(?<![a-z])pi(?![a-z])/g, "Math.PI"); // "8pi/3": digit-letter is not a \b boundary
   s = s.replace(/\^/g, "**");
   // Implicit multiplication: 2Math.sqrt(...), 3Math.PI, )(, 2(  →  insert *
   s = s.replace(/(\d)(Math\.)/g, "$1*$2");
