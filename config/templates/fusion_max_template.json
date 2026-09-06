@@ -67,7 +67,7 @@
         "repair_on_error": true,
         "max_repairs_per_signature": 1
       },
-      "policy_version": 1
+      "policy_version": 2
     }
   }
 }
