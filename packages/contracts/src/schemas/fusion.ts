@@ -189,6 +189,8 @@ export const FusionKernelConfigSchema = z
     families: z.array(FusionKernelFamilySchema).min(1),
     /** Final synthesis / executor routing. Defaults to `fusion.model_routing`. */
     synthesis_routing: z.string().min(1).optional(),
+    /** Executor/synthesizer routing per task domain (e.g. { swe: "deepseek-v4-pro-0813" }): the member that acts best in that domain drives tool loops there. */
+    executor_routing_by_domain: z.record(z.string(), z.string().min(1)).default({}),
     /** Fast, cheap routing for intent extraction and light structured passes. Defaults to the summarizer routing. */
     fast_routing: z.string().min(1).optional(),
     /** `reasoning_effort` forwarded to the synthesis/executor model (unset = model default, i.e. deepest). */

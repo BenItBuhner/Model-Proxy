@@ -68,6 +68,7 @@ const kernelConfig: FusionConfig = {
     compute_scratchpad: false,
     compute_scratchpad_domains: ["math", "science"],
     compute_scratchpad_bands: ["max"],
+    executor_routing_by_domain: {},
     compute_timeout_seconds: 30,
     compute_rounds: 2,
     agentic_search_deadline_seconds: 240,
@@ -437,6 +438,24 @@ describe("Fusion kernel engine", () => {
     const negatives = getOperationalDb().query("SELECT kind, attempts FROM fusion_kernel_negatives WHERE conversation_id = ? ORDER BY kind").all(conversationId) as Array<{ kind: string; attempts: number }>;
     expect(negatives).toHaveLength(1);
     expect(negatives[0]).toEqual({ kind: "repair_exhausted", attempts: 2 });
+  });
+
+  it("routes the agentic executor by task domain when executor_routing_by_domain is set", async () => {
+    const conversationId = `conv-domain-exec-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured, { synthesisToolCall: true });
+    const cfg = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, executor_routing_by_domain: { swe: "deepseek-v4-pro-0813" } } };
+    const turn1 = [SYSTEM, { role: "user", content: GOAL }]; // GOAL mentions tests/API: domain swe
+    const ctx1 = makeCtx(turn1, conversationId);
+    ctx1.fusionConfig = cfg;
+    const first = await router.route(ctx1);
+    expect(captured.synthesis.length).toBeGreaterThan(0);
+    expect(String(captured.synthesis[captured.synthesis.length - 1]!["model"])).toBe("up-deepseek");
+    const turn2 = [...turn1, { role: "assistant", content: null, tool_calls: first.toolCalls }, { role: "tool", tool_call_id: "call_1", content: "ok\n[exit 0]" }];
+    const ctx2 = makeCtx(turn2, conversationId);
+    ctx2.fusionConfig = cfg;
+    await router.route(ctx2);
+    expect(String(captured.synthesis[captured.synthesis.length - 1]!["model"])).toBe("up-deepseek");
   });
 
   it("with repair_after_sightings=2 the first failure is left to the executor and the repeat triggers the repair wave", async () => {

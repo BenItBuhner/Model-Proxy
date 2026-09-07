@@ -582,7 +582,10 @@ export class FusionKernel {
     });
 
     const configFingerprint = stableHash({ kernel: kcfg, synthesis: ctx.fusionConfig.fusion.model_routing }).slice(0, 16);
-    const synthesisRouting = kcfg.synthesis_routing ?? ctx.fusionConfig.fusion.model_routing;
+    // Domain-specific executor: for tool loops the acting model matters more than
+    // the synthesizer's prose quality (measured on SWE-bench Verified).
+    const domainExecutor = domainHint.domains.map((d) => kcfg.executor_routing_by_domain[d]).find((r): r is string => r !== undefined);
+    const synthesisRouting = (Array.isArray(requestTools) && requestTools.length > 0 ? domainExecutor : undefined) ?? kcfg.synthesis_routing ?? ctx.fusionConfig.fusion.model_routing;
     const fastRouting = ctx.fusionConfig.effort_levels[1].model_routing;
     const deepTask = ledger.lastSearch !== undefined || runtimeEffort >= 2;
     const executorRouting = mode === "continue" && !deepTask ? fastRouting : synthesisRouting;

@@ -29,6 +29,7 @@
         { "name": "deepseek", "routing": "deepseek-v4-pro-0813", "alt_routings": ["deepseek-v4-pro"], "weight": 1 }
       ],
       "synthesis_routing": "glm-5.3",
+      "executor_routing_by_domain": { "swe": "deepseek-v4-pro-0813" },
       "fast_routing": "glm-5.3-flash",
       "capsule_tokens": 24000,
       "worker_max_tokens": 16000,
