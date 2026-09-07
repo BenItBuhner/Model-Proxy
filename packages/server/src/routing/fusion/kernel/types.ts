@@ -67,6 +67,8 @@ export interface KernelSearchRecord {
   workKeys: string[];
   cachedWork: number;
   kind: "search" | "repair" | "checkpoint";
+  /** The search was an agentic planning wave (tool-bearing first turn). */
+  agentic?: boolean;
 }
 
 export interface KernelLedger {

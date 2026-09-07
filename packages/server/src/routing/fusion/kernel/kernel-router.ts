@@ -146,6 +146,8 @@ interface KernelRun {
   firstVerifiedAt?: number;
   /** Task domains from the deterministic intent (gates the computational scratchpad). */
   domains: string[];
+  /** Tool-bearing fresh task: one bounded planning wave, then tool calls (see agentic_search_deadline_seconds). */
+  agentic: boolean;
   /** Execution-verified proposals accumulated across waves (programs and certified direct answers). */
   verifiedPool: Proposal[];
   /** Independent backing of the current artifact: verified proposals and distinct families behind the winning output. */
@@ -518,8 +520,18 @@ export class FusionKernel {
       domains: ledger.intent?.domains ?? deterministicIntent(instruction.text, instruction.index).domains,
       effortByDomain: kcfg.effort_by_domain as Record<string, EffortBand>,
     };
-    const band = effortBandFor(ctx.resolvedFusionEffort, requested, domainHint);
+    let band = effortBandFor(ctx.resolvedFusionEffort, requested, domainHint);
     const runtimeEffort = ctx.runtimeEffort ?? score.effort;
+    // Agentic first turn: tools present and no prior search for this task. The
+    // proposers cannot see the environment, so a long search only speculates;
+    // one bounded planning wave then the first tool calls is the linear path.
+    const requestTools = (ctx.requestData as Record<string, unknown>)["tools"];
+    // A replay of an agentic first turn stays agentic so its work keys hit the cache.
+    const agentic = kcfg.agentic_search_deadline_seconds > 0 && Array.isArray(requestTools) && requestTools.length > 0 && requested !== "max" && (ledger.lastSearch === undefined || (classification.kind === "replay" && ledger.lastSearch.agentic === true));
+    if (agentic) {
+      const order: EffortBand[] = ["F2", "F3", "max"];
+      if (order.indexOf(band) > order.indexOf(kcfg.agentic_band)) band = kcfg.agentic_band;
+    }
 
     let mode: KernelMode;
     const continuing =
@@ -598,7 +610,7 @@ export class FusionKernel {
       startedAt,
       executorRouting,
       fastRouting,
-      searchDeadlineAt: startedAt + kcfg.search_deadline_seconds[band] * 1000,
+      searchDeadlineAt: startedAt + (agentic ? Math.min(kcfg.agentic_search_deadline_seconds, kcfg.search_deadline_seconds[band]) : kcfg.search_deadline_seconds[band]) * 1000,
       cancelledWorkers: 0,
       truncatedWorkers: 0,
       earlySettles: 0,
@@ -608,6 +620,7 @@ export class FusionKernel {
       executionStats: { programs: 0, verified: 0, repairRounds: 0 },
       artifactKind: "json",
       domains: domainHint.domains,
+      agentic,
       verifiedPool: [],
       computeRuns: 0,
       phase: "prepared",
@@ -1021,7 +1034,7 @@ export class FusionKernel {
       if (ctx.signal?.aborted === true) break;
       run.waves = wave;
       run.phase = `proposal wave ${wave}`;
-      const verifyCandidates = widths.verifiersPerCandidate > 0;
+      const verifyCandidates = widths.verifiersPerCandidate > 0 && !run.agentic;
       // Pipelined verification: each candidate's verifiers launch the moment
       // the candidate lands, overlapping with slower proposers.
       const pipelined: QuorumEntry<Verification>[] = [];
@@ -1170,7 +1183,10 @@ export class FusionKernel {
         novelClaimsLastWave: novel,
         familyCount: run.pool.proposerFamilyCount,
       });
-      if (run.verifiedArtifact !== undefined) {
+      if (run.agentic) {
+        // Planning wave done: the environment, not another wave, answers the open questions.
+        decision = { escalate: false, reason: "agentic planning wave complete; proceeding to tool calls" };
+      } else if (run.verifiedArtifact !== undefined) {
         // Execution settled the answer. At the max band an artifact backed by a
         // single family (one program, no agreeing direct read) gets one
         // independent second attempt: a program can fit few examples for the
@@ -1259,6 +1275,7 @@ export class FusionKernel {
     run.ledger.lastSearch = {
       at: nowIso(),
       effort: run.band,
+      agentic: run.agentic,
       waves: run.waves,
       agreement: finalConsensus.agreement,
       proposals: proposals.length,
@@ -1712,7 +1729,7 @@ export class FusionKernel {
     ].join("\n");
   }
 
-  private proposerObjective(intent: KernelLedger["intent"], role: WorkerRole): string {
+  private proposerObjective(intent: KernelLedger["intent"], role: WorkerRole, agentic = false): string {
     const goal = truncateMiddle(intent?.goal ?? "", 3_000, "goal trimmed");
     if (role === "repair") {
       return `A tool action taken by the primary agent toward this goal failed (see the most recent tool result). Diagnose the most likely root cause and recommend the single best next action plus one fallback, avoiding the failed strategy.\nGoal: ${goal}`;
@@ -1721,6 +1738,9 @@ export class FusionKernel {
       return `Review the primary agent's progress toward this goal. State what is done, what remains, what is drifting, and give the precise remaining plan as ordered steps.\nGoal: ${goal}`;
     }
     const deliverables = intent?.deliverables.length ? `\nExpected deliverables: ${intent.deliverables.join("; ")}` : "";
+    if (agentic) {
+      return `The primary agent will work on this task with tools in the user's environment (repository, shell); you cannot see that environment. Produce an INVESTIGATION AND FIX PLAN, not a guessed answer: (1) the most likely root causes ranked with the evidence in the task text, (2) the exact files, symbols and commands to inspect first, (3) the change you expect to make and how to verify it with the project's own tests, (4) pitfalls (hidden tests, backwards compatibility, edge cases). Be concrete and short; do not invent code you have not seen.\nGoal: ${goal}${deliverables}`;
+    }
     return `Solve this task as completely and precisely as possible. If it is a question, give the answer with the reasoning that justifies it. If it requires actions in the user's environment, specify the exact actions the primary agent should take, in order, with exact commands/code/edits. Surface risks and what would change your answer.\nGoal: ${goal}${deliverables}`;
   }
 
@@ -1758,7 +1778,7 @@ export class FusionKernel {
       return proposal;
     };
     const maxTokens = this.proposalMaxTokens(run);
-    const objective = this.proposerObjective(intent, role) + (role === "proposer" ? this.executionContract(run) : "");
+    const objective = this.proposerObjective(intent, role, run.agentic) + (role === "proposer" ? this.executionContract(run) : "");
     const phase = role === "repair" ? "repair" : role === "checkpoint" ? "checkpoint" : "proposal";
     emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase, status: "started", detail: { wave, count: picks.length, routings: picks.map((p) => p.routing) } });
     emitFusion(ctx, {

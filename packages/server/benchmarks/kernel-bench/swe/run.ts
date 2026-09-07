@@ -213,6 +213,8 @@ async function chat(model: string, messages: ChatMessage[], extra: Record<string
     headers: { "content-type": "application/json", authorization: `Bearer ${API_KEY}` },
     body: JSON.stringify({ model, messages, tools: TOOLS, tool_choice: "auto", stream: false, max_tokens: 16_000, reasoning_effort: "high", ...extra }),
     signal,
+    // Bun's fetch defaults to a 5-minute timeout; a fusion search turn can legitimately run longer.
+    ...({ timeout: false } as Record<string, unknown>),
   });
   if (!res.ok) throw new Error(`chat ${res.status}: ${(await res.text()).slice(0, 400)}`);
   const body = (await res.json()) as { choices: Array<{ message: ChatMessage }> };

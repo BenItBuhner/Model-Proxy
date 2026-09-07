@@ -243,6 +243,14 @@ export const FusionKernelConfigSchema = z
     compute_scratchpad_domains: z.array(z.string()).default(["math", "science"]),
     compute_timeout_seconds: z.number().int().min(1).max(300).default(30),
     compute_rounds: z.number().int().min(0).max(4).default(2),
+    /**
+     * Agentic first turn: when the request carries tools and the task is new,
+     * the kernel runs ONE bounded planning wave (agentic_band widths, this
+     * deadline, no verification) and lets the synthesizer emit the first tool
+     * calls; the real work happens across tool continuations. 0 disables.
+     */
+    agentic_search_deadline_seconds: z.number().int().min(0).max(3600).default(240),
+    agentic_band: z.enum(["F2", "F3", "max"]).default("F2"),
     /** Hard wall-clock cap per synthesis attempt; on expiry the kernel moves to the next synthesizer or the best verified candidate. */
     synthesis_timeout_seconds: z.number().int().min(30).max(3600).default(600),
     /**

@@ -429,6 +429,8 @@ describe("kernel scheduler", () => {
     compute_scratchpad_domains: ["math", "science"],
     compute_timeout_seconds: 30,
     compute_rounds: 2,
+    agentic_search_deadline_seconds: 240,
+    agentic_band: "F2",
     synthesis_timeout_seconds: 600,
     worker_reasoning_effort: {},
     worker_timeout_seconds: 300,

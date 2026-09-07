@@ -69,6 +69,8 @@ const kernelConfig: FusionConfig = {
     compute_scratchpad_domains: ["math", "science"],
     compute_timeout_seconds: 30,
     compute_rounds: 2,
+    agentic_search_deadline_seconds: 240,
+    agentic_band: "F2",
     synthesis_timeout_seconds: 600,
     worker_reasoning_effort: { verifier: "low" },
     worker_timeout_seconds: 30,
@@ -310,14 +312,11 @@ describe("Fusion kernel engine", () => {
     expect(captured.intent).toHaveLength(1);
     expect(captured.proposer).toHaveLength(3);
     expect(new Set(captured.proposer.map((b) => familyOf(String(b["model"])))).size).toBe(3);
-    expect(captured.verifier).toHaveLength(3);
-    // Every verifier audits a candidate from a different family.
-    for (const v of captured.verifier) {
-      const text = allText(v["messages"] as unknown[]);
-      const verifierFamily = familyOf(String(v["model"]));
-      expect(text).toContain("Candidate");
-      expect(text).not.toContain(`Proposal from ${verifierFamily}`);
-    }
+    // Agentic first turn (tools present): ONE bounded planning wave — the
+    // proposers write an investigation plan, no verification wave, then the
+    // synthesizer emits the first tool calls.
+    expect(captured.verifier).toHaveLength(0);
+    for (const p of captured.proposer) expect(allText(p["messages"] as unknown[])).toContain("INVESTIGATION AND FIX PLAN");
     expect(captured.synthesis).toHaveLength(1);
     expect(captured.repair).toHaveLength(0);
     // Workers are sealed: streaming, no tools, tool_choice none, bounded output.
@@ -330,7 +329,8 @@ describe("Fusion kernel engine", () => {
     // Per-role reasoning effort: verifiers run low; this request asked for `high`
     // (band F3), so proposers inherit high effort like a base model would.
     for (const v of captured.verifier) expect(v["reasoning_effort"]).toBe("low");
-    for (const p of captured.proposer) expect(p["reasoning_effort"]).toBe("high");
+    // The agentic planning wave runs at the F2 band (agentic_band): model-default effort, quick plans.
+    for (const p of captured.proposer) expect(p["reasoning_effort"]).toBeUndefined();
     // Synthesis received consensus notes and the kernel brief.
     const synthText = allText(captured.synthesis[0]!["messages"] as unknown[]);
     expect(synthText).toContain("KERNEL SYNTHESIS BRIEF");
@@ -343,9 +343,9 @@ describe("Fusion kernel engine", () => {
     expect(trace.kernel?.["turn"]).toBe("fresh_task");
     expect(trace.kernel?.["waves"]).toBe(1);
     expect(trace.kernel?.["agreement"] as number).toBeGreaterThanOrEqual(0.6);
-    expect(trace.kernel?.["workItems"]).toBe(7);
+    expect(trace.kernel?.["workItems"]).toBe(4); // intent + 3 planning proposers; no verification on the agentic first turn
     expect(trace.kernel?.["cachedWorkItems"]).toBe(0);
-    expect(trace.steps.map((s) => s.type)).toEqual(expect.arrayContaining(["turn_classification", "intent", "proposal", "verification", "escalation", "synthesis"]));
+    expect(trace.steps.map((s) => s.type)).toEqual(expect.arrayContaining(["turn_classification", "intent", "proposal", "escalation", "synthesis"]));
 
     const db = getOperationalDb();
     const session = db.query("SELECT ledger_json FROM fusion_kernel_sessions WHERE conversation_id = ?").get(conversationId) as { ledger_json: string } | undefined;
@@ -354,7 +354,7 @@ describe("Fusion kernel engine", () => {
     expect((ledger["findings"] as unknown[]).length).toBeGreaterThan(0);
     expect((ledger["intent"] as Record<string, unknown>)["extractedBy"]).toBe("model");
     const workRows = db.query("SELECT COUNT(*) AS count FROM fusion_kernel_work").get() as { count: number };
-    expect(workRows.count).toBe(7);
+    expect(workRows.count).toBe(4);
 
     // Turn 2: the agent executed the tool call; a tool result arrives. Must NOT re-plan.
     const turn2 = [
@@ -468,7 +468,8 @@ describe("Fusion kernel engine", () => {
     const captured = emptyCaptured();
     installFetch(captured);
     const ctx = makeCtx([SYSTEM, { role: "user", content: GOAL }], conversationId, { stream: true });
-    ctx.fusionConfig = { ...kernelConfig, summarizer: { ...kernelConfig.summarizer, enabled: true } };
+    // Full search (verification included): disable the agentic planning shortcut for this tool-bearing request.
+    ctx.fusionConfig = { ...kernelConfig, summarizer: { ...kernelConfig.summarizer, enabled: true }, kernel: { ...kernelConfig.kernel!, agentic_search_deadline_seconds: 0 } };
     const out = await collectStream(router.stream(ctx));
     expect(out).toContain("reasoning_content");
     expect(out).toContain("Kernel: new task");
