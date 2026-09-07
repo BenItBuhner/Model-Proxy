@@ -24,3 +24,5 @@ apex-shortlist:40    ✓        ✓   ✓   ✓    909s
 apex-shortlist:42    ✓        ✓   ⏱   ✓    1800s
 apex-shortlist:45    ✓        ✓   ✓   ✓    684s
 union 21 / 24 fusion-only: apex-shortlist:17 | member-only: apex-shortlist:26,apex-shortlist:31
+
+max-effort probe of the four F3 misses ({"fusion":{"effort":"max"}}, 2400 s search): #26 ✓ 2734s, #31 ✓ 2853s (both budget failures at F3; every member that finished had them), #8 ✗ 3000s, #37 ✗ 2088s (no model solves these). fusion F3 ∪ max = 22/24 vs members union 21/24.
