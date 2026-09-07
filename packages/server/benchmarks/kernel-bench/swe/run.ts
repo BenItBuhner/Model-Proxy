@@ -277,6 +277,7 @@ async function runAgent(model: string, inst: Instance, ws: Workspace, args: Args
       let parsed: Record<string, unknown> = {};
       try { parsed = JSON.parse(call.function.arguments || "{}") as Record<string, unknown>; } catch { parsed = {}; }
       let result = "";
+      try {
       if (call.function.name === "bash") {
         const r = await sh(`( ${String(parsed["command"] ?? "")} ) 2>&1`, { cwd: repoDir, env: ws.env, timeoutMs: 180_000, maxChars: 10_000 });
         result = `${r.out}${r.timedOut ? "\n[command timed out after 180 s]" : ""}\n[exit ${r.code}]`;
@@ -294,6 +295,10 @@ async function runAgent(model: string, inst: Instance, ws: Workspace, args: Args
         result = "Submitted.";
       } else {
         result = `ERROR: unknown tool ${call.function.name}`;
+      }
+      } catch (err) {
+        // Tool failures (EISDIR, ENOENT, ...) are information for the model, not harness errors.
+        result = `ERROR: ${err instanceof Error ? err.message : String(err)}`;
       }
       messages.push({ role: "tool", tool_call_id: call.id, content: result });
     }
