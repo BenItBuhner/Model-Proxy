@@ -241,6 +241,8 @@ export const FusionKernelConfigSchema = z
      */
     compute_scratchpad: z.boolean().default(false),
     compute_scratchpad_domains: z.array(z.string()).default(["math", "science"]),
+    /** Effort bands on which the scratchpad is active (at F3 it displaced plain reasoning on Apex; max keeps both). */
+    compute_scratchpad_bands: z.array(z.enum(["F2", "F3", "max"])).default(["max"]),
     compute_timeout_seconds: z.number().int().min(1).max(300).default(30),
     compute_rounds: z.number().int().min(0).max(4).default(2),
     /**

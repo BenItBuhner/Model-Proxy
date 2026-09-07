@@ -440,6 +440,7 @@ describe("kernel scheduler", () => {
     execution_settle_grace_seconds: 1,
     compute_scratchpad: false,
     compute_scratchpad_domains: ["math", "science"],
+    compute_scratchpad_bands: ["max"],
     compute_timeout_seconds: 30,
     compute_rounds: 2,
     agentic_search_deadline_seconds: 240,
