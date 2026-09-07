@@ -2231,6 +2231,7 @@ export class FusionKernel {
         this.pushNegative(run, replan.errorSignature, "tool_error", replan.errorExcerpt ?? "tool error", newAttempts);
         run.repair = { signature: replan.errorSignature, attempts: newAttempts, exhausted: false };
         await run.narrator.say(`Kernel: a tool step failed (${truncateMiddle(replan.errorExcerpt ?? "error", 140)}). Running a bounded cross-family repair diagnosis before continuing.`);
+        this.boundAgenticWave(run);
         const widths = widthsFor(kcfg, run.band, run.pool.proposerFamilyCount);
         const repairWidth = Math.min(widths.proposals, run.pool.proposerFamilyCount);
         const proposals = await this.proposalWave(ctx, run, intent, run.ledger, run.ledger.lastSearch?.waves ?? 1, widths, run.ledger.taskStartIndex, undefined, "repair", repairWidth);
@@ -2257,6 +2258,7 @@ export class FusionKernel {
     if (replan.reasons.includes("step_budget") && run.ledger.lastSearch !== undefined) {
       run.checkpoint = true;
       await run.narrator.say(`Kernel: ${run.ledger.continuationSteps} steps since the last plan review; running a bounded checkpoint across families.`);
+      this.boundAgenticWave(run);
       const widths = widthsFor(kcfg, run.band, run.pool.proposerFamilyCount);
       const proposals = await this.proposalWave(ctx, run, intent, run.ledger, (run.ledger.lastSearch?.waves ?? 0) + 1, widths, run.ledger.taskStartIndex, undefined, "checkpoint", run.pool.proposerFamilyCount);
       const consensus = buildConsensus(proposals, []);
@@ -2291,6 +2293,12 @@ export class FusionKernel {
       modelRouting: run.executorRouting,
       details: { kind: classification.kind, step: run.ledger.continuationSteps, repair: run.repair, checkpoint: run.checkpoint === true, reusedSearch: run.ledger.lastSearch?.kind },
     });
+  }
+
+  /** Repair/checkpoint waves inside a tool loop get the agentic planning budget, not the full search deadline. */
+  private boundAgenticWave(run: KernelRun): void {
+    if (!run.toolsPresent || run.kcfg.agentic_search_deadline_seconds <= 0) return;
+    run.searchDeadlineAt = Math.min(run.searchDeadlineAt, performance.now() + run.kcfg.agentic_search_deadline_seconds * 1000);
   }
 
   private continuationBrief(run: KernelRun): string {
