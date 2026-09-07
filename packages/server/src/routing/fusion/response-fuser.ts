@@ -836,8 +836,14 @@ Your job:
       4096,
       Math.min(ctx.fusionConfig.context_window, resolveDeclaredContextWindow(modelRouting)),
     );
+    // Honor the client's max_tokens: providers scale their thinking with the
+    // output budget, and a 131k budget on a tactical agent step turned into
+    // minutes of reasoning per tool call.
+    const requestedMax = Number((ctx.requestData as Record<string, unknown> | undefined)?.["max_tokens"] ?? (ctx.requestData as Record<string, unknown> | undefined)?.["max_completion_tokens"]);
+    const clientCap = Number.isFinite(requestedMax) && requestedMax > 0 ? Math.max(1024, Math.floor(requestedMax)) : undefined;
     const outputBudgetTokens = Math.min(
       FUSER_MAX_TOKENS,
+      clientCap ?? Number.POSITIVE_INFINITY,
       Math.max(1024, Math.floor(contextWindow * MAX_OUTPUT_RESERVE_RATIO)),
     );
     return {
