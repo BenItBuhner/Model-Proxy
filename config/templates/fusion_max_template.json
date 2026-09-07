@@ -50,6 +50,7 @@
       "compute_rounds": 2,
       "agentic_search_deadline_seconds": 240,
       "agentic_band": "F2",
+      "contested_extension_seconds": 900,
       "synthesis_timeout_seconds": 600,
       "worker_reasoning_effort": { "verifier": "low", "intent": "low", "repair": "medium", "checkpoint": "medium" },
       "worker_timeout_seconds": 300,

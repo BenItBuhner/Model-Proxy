@@ -255,6 +255,14 @@ export const FusionKernelConfigSchema = z
      */
     agentic_search_deadline_seconds: z.number().int().min(0).max(3600).default(240),
     agentic_band: z.enum(["F2", "F3", "max"]).default("F2"),
+    /**
+     * Contested extension: when a non-max search ends still contested (the
+     * escalation decision wants another wave but the band's deadline cannot
+     * fit one), extend the deadline once by this many seconds instead of
+     * synthesizing a split vote. 0 disables. Budget failures on hard math
+     * were exactly this: members had the answer, the F3 clock ran out.
+     */
+    contested_extension_seconds: z.number().int().min(0).max(3600).default(0),
     /** Hard wall-clock cap per synthesis attempt; on expiry the kernel moves to the next synthesizer or the best verified candidate. */
     synthesis_timeout_seconds: z.number().int().min(30).max(3600).default(600),
     /**

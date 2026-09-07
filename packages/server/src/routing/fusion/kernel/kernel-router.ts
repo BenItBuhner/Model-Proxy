@@ -148,6 +148,8 @@ interface KernelRun {
   domains: string[];
   /** Tool-bearing fresh task: one bounded planning wave, then tool calls (see agentic_search_deadline_seconds). */
   agentic: boolean;
+  /** The contested-extension budget has been spent on this run. */
+  extended: boolean;
   /** The request carries tools (agent loop): repair/checkpoint waves stay lean (no verification). */
   toolsPresent: boolean;
   /** Execution-verified proposals accumulated across waves (programs and certified direct answers). */
@@ -626,6 +628,7 @@ export class FusionKernel {
       artifactKind: "json",
       domains: domainHint.domains,
       agentic,
+      extended: false,
       toolsPresent: Array.isArray(requestTools) && requestTools.length > 0,
       verifiedPool: [],
       computeRuns: 0,
@@ -1035,7 +1038,8 @@ export class FusionKernel {
     let strategyNote: string | undefined;
     let previousAccepted: string[] = [];
 
-    for (let wave = 1; wave <= widths.maxWaves; wave++) {
+    let maxWaves = widths.maxWaves;
+    for (let wave = 1; wave <= maxWaves; wave++) {
       // A departed client aborts every worker; escalating further would only burn upstream budget.
       if (ctx.signal?.aborted === true) break;
       run.waves = wave;
@@ -1209,10 +1213,23 @@ export class FusionKernel {
         const expectedWorkerMs = this.expectedWorkerMs(run);
         const needed = Math.round(expectedWorkerMs * 1.2) + 15_000;
         if (this.remainingSearchMs(run) < needed) {
-          decision = {
-            escalate: false,
-            reason: `search budget (${kcfg.search_deadline_seconds[run.band]}s) cannot fit another wave (~${Math.round(needed / 1000)}s needed, ${Math.round(this.remainingSearchMs(run) / 1000)}s left); settling with agreement ${consensus.agreement}`,
-          };
+          // Contested at the deadline: a split vote synthesized now is a coin
+          // flip. Below the max band, spend the contested extension once
+          // (deadline + one wave) rather than settle on the leader.
+          const extensionMs = kcfg.contested_extension_seconds * 1000;
+          const contested = consensus.answerVote === undefined || !consensus.answerVote.unanimous;
+          if (!run.extended && run.band !== "max" && extensionMs > 0 && contested && !run.agentic && this.remainingSearchMs(run) + extensionMs >= needed) {
+            run.extended = true;
+            run.searchDeadlineAt += extensionMs;
+            maxWaves = Math.max(maxWaves, wave + 1);
+            decision = { escalate: true, reason: `contested at the ${kcfg.search_deadline_seconds[run.band]}s deadline (agreement ${consensus.agreement}); extending the search by ${kcfg.contested_extension_seconds}s for one more wave` };
+            await run.narrator.say(`Kernel: the search is still contested at its deadline; extending by ${kcfg.contested_extension_seconds}s for one more cross-family wave.`);
+          } else {
+            decision = {
+              escalate: false,
+              reason: `search budget (${kcfg.search_deadline_seconds[run.band]}s) cannot fit another wave (~${Math.round(needed / 1000)}s needed, ${Math.round(this.remainingSearchMs(run) / 1000)}s left); settling with agreement ${consensus.agreement}`,
+            };
+          }
         }
       }
       emitFusion(ctx, {

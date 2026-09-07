@@ -446,6 +446,7 @@ describe("kernel scheduler", () => {
     compute_rounds: 2,
     agentic_search_deadline_seconds: 240,
     agentic_band: "F2",
+    contested_extension_seconds: 0,
     synthesis_timeout_seconds: 600,
     worker_reasoning_effort: {},
     worker_timeout_seconds: 300,

@@ -73,6 +73,7 @@ const kernelConfig: FusionConfig = {
     compute_rounds: 2,
     agentic_search_deadline_seconds: 240,
     agentic_band: "F2",
+    contested_extension_seconds: 0,
     synthesis_timeout_seconds: 600,
     worker_reasoning_effort: { verifier: "low" },
     worker_timeout_seconds: 30,
@@ -1088,6 +1089,27 @@ describe("Fusion kernel engine", () => {
     expect(elapsed).toBeGreaterThan(60_000);
     expect(elapsed).toBeLessThan(100_000);
   }, 150_000);
+
+  it("extends a contested search past the band deadline once instead of settling on a split vote", async () => {
+    const run = async (extension: number) => {
+      const captured = emptyCaptured();
+      installFetch(captured, { finalAnswers: { glm: "750", kimi: "500", deepseek: "600" } }); // three-way split: contested
+      const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-extend-${extension}-${Date.now()}`);
+      // A 10 s F3 deadline cannot fit another wave (~15 s needed), so the split vote would settle after wave 1.
+      ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, control_proposer: false, search_deadline_seconds: { F2: 10, F3: 10, max: 10 }, contested_extension_seconds: extension } };
+      delete (ctx.requestData as Record<string, unknown>)["tools"];
+      const result = await router.route(ctx);
+      const reasons = result.fusionTrace!.steps.filter((s) => s.type === "escalation").map((s) => String((s.details as Record<string, unknown>)["reason"]));
+      return { waves: result.fusionTrace!.kernel!["waves"] as number, reasons, proposers: captured.proposer.length };
+    };
+    const settled = await run(0);
+    expect(settled.waves).toBe(1);
+    expect(settled.reasons[0]).toContain("cannot fit another wave");
+    const extended = await run(60);
+    expect(extended.waves).toBe(2);
+    expect(extended.reasons[0]).toContain("extending the search");
+    expect(extended.proposers).toBeGreaterThan(settled.proposers);
+  });
 
   it("falls back to another family's synthesizer when the primary fails, and never leaks advisory notes", async () => {
     const captured = emptyCaptured();
