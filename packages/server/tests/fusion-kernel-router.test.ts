@@ -85,7 +85,7 @@ const kernelConfig: FusionConfig = {
     straggler_grace_seconds: 5,
     search_deadline_seconds: { F2: 60, F3: 60, max: 60 },
     intent_extraction: true,
-    continuation: { enabled: true, max_steps_before_replan: 3, repair_on_error: true, max_repairs_per_signature: 1, repair_after_sightings: 1 },
+    continuation: { enabled: true, max_steps_before_replan: 3, repair_on_error: true, max_repairs_per_signature: 1, repair_after_sightings: 1, executor_reasoning_effort: "medium" },
     policy_version: 1,
   },
 };

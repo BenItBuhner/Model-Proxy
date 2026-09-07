@@ -330,6 +330,8 @@ export const FusionKernelConfigSchema = z
         max_repairs_per_signature: z.number().int().min(0).max(5).default(1),
         /** Sightings of the same failure signature before a repair wave fires (1 = first sight; 2 = only when the agent is stuck on a repeat). */
         repair_after_sightings: z.number().int().min(1).max(5).default(2),
+        /** Reasoning effort of the single executor call on tool-continuation steps (the plan is already in the brief). */
+        executor_reasoning_effort: z.enum(["low", "medium", "high"]).default("medium"),
       })
       .strict()
       .default({}),

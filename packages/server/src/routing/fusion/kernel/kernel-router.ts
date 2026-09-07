@@ -2331,8 +2331,10 @@ export class FusionKernel {
     // minutes on a tactical tool step.
     const requestedEffort = (ctx.requestData as Record<string, unknown> | undefined)?.["reasoning_effort"];
     const clientEffort = requestedEffort === "low" || requestedEffort === "medium" || requestedEffort === "high" ? requestedEffort : undefined;
+    // Agentic planning turn: the plan exists; the synthesizer only turns it into
+    // the first tool calls (low). Continuation steps: configured executor effort.
     ctx.kernelSynthesisReasoningEffort = run.kcfg.synthesis_reasoning_effort
-      ?? (run.settledAnswer !== undefined ? "low" : run.mode === "search" ? "medium" : run.mode === "continue" ? (clientEffort ?? "medium") : undefined);
+      ?? (run.settledAnswer !== undefined ? "low" : run.agentic && run.mode === "search" ? "low" : run.mode === "search" ? "medium" : run.mode === "continue" ? run.kcfg.continuation.executor_reasoning_effort : clientEffort);
     if (ctx.kernelBrief === undefined) ctx.kernelBrief = "KERNEL BRIEF\nAnswer the current request from the conversation context.";
   }
 
