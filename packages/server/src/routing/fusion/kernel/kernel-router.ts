@@ -148,6 +148,8 @@ interface KernelRun {
   domains: string[];
   /** Tool-bearing fresh task: one bounded planning wave, then tool calls (see agentic_search_deadline_seconds). */
   agentic: boolean;
+  /** The request carries tools (agent loop): repair/checkpoint waves stay lean (no verification). */
+  toolsPresent: boolean;
   /** Execution-verified proposals accumulated across waves (programs and certified direct answers). */
   verifiedPool: Proposal[];
   /** Independent backing of the current artifact: verified proposals and distinct families behind the winning output. */
@@ -621,6 +623,7 @@ export class FusionKernel {
       artifactKind: "json",
       domains: domainHint.domains,
       agentic,
+      toolsPresent: Array.isArray(requestTools) && requestTools.length > 0,
       verifiedPool: [],
       computeRuns: 0,
       phase: "prepared",
@@ -2228,7 +2231,8 @@ export class FusionKernel {
         const widths = widthsFor(kcfg, run.band, run.pool.proposerFamilyCount);
         const repairWidth = Math.min(widths.proposals, run.pool.proposerFamilyCount);
         const proposals = await this.proposalWave(ctx, run, intent, run.ledger, run.ledger.lastSearch?.waves ?? 1, widths, run.ledger.taskStartIndex, undefined, "repair", repairWidth);
-        const verifications = run.band === "F2"
+        // Agent loops verify by acting: the environment tells the executor whether the diagnosis held.
+        const verifications = run.band === "F2" || run.toolsPresent
           ? []
           : await this.verificationWave(ctx, run, intent, run.ledger, proposals, 1, { ...widths, verifiersPerCandidate: 1 }, run.ledger.taskStartIndex);
         const consensus = buildConsensus(proposals, verifications);
@@ -2322,8 +2326,13 @@ export class FusionKernel {
     // but bounded thinking (medium): the synthesizer resolves the split from
     // rich evidence rather than re-solving the task open-endedly for many
     // minutes after the search already spent its budget.
+    // Continuation (agent) steps carry the client's requested effort (or
+    // medium): an unset effort lets some providers think open-endedly for
+    // minutes on a tactical tool step.
+    const requestedEffort = (ctx.requestData as Record<string, unknown> | undefined)?.["reasoning_effort"];
+    const clientEffort = requestedEffort === "low" || requestedEffort === "medium" || requestedEffort === "high" ? requestedEffort : undefined;
     ctx.kernelSynthesisReasoningEffort = run.kcfg.synthesis_reasoning_effort
-      ?? (run.settledAnswer !== undefined ? "low" : run.mode === "search" ? "medium" : undefined);
+      ?? (run.settledAnswer !== undefined ? "low" : run.mode === "search" ? "medium" : run.mode === "continue" ? (clientEffort ?? "medium") : undefined);
     if (ctx.kernelBrief === undefined) ctx.kernelBrief = "KERNEL BRIEF\nAnswer the current request from the conversation context.";
   }
 
