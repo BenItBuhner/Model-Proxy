@@ -1400,7 +1400,11 @@ export class FusionKernel {
       extra.push(...repairs);
       pool = repairs;
     }
-    let verified = [...waveProposals, ...extra].filter((p) => p.execution?.verified === true && p.finalAnswer !== undefined);
+    // Verified evidence accumulates across waves: a second, independent attempt
+    // at the max band contributes its programs to the same majority, and a
+    // disagreement with an earlier wave's program must be discriminated, not tie-broken.
+    for (const p of [...waveProposals, ...extra]) if (p.execution?.verified === true && p.finalAnswer !== undefined && !run.verifiedPool.includes(p)) run.verifiedPool.push(p);
+    let verified = [...run.verifiedPool];
     const distinctOutputs = (pool: Proposal[]) => new Set(pool.map((p) => p.finalAnswer!)).size;
     // Independent direct reads (no program) that agree across >= 2 families on
     // an output no verified program produced: with a lone verified program this
@@ -1428,7 +1432,8 @@ export class FusionKernel {
       const judges = await this.proposalWave(ctx, run, intent, ledgerView, wave, widths, taskStartIndex, note, "proposer", Math.min(widths.proposals, 3));
       await Promise.all(judges.filter((p) => p.success).map(check));
       extra.push(...judges);
-      verified = [...waveProposals, ...extra].filter((p) => p.execution?.verified === true && p.finalAnswer !== undefined);
+      for (const p of judges) if (p.execution?.verified === true && p.finalAnswer !== undefined && !run.verifiedPool.includes(p)) run.verifiedPool.push(p);
+      verified = [...run.verifiedPool];
     }
     if (distinctOutputs(verified) > 1 && this.remainingSearchMs(run) > 90_000) {
       // Every candidate reproduces the examples yet they disagree on the test:
@@ -1451,7 +1456,8 @@ export class FusionKernel {
       const judges = await this.proposalWave(ctx, run, intent, ledgerView, wave, widths, taskStartIndex, note, "proposer", Math.min(widths.proposals, 3));
       await Promise.all(judges.filter((p) => p.success).map(check));
       extra.push(...judges);
-      verified = [...waveProposals, ...extra].filter((p) => p.execution?.verified === true && p.finalAnswer !== undefined);
+      for (const p of judges) if (p.execution?.verified === true && p.finalAnswer !== undefined && !run.verifiedPool.includes(p)) run.verifiedPool.push(p);
+      verified = [...run.verifiedPool];
     }
     if (verified.length === 0) {
       // No program reproduced the examples: fall back to independent direct
@@ -1474,19 +1480,17 @@ export class FusionKernel {
         }
       }
     }
-    // Verified evidence accumulates across waves: a second, independent attempt
-    // at the max band contributes its programs to the same majority.
-    for (const p of verified) if (!run.verifiedPool.includes(p)) run.verifiedPool.push(p);
-    verified = [...run.verifiedPool];
     if (verified.length > 0) {
-      // Artifact = the test output backed by the most verified programs; ties → shortest program (Occam).
-      const counts = new Map<string, { n: number; shortest: Proposal }>();
+      // Artifact = the test output backed by the most verified programs; ties →
+      // the earliest wave (later waves were primed to look for a different
+      // rule), then the shortest program (Occam).
+      const counts = new Map<string, { n: number; shortest: Proposal; firstWave: number }>();
       for (const p of verified) {
         const cur = counts.get(p.finalAnswer!);
-        if (cur === undefined) counts.set(p.finalAnswer!, { n: 1, shortest: p });
-        else counts.set(p.finalAnswer!, { n: cur.n + 1, shortest: (p.program?.length ?? Infinity) < (cur.shortest.program?.length ?? Infinity) ? p : cur.shortest });
+        if (cur === undefined) counts.set(p.finalAnswer!, { n: 1, shortest: p, firstWave: p.wave });
+        else counts.set(p.finalAnswer!, { n: cur.n + 1, shortest: (p.program?.length ?? Infinity) < (cur.shortest.program?.length ?? Infinity) ? p : cur.shortest, firstWave: Math.min(cur.firstWave, p.wave) });
       }
-      const winner = [...counts.entries()].sort((a, b) => b[1].n - a[1].n || (a[1].shortest.program?.length ?? 0) - (b[1].shortest.program?.length ?? 0))[0]!;
+      const winner = [...counts.entries()].sort((a, b) => b[1].n - a[1].n || a[1].firstWave - b[1].firstWave || (a[1].shortest.program?.length ?? 0) - (b[1].shortest.program?.length ?? 0))[0]!;
       run.verifiedArtifact = winner[0];
       run.verifiedExplanation = proseOnly(winner[1].shortest.answer);
       const backingFamilies = new Set(verified.filter((p) => p.finalAnswer === winner[0]).map((p) => p.family));
