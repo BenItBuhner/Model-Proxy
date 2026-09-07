@@ -65,9 +65,10 @@
       "intent_extraction": true,
       "continuation": {
         "enabled": true,
-        "max_steps_before_replan": 14,
+        "max_steps_before_replan": 20,
         "repair_on_error": true,
-        "max_repairs_per_signature": 1
+        "max_repairs_per_signature": 1,
+        "repair_after_sightings": 2
       },
       "policy_version": 2
     }

@@ -95,6 +95,19 @@ describe("kernel turn classifier", () => {
     expect(detectToolError("ENOENT: no such file or directory, open 'src/missing.ts'")).toBeDefined();
   });
 
+  it("ignores the vocabulary of errors in listings and fires only on failure signals", () => {
+    // grep/sed output full of raise/except/log.error is not a failed command
+    expect(detectToolError("src/foo.py:12:    raise ValueError(\"bad\")\nsrc/foo.py:40:def test_failed_login():\n[exit 0]")).toBeUndefined();
+    expect(detectToolError("  121          log.error(\"failed to parse\", exc)\n[exit 0]")).toBeUndefined();
+    expect(detectToolError("docs/errors.md:3: The error message shown when login cannot proceed\n[exit 0]")).toBeUndefined();
+    expect(detectToolError("tests/test_x.py::test_a PASSED\n========== 21 passed in 2.1s ==========\n[exit 0]")).toBeUndefined();
+    // genuine failures
+    expect(detectToolError("some output\n[exit 1]")?.excerpt).toBe("[exit 1]");
+    expect(detectToolError("Traceback (most recent call last):\n  File \"x.py\", line 1\nModuleNotFoundError: No module named foo")).toBeDefined();
+    expect(detectToolError("tests/test_x.py::test_a FAILED\n========== 1 failed, 20 passed in 2.1s ==========")).toBeDefined();
+    expect(detectToolError("bash: foo: command not found")).toBeDefined();
+  });
+
   it("classifies a short amendment as a clarification and a new instruction as a fresh task", () => {
     const turn1 = [SYSTEM, { role: "user", content: GOAL }];
     const { ledger, hashes } = ledgerWithTask(turn1, GOAL, 1);
@@ -444,7 +457,7 @@ describe("kernel scheduler", () => {
     straggler_grace_seconds: 25,
     search_deadline_seconds: { F2: 240, F3: 480, max: 1500 },
     intent_extraction: true,
-    continuation: { enabled: true, max_steps_before_replan: 14, repair_on_error: true, max_repairs_per_signature: 1 },
+    continuation: { enabled: true, max_steps_before_replan: 14, repair_on_error: true, max_repairs_per_signature: 1, repair_after_sightings: 1 },
     policy_version: 1,
   };
 

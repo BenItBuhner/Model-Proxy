@@ -84,7 +84,7 @@ const kernelConfig: FusionConfig = {
     straggler_grace_seconds: 5,
     search_deadline_seconds: { F2: 60, F3: 60, max: 60 },
     intent_extraction: true,
-    continuation: { enabled: true, max_steps_before_replan: 3, repair_on_error: true, max_repairs_per_signature: 1 },
+    continuation: { enabled: true, max_steps_before_replan: 3, repair_on_error: true, max_repairs_per_signature: 1, repair_after_sightings: 1 },
     policy_version: 1,
   },
 };
@@ -436,6 +436,42 @@ describe("Fusion kernel engine", () => {
     const negatives = getOperationalDb().query("SELECT kind, attempts FROM fusion_kernel_negatives WHERE conversation_id = ? ORDER BY kind").all(conversationId) as Array<{ kind: string; attempts: number }>;
     expect(negatives).toHaveLength(1);
     expect(negatives[0]).toEqual({ kind: "repair_exhausted", attempts: 2 });
+  });
+
+  it("with repair_after_sightings=2 the first failure is left to the executor and the repeat triggers the repair wave", async () => {
+    const conversationId = `conv-sightings-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured, { synthesisToolCall: true });
+    const turn1 = [SYSTEM, { role: "user", content: GOAL }];
+    const cfg = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, continuation: { ...kernelConfig.kernel!.continuation, repair_after_sightings: 2 } } };
+    const ctx1 = makeCtx(turn1, conversationId);
+    ctx1.fusionConfig = cfg;
+    const first = await router.route(ctx1);
+
+    // First sighting: the agent reproduced a failure — a normal executor step, no repair wave.
+    const failing = [
+      ...turn1,
+      { role: "assistant", content: null, tool_calls: first.toolCalls },
+      { role: "tool", tool_call_id: "call_1", content: "FAILED tests/auth.test.ts::test_expiry - AssertionError\n========== 1 failed, 4 passed in 0.3s ==========\n[exit 1]" },
+    ];
+    const ctx2 = makeCtx(failing, conversationId);
+    ctx2.fusionConfig = cfg;
+    const before = captured.repair.length;
+    const second = await router.route(ctx2);
+    expect(captured.repair.length).toBe(before);
+    expect(second.fusionTrace?.steps.some((s) => s.type === "repair")).toBe(false);
+
+    // Same failure again: the agent is stuck → bounded cross-family repair.
+    const failingAgain = [
+      ...failing,
+      { role: "assistant", content: null, tool_calls: [{ id: "call_2", type: "function", function: { name: "bash", arguments: "{\"cmd\":\"bun test\"}" } }] },
+      { role: "tool", tool_call_id: "call_2", content: "FAILED tests/auth.test.ts::test_expiry - AssertionError\n========== 1 failed, 4 passed in 0.3s ==========\n[exit 1]" },
+    ];
+    const ctx3 = makeCtx(failingAgain, conversationId);
+    ctx3.fusionConfig = cfg;
+    const third = await router.route(ctx3);
+    expect(captured.repair.length).toBe(before + 3);
+    expect(third.fusionTrace?.steps.some((s) => s.type === "repair")).toBe(true);
   });
 
   it("runs a checkpoint wave once the continuation step budget is exhausted", async () => {

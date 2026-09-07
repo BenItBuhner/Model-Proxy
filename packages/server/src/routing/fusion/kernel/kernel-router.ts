@@ -2210,9 +2210,17 @@ export class FusionKernel {
     const replan = classification.replan;
 
     if (replan.reasons.includes("tool_error") && replan.errorSignature !== undefined && kcfg.continuation.repair_on_error) {
+      // Count sightings of this failure; the first sighting is usually the agent
+      // reproducing the bug on purpose. A repair wave fires once the SAME
+      // failure repeats (the agent is stuck), bounded by max_repairs_per_signature.
+      run.ledger.errorSightings ??= {};
+      const sightings = (run.ledger.errorSightings[replan.errorSignature] ?? 0) + 1;
+      run.ledger.errorSightings[replan.errorSignature] = sightings;
       const prior = this.work.getNegative(run.ledger.conversationId, replan.errorSignature);
       const attempts = prior?.attempts ?? 0;
-      if (attempts < kcfg.continuation.max_repairs_per_signature) {
+      if (sightings < kcfg.continuation.repair_after_sightings) {
+        log.info("kernel tool error noted (no repair yet)", { conversationId: run.ledger.conversationId, signature: replan.errorSignature, sightings, excerpt: (replan.errorExcerpt ?? "").slice(0, 120) });
+      } else if (attempts < kcfg.continuation.max_repairs_per_signature) {
         const newAttempts = this.work.recordNegative(run.ledger.conversationId, replan.errorSignature, "tool_error", replan.errorExcerpt ?? "tool error");
         this.pushNegative(run, replan.errorSignature, "tool_error", replan.errorExcerpt ?? "tool error", newAttempts);
         run.repair = { signature: replan.errorSignature, attempts: newAttempts, exhausted: false };

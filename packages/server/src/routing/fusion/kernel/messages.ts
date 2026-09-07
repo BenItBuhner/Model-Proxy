@@ -197,8 +197,33 @@ export function firstSystemPrompt(messages: unknown[]): string | undefined {
   return undefined;
 }
 
-const ERROR_LINE = /(^|\n)[^\n]*\b(error|exception|traceback|failed|failure|panic|segfault|cannot|could not|not found|permission denied|no such file|command not found|exit code [1-9]\d*|status[: ]+[45]\d\d|enoent|eacces|econnrefused|typeerror|referenceerror|syntaxerror|assertionerror)\b[^\n]*/i;
-const TRIVIAL_ERROR_CONTEXT = /\b(no error|0 errors|without error|error handling|error boundary|on error|error:\s*null|errors?:\s*\[\s*\]|errors?:\s*0\b)/i;
+/**
+ * Strong failure signals only. Source listings, grep output and test logs are
+ * full of the WORDS "error"/"failed"; a repair wave must fire on evidence that
+ * the command itself failed, not on vocabulary.
+ */
+const STRONG_ERROR_LINE = new RegExp(
+  [
+    String.raw`^\[exit [1-9]\d*\]$`, // harness exit marker
+    String.raw`\b(exit(ed)?( with)?( code| status)?|exit code|return(ed)? code|status)[: ]+[1-9]\d*\b`,
+    String.raw`\bcommand not found\b`,
+    String.raw`\bNo such file or directory\b`,
+    String.raw`\b(ENOENT|EACCES|ECONNREFUSED|EADDRINUSE)\b`,
+    String.raw`\bpermission denied\b`,
+    String.raw`^\s*Traceback \(most recent call last\)`,
+    String.raw`^\s*\w*(Error|Exception|Exit)\b:`, // "ValueError: ...", "ModuleNotFoundError: ..."
+    String.raw`^\s*(error|fatal|panic)\s*(\[[^\]]*\])?:`, // "error: ...", "fatal: ...", "error[E0308]:"
+    String.raw`^\s*npm ERR!`,
+    String.raw`^\S+\(\d+,\d+\): error TS\d+`,
+    String.raw`^=+ .*\b\d+ (failed|errors?)\b.* =+$`, // pytest summary line
+    String.raw`^(FAILED|ERROR) [\w./:-]+(::|\s)`, // pytest/unittest per-test lines
+    String.raw`^\s*(FAIL|ERROR):\s+\w`, // unittest
+    String.raw`\bsegmentation fault\b|\bsegfault\b|\bcore dumped\b`,
+    String.raw`\bassertion(error| failed)\b`,
+  ].join("|"),
+  "im",
+);
+const TRIVIAL_ERROR_CONTEXT = /\b(no error|0 errors|0 failed|without error|error handling|error boundary|on error|error:\s*null|errors?:\s*\[\s*\]|errors?:\s*0\b)/i;
 
 /**
  * Detect an error signal in a tool result and return a stable signature +
@@ -206,10 +231,15 @@ const TRIVIAL_ERROR_CONTEXT = /\b(no error|0 errors|without error|error handling
  */
 export function detectToolError(text: string): { signature: string; excerpt: string } | undefined {
   if (text.length === 0) return undefined;
-  const match = text.match(ERROR_LINE);
+  const match = text.match(STRONG_ERROR_LINE);
   if (match === null) return undefined;
-  const line = match[0].trim();
+  const lineStart = text.lastIndexOf("\n", match.index ?? 0) + 1;
+  const lineEnd = text.indexOf("\n", match.index ?? 0);
+  const line = text.slice(lineStart, lineEnd < 0 ? undefined : lineEnd).trim();
   if (TRIVIAL_ERROR_CONTEXT.test(line)) return undefined;
+  // A traceback that is merely QUOTED inside a successful listing is not a failure
+  // of this command; require it to be near the end of the output.
+  if (/^Traceback/.test(line) && text.length - (match.index ?? 0) > 6_000) return undefined;
   const excerpt = line.length > 240 ? `${line.slice(0, 237)}...` : line;
   // Signature ignores paths, then digits, so repeated variants of the same
   // failure (different file, line number, pid) collapse to one signature.
