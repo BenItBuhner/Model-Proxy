@@ -15,6 +15,8 @@ describe("kernel-bench graders", () => {
     expect(gradeExact("FINAL: Yes.", "yes").correct).toBe(true);
     expect(gradeExact("FINAL: 1,024", "1024").correct).toBe(true);
     expect(gradeExact("FINAL: valid", "invalid").correct).toBe(false);
+    expect(gradeExact("FINAL: <no, no, yes>", "no, no, yes").correct).toBe(true);
+    expect(gradeExact("FINAL: [yes,unknown, yes]", "yes, unknown, yes").correct).toBe(true);
   });
 
   it("grades finance answers with a relative tolerance and percent-scale equivalence", () => {

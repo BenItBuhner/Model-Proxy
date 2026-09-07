@@ -268,11 +268,13 @@ export function normalizeExact(raw: string): string {
   s = s.replace(/^(the\s+)?(final\s+)?answer\s*(is)?\s*[:：]?\s*/i, "");
   s = s.replace(/[.!]+$/g, "").trim();
   s = s.replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
+  // Some tasks ask for "<a, b, c>" style answers: the wrapper is format, not content.
+  s = s.replace(/^<(.*)>$/s, "$1").replace(/^\[(.*)\]$/s, "$1").trim();
   s = s.replace(/^\(([a-z])\)$/i, "$1");
   s = s.toLowerCase().replace(/\s+/g, " ");
-  const num = s.replace(/,/g, "");
+  const num = s.replace(/,/g, "").replace(/\s+/g, "");
   if (/^-?\d+(\.\d+)?$/.test(num)) return String(Number(num));
-  return s;
+  return s.replace(/\s*,\s*/g, ", ");
 }
 
 export function gradeExact(text: string, expected: string): { predicted: string | undefined; correct: boolean } {
