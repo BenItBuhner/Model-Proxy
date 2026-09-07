@@ -8,15 +8,20 @@
  *   bun run benchmarks/kernel-bench/report.ts --in /tmp/kernel-bench/results.jsonl --out report.txt --json report.json
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { gradeMc, gradeNumeric, gradeYesNo } from "./graders.ts";
+import { gradeNumericTolerant, gradeExact, gradeMc, gradeNumeric, gradeYesNo } from "./graders.ts";
 import { RUN_VERSION, type ModelRun } from "./types.ts";
 
 /** Re-grade text-answer rows from stored content so grader fixes apply retroactively (code rows keep their executed result). */
 function regrade(row: ModelRun): ModelRun {
   if (!row.ok || row.expected === undefined || row.content.length === 0) return row;
-  if (row.kind === "numeric") { const g = gradeNumeric(row.content, row.expected); return { ...row, predicted: g.predicted, correct: g.correct }; }
+  if (row.kind === "numeric") {
+    // FinQA answers are graded with a 1% tolerance and percent-scale equivalence (see loadFinQa).
+    const g = row.suite === "finqa" ? gradeNumericTolerant(row.content, row.expected, 0.01, true) : gradeNumeric(row.content, row.expected);
+    return { ...row, predicted: g.predicted, correct: g.correct };
+  }
   if (row.kind === "mc") { const g = gradeMc(row.content, row.expected); return { ...row, predicted: g.predicted, correct: g.correct }; }
   if (row.kind === "yesno") { const g = gradeYesNo(row.content, row.expected); return { ...row, predicted: g.predicted, correct: g.correct }; }
+  if (row.kind === "exact") { const g = gradeExact(row.content, row.expected); return { ...row, predicted: g.predicted, correct: g.correct }; }
   return row;
 }
 

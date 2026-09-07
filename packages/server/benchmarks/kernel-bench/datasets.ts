@@ -55,6 +55,19 @@ async function hfRows(params: { dataset: string; config: string; split: string; 
   throw new Error(`HF ${endpoint} ${params.dataset}/${params.config} failed: ${lastError}`);
 }
 
+/** Fetch a raw URL (GitHub raw, etc.) as text with the same local cache. */
+async function cachedText(url: string): Promise<string> {
+  const key = createHash("sha256").update(url).digest("hex").slice(0, 24);
+  mkdirSync(CACHE_DIR, { recursive: true });
+  const cachePath = join(CACHE_DIR, `${key}.txt`);
+  if (existsSync(cachePath)) return readFileSync(cachePath, "utf8");
+  const res = await fetch(url, { signal: AbortSignal.timeout(120_000) });
+  if (!res.ok) throw new Error(`fetch ${url} failed: ${res.status}`);
+  const text = await res.text();
+  writeFileSync(cachePath, text, "utf8");
+  return text;
+}
+
 /** Deterministic sample of `n` rows (seeded shuffle) so reruns and models see the same items. */
 function sample<T>(rows: T[], n: number, seed: string): T[] {
   const scored = rows.map((row, index) => ({ row, key: createHash("sha256").update(`${seed}:${index}`).digest("hex") }));
@@ -333,6 +346,108 @@ export async function loadLegalBenchContractQa(n: number): Promise<BenchItem[]> 
   );
 }
 
+// ── Reasoning: BIG-Bench Extra Hard ──────────────────────────────────
+
+const BBEH_TASKS = [
+  "bbeh_boardgame_qa", "bbeh_boolean_expressions", "bbeh_buggy_tables", "bbeh_causal_understanding", "bbeh_disambiguation_qa",
+  "bbeh_dyck_languages", "bbeh_geometric_shapes", "bbeh_hyperbaton", "bbeh_linguini", "bbeh_movie_recommendation",
+  "bbeh_multistep_arithmetic", "bbeh_nycc", "bbeh_object_counting", "bbeh_object_properties", "bbeh_sarc_triples",
+  "bbeh_shuffled_objects", "bbeh_spatial_reasoning", "bbeh_sportqa", "bbeh_temporal_sequence", "bbeh_time_arithmetic",
+  "bbeh_web_of_lies", "bbeh_word_sorting", "bbeh_zebra_puzzles",
+];
+const EXACT_INSTRUCTION =
+  "Reason carefully, then end your response with one final line of the exact form `FINAL: <answer>` where <answer> is only the answer in the format the task asks for (a number, a word, a letter option in parentheses such as (B), Yes/No, or a list) — nothing else on that line. Do not put anything after that line.";
+
+/** BBEH: `perTask` examples from each of the 23 tasks (deterministic), graded by normalized exact match. */
+export async function loadBbeh(n: number): Promise<BenchItem[]> {
+  const perTask = Math.max(1, Math.round(n / BBEH_TASKS.length));
+  const items: BenchItem[] = [];
+  for (const task of BBEH_TASKS) {
+    const raw = await cachedText(`https://raw.githubusercontent.com/google-deepmind/bbeh/main/bbeh/benchmark_tasks/${task}/task.json`);
+    const examples = (JSON.parse(raw) as { examples: Array<{ input: string; target: string }> }).examples.map((e, i) => ({ ...e, i }));
+    for (const e of sample(examples, perTask, `bbeh:${task}`)) {
+      items.push(item({ suite: "bbeh", index: `${task.replace(/^bbeh_/, "")}-${e.i}`, domain: "reasoning", kind: "exact", user: `${e.input.trim()}\n\n${EXACT_INSTRUCTION}`, answer: e.target, meta: { task } }));
+    }
+  }
+  return items.slice(0, Math.max(n, items.length));
+}
+
+// ── Finance: FinQA ───────────────────────────────────────────────────
+
+interface FinQaRow { id: string; pre_text: string[]; post_text: string[]; table: string[][]; qa: { question: string; exe_ans: unknown; answer?: string } }
+
+/** FinQA test set: numeric reasoning over 10-K text + table. Percent-form answers are accepted at either scale (see gradeItem). */
+export async function loadFinQa(n: number): Promise<BenchItem[]> {
+  const rows = JSON.parse(await cachedText("https://raw.githubusercontent.com/czyssrs/FinQA/main/dataset/test.json")) as FinQaRow[];
+  const usable = rows.filter((r) => typeof r.qa?.exe_ans === "number" || (typeof r.qa?.exe_ans === "string" && /^-?[\d.]+$/.test(r.qa.exe_ans)));
+  return sample(usable, n, "finqa").map((r) =>
+    item({
+      suite: "finqa",
+      index: r.id.replace(/[^A-Za-z0-9_.-]/g, "_"),
+      domain: "finance",
+      kind: "numeric",
+      user: [
+        "You are given an excerpt from a company's annual report (text before the table, the table, text after the table) and a question. Compute the answer from the data given.",
+        "",
+        "TEXT BEFORE TABLE:", r.pre_text.join(" "),
+        "",
+        "TABLE:", r.table.map((row) => row.join(" | ")).join("\n"),
+        "",
+        "TEXT AFTER TABLE:", r.post_text.join(" "),
+        "",
+        `QUESTION: ${r.qa.question}`,
+        "",
+        "Answer with a single number. Percentages: give the percentage value (e.g. 12.5 for 12.5%), unless the question asks for a ratio or a decimal. Use the units the question implies (e.g. millions if the table is in millions). Reason concisely, then end with one final line of the exact form `FINAL: <number>` and nothing after it.",
+      ].join("\n"),
+      answer: String(r.qa.exe_ans),
+      meta: { tolerance: 0.01, percentScale: true, question: r.qa.question },
+    }),
+  );
+}
+
+// ── Legal: LegalBench hard tasks ─────────────────────────────────────
+
+/** SARA numeric: compute a taxpayer's liability from the statute text and a case description (exact dollar amount). */
+export async function loadLegalBenchSaraNumeric(n: number): Promise<BenchItem[]> {
+  const rows = await hfRows({ dataset: "nguha/legalbench", config: "sara_numeric", split: "test", length: 100 });
+  return sample(rows, n, "legalbench-sara_numeric").map((r) =>
+    item({
+      suite: "legalbench-sara_numeric",
+      index: String(r.row["index"] ?? r.row_idx),
+      domain: "legal",
+      kind: "numeric",
+      user: `Apply the statute below to the facts and compute the exact amount asked for. Follow the statute's text literally (it is a simplified version of the US tax code); do not use outside knowledge of real tax rates.\n\nSTATUTE:\n${String(r.row["statute"]).replace(/<br>/g, "\n")}\n\nFACTS: ${String(r.row["description"])}\n\nQUESTION: ${String(r.row["question"])}\n\nReason step by step through the applicable sections, then end with one final line of the exact form \`FINAL: <amount>\` (a whole-dollar integer, no symbols) and nothing after it.`,
+      answer: String(r.row["answer"]).replace(/[$,]/g, ""),
+    }),
+  );
+}
+
+/** SCALR: match a Supreme Court question to the correct holding (5-way MC). */
+export async function loadLegalBenchScalr(n: number): Promise<BenchItem[]> {
+  const rows = await hfRows({ dataset: "nguha/legalbench", config: "scalr", split: "test", length: 100 });
+  const letters = ["A", "B", "C", "D", "E"];
+  return sample(rows, n, "legalbench-scalr").map((r) =>
+    item({
+      suite: "legalbench-scalr",
+      index: String(r.row["index"] ?? r.row_idx),
+      domain: "legal",
+      kind: "mc",
+      user: `The question below was presented to the US Supreme Court. Which of the following holdings answers it?\n\nQUESTION PRESENTED: ${String(r.row["question"])}\n\n${letters.map((l, i) => `(${l}) ${String(r.row[`choice_${i}`])}`).join("\n\n")}\n\n${MC_INSTRUCTION}`,
+      answer: letters[Number(r.row["answer"])] ?? "?",
+    }),
+  );
+}
+
+// ── Math beyond Apex: MathArena Apex shortlist ────────────────────────
+
+/** MathArena Apex shortlist: the wider pool of 2025 olympiad problems the Apex set was drawn from. */
+export async function loadApexShortlist(n: number): Promise<BenchItem[]> {
+  const rows = await hfRows({ dataset: "MathArena/apex-shortlist", config: "default", split: "train", length: 100 });
+  return sample(rows, n, "apex-shortlist").map((r) =>
+    item({ suite: "apex-shortlist", index: String(r.row["problem_idx"]), domain: "math", kind: "numeric", user: `${String(r.row["problem"])}\n\n${NUMERIC_INSTRUCTION}`, answer: String(r.row["answer"]), meta: { source: r.row["source"] } }),
+  );
+}
+
 // ── Creativity (open-ended; judged pairwise) ───────────────────────────
 
 const CREATIVE_PROMPTS: Array<{ id: string; prompt: string }> = [
@@ -380,6 +495,11 @@ export type SuiteName =
   | "humaneval"
   | "legalbench-hearsay"
   | "legalbench-contract_qa"
+  | "legalbench-sara_numeric"
+  | "legalbench-scalr"
+  | "bbeh"
+  | "finqa"
+  | "apex-shortlist"
   | "creative";
 
 export const ALL_SUITES: SuiteName[] = [
@@ -387,7 +507,7 @@ export const ALL_SUITES: SuiteName[] = [
   "supergpqa-physics", "supergpqa-chemistry", "supergpqa-biology",
   "mmlu-physics", "mmlu-chemistry", "mmlu-biology",
   "mmlu-law", "mmlu-business", "mmlu-economics", "mmlu-computer_science",
-  "humaneval", "legalbench-hearsay", "legalbench-contract_qa", "creative",
+  "humaneval", "legalbench-hearsay", "legalbench-contract_qa", "legalbench-sara_numeric", "legalbench-scalr", "bbeh", "finqa", "apex-shortlist", "creative",
 ];
 
 export async function loadSuite(name: SuiteName, n: number): Promise<BenchItem[]> {
@@ -415,6 +535,11 @@ export async function loadSuite(name: SuiteName, n: number): Promise<BenchItem[]
     case "bcbhard": return loadBigCodeBenchHard(n);
     case "legalbench-hearsay": return loadLegalBenchHearsay(n);
     case "legalbench-contract_qa": return loadLegalBenchContractQa(n);
+    case "legalbench-sara_numeric": return loadLegalBenchSaraNumeric(n);
+    case "legalbench-scalr": return loadLegalBenchScalr(n);
+    case "bbeh": return loadBbeh(n);
+    case "finqa": return loadFinQa(n);
+    case "apex-shortlist": return loadApexShortlist(n);
     case "creative": return loadCreativity(n);
   }
 }

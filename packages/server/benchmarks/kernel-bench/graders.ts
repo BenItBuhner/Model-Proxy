@@ -262,14 +262,53 @@ export function gradeGrid(text: string, expected: string): { predicted: string |
   return { predicted: `${grid.length}x${grid[0]?.length ?? 0}${correct ? "" : " (mismatch)"}`, correct };
 }
 
+/** Normalized exact match (BBEH-style): case/space/punctuation-insensitive, "(B)" ≡ "B", numbers compared numerically. */
+export function normalizeExact(raw: string): string {
+  let s = raw.trim().replace(/\*\*/g, "").replace(/^`+|`+$/g, "").trim();
+  s = s.replace(/^(the\s+)?(final\s+)?answer\s*(is)?\s*[:：]?\s*/i, "");
+  s = s.replace(/[.!]+$/g, "").trim();
+  s = s.replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
+  s = s.replace(/^\(([a-z])\)$/i, "$1");
+  s = s.toLowerCase().replace(/\s+/g, " ");
+  const num = s.replace(/,/g, "");
+  if (/^-?\d+(\.\d+)?$/.test(num)) return String(Number(num));
+  return s;
+}
+
+export function gradeExact(text: string, expected: string): { predicted: string | undefined; correct: boolean } {
+  const line = extractFinalLine(text);
+  const predicted = line ?? text.trim().split("\n").filter((l) => l.trim().length > 0).pop();
+  if (predicted === undefined) return { predicted: undefined, correct: false };
+  return { predicted, correct: normalizeExact(predicted) === normalizeExact(expected) };
+}
+
+/** Numeric grading with a relative tolerance and optional percent-scale equivalence (finance answers). */
+export function gradeNumericTolerant(text: string, expected: string, tolerance: number, percentScale: boolean): { predicted: string | undefined; correct: boolean } {
+  const strict = gradeNumeric(text, expected);
+  if (strict.correct) return strict;
+  const predicted = strict.predicted;
+  if (predicted === undefined) return strict;
+  const p = evaluateMathAnswer(normalizeMathAnswer(predicted.replace(/%/g, "")));
+  const e = evaluateMathAnswer(normalizeMathAnswer(expected));
+  if (p === undefined || e === undefined) return strict;
+  const close = (a: number, b: number) => Math.abs(a - b) <= Math.max(tolerance * Math.abs(b), 0.011);
+  const candidates = percentScale ? [e, e * 100, e / 100] : [e];
+  return { predicted, correct: candidates.some((c) => close(p, c)) };
+}
+
 export async function gradeItem(item: BenchItem, text: string): Promise<{ predicted?: string; expected?: string; correct?: boolean; detail?: string }> {
   switch (item.kind) {
+    case "exact": {
+      const g = gradeExact(text, item.answer ?? "");
+      return { predicted: g.predicted, expected: item.answer, correct: g.correct };
+    }
     case "grid": {
       const g = gradeGrid(text, item.answer ?? "");
       return { predicted: g.predicted, expected: `${(JSON.parse(item.answer ?? "[]") as number[][]).length} rows`, correct: g.correct };
     }
     case "numeric": {
-      const g = gradeNumeric(text, item.answer ?? "");
+      const tol = typeof item.meta?.["tolerance"] === "number" ? (item.meta["tolerance"] as number) : undefined;
+      const g = tol !== undefined ? gradeNumericTolerant(text, item.answer ?? "", tol, item.meta?.["percentScale"] === true) : gradeNumeric(text, item.answer ?? "");
       return { predicted: g.predicted, expected: item.answer, correct: g.correct };
     }
     case "mc": {
