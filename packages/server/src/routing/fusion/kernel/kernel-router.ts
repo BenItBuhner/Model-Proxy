@@ -673,10 +673,19 @@ export class FusionKernel {
     // applies even before the numeric quorum (e.g. when the remaining
     // proposers are all from one slow family).
     const vote = buildAnswerVote(usable, [], { verifiedWeight: run.kcfg.execution_verified_weight });
-    if (vote?.leader !== undefined && vote.unanimous && vote.leader.families.length >= 2 && run.confirmedAnswerKeys.has(vote.leader.key)) return true;
+    // Per-domain family requirement for an early settle (hard math: 3, so a
+    // pair agreeing on the same wrong number cannot cancel the third voice).
+    const minFamilies = this.minSettleFamilies(run);
+    if (vote?.leader !== undefined && vote.unanimous && vote.leader.families.length >= minFamilies && run.confirmedAnswerKeys.has(vote.leader.key)) return true;
     if (!quorumReached) return false;
+    if (minFamilies > 2 && vote?.leader !== undefined && vote.leader.families.length < minFamilies && settled.length < run.pool.proposerFamilyCount) return false;
     const pre = buildConsensus(usable, []);
     return pre.claimConsensus >= run.kcfg.agreement_threshold;
+  }
+
+  /** Families that must agree before a settle counts as consensus in this run's domains (default 2). */
+  private minSettleFamilies(run: KernelRun): number {
+    return Math.max(2, ...run.domains.map((d) => run.kcfg.early_settle_min_families_by_domain[d] ?? 2));
   }
 
   /** Verification-wave early settle: every settled verdict accepts and at least two candidates were verified. */
@@ -1201,6 +1210,7 @@ export class FusionKernel {
         agreementThreshold: kcfg.agreement_threshold,
         novelClaimsLastWave: novel,
         familyCount: run.pool.proposerFamilyCount,
+        minSettleFamilies: this.minSettleFamilies(run),
       });
       if (run.agentic) {
         // Planning wave done: the environment, not another wave, answers the open questions.
@@ -1227,7 +1237,7 @@ export class FusionKernel {
           // (deadline + one wave) rather than settle on the leader.
           const extensionMs = kcfg.contested_extension_seconds * 1000;
           // One voter is not a consensus (the rest of the wave timed out): contested too.
-          const contested = consensus.answerVote === undefined || !consensus.answerVote.unanimous || consensus.answerVote.voters < 2;
+          const contested = consensus.answerVote === undefined || !consensus.answerVote.unanimous || consensus.answerVote.voters < this.minSettleFamilies(run);
           if (!run.extended && run.band !== "max" && extensionMs > 0 && contested && !run.agentic && this.remainingSearchMs(run) + extensionMs >= needed) {
             run.extended = true;
             run.searchDeadlineAt += extensionMs;

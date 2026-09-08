@@ -263,6 +263,13 @@ export const FusionKernelConfigSchema = z
      * were exactly this: members had the answer, the F3 clock ran out.
      */
     contested_extension_seconds: z.number().int().min(0).max(3600).default(0),
+    /**
+     * Families that must share the leading answer before a wave settles early
+     * and cancels its stragglers, per task domain (default 2). On frontier
+     * math two families agreeing on the same wrong answer is common enough
+     * that the third voice — often the one that is right — must be heard.
+     */
+    early_settle_min_families_by_domain: z.record(z.string(), z.number().int().min(2).max(6)).default({}),
     /** Hard wall-clock cap per synthesis attempt; on expiry the kernel moves to the next synthesizer or the best verified candidate. */
     synthesis_timeout_seconds: z.number().int().min(30).max(3600).default(600),
     /**

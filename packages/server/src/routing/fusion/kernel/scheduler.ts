@@ -78,13 +78,21 @@ export function decideEscalation(args: {
   agreementThreshold: number;
   novelClaimsLastWave: number;
   familyCount: number;
+  /** Families that must back the leading answer for the vote to count as settled (domain policy; default 2). */
+  minSettleFamilies?: number;
 }): EscalationDecision {
   const { consensus, wave, widths, agreementThreshold, novelClaimsLastWave, familyCount } = args;
+  const minSettle = Math.min(args.minSettleFamilies ?? 2, familyCount);
   if (wave >= widths.maxWaves) {
     return { escalate: false, reason: `wave budget reached (${wave}/${widths.maxWaves})` };
   }
   if (consensus.familiesAnswered === 0) {
     return { escalate: true, reason: "no usable proposals; retrying with a different strategy" };
+  }
+  const leaderFamilies = consensus.answerVote?.leader?.families.filter((f) => !f.startsWith("verifier:")).length ?? consensus.familiesAnswered;
+  if (consensus.agreement >= agreementThreshold && leaderFamilies < minSettle && consensus.answerVote?.leader !== undefined) {
+    // Agreement among too few families for this domain (e.g. two on hard math): hear another voice.
+    return { escalate: true, reason: `leading answer backed by ${leaderFamilies} famil${leaderFamilies === 1 ? "y" : "ies"} (< ${minSettle} required in this domain); widening` };
   }
   if (consensus.agreement >= agreementThreshold) {
     return { escalate: false, reason: `agreement ${consensus.agreement} ≥ threshold ${agreementThreshold}` };

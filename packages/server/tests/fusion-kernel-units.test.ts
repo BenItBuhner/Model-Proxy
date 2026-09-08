@@ -447,6 +447,7 @@ describe("kernel scheduler", () => {
     agentic_search_deadline_seconds: 240,
     agentic_band: "F2",
     contested_extension_seconds: 0,
+    early_settle_min_families_by_domain: {},
     synthesis_timeout_seconds: 600,
     worker_reasoning_effort: {},
     worker_timeout_seconds: 300,
@@ -497,6 +498,19 @@ describe("kernel scheduler", () => {
     expect(decideEscalation({ consensus: { ...base, agreement: 0.7 }, wave: 1, widths, agreementThreshold: 0.62, novelClaimsLastWave: 3, familyCount: 3 }).escalate).toBe(false);
     expect(decideEscalation({ consensus: base, wave: 2, widths, agreementThreshold: 0.62, novelClaimsLastWave: 0, familyCount: 3 }).escalate).toBe(false);
     expect(decideEscalation({ consensus: base, wave: 3, widths, agreementThreshold: 0.62, novelClaimsLastWave: 2, familyCount: 3 }).escalate).toBe(false);
+  });
+
+  it("keeps escalating while the leading answer is backed by fewer families than the domain requires", () => {
+    const widths = widthsFor(kcfg, "F3", 5);
+    const vote = { leader: { key: "1", answer: "1", weight: 2, families: ["deepseek", "mimo"], executionVerified: 0 }, leaderShare: 1, unanimous: true, voters: 2, entries: [{ key: "1", answer: "1", weight: 2, families: ["deepseek", "mimo"], executionVerified: 0 }] };
+    const consensus = { agreement: 0.8, claimConsensus: 0.8, verifierAcceptRate: 1, accepted: [], disputed: [], rejected: [], openIssues: [], familiesAnswered: 2, answerVote: vote } as unknown as Parameters<typeof decideEscalation>[0]["consensus"];
+    // Default policy (2 families) settles; the hard-math policy (3) widens to hear a third voice.
+    expect(decideEscalation({ consensus, wave: 1, widths, agreementThreshold: 0.62, novelClaimsLastWave: 3, familyCount: 5 }).escalate).toBe(false);
+    const widened = decideEscalation({ consensus, wave: 1, widths, agreementThreshold: 0.62, novelClaimsLastWave: 3, familyCount: 5, minSettleFamilies: 3 });
+    expect(widened.escalate).toBe(true);
+    expect(widened.reason).toContain("< 3 required");
+    // With only two families in the pool the requirement is capped at the pool size.
+    expect(decideEscalation({ consensus, wave: 1, widths, agreementThreshold: 0.62, novelClaimsLastWave: 3, familyCount: 2, minSettleFamilies: 3 }).escalate).toBe(false);
   });
 
   it("rotates proposers across families and never verifies a family with itself when others exist", () => {
