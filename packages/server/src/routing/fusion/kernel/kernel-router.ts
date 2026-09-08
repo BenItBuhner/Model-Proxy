@@ -606,7 +606,9 @@ export class FusionKernel {
     const configFingerprint = stableHash({ kernel: kcfg, synthesis: ctx.fusionConfig.fusion.model_routing }).slice(0, 16);
     // Domain-specific executor: for tool loops the acting model matters more than
     // the synthesizer's prose quality (measured on SWE-bench Verified).
-    const domainExecutor = domainHint.domains.map((d) => kcfg.executor_routing_by_domain[d]).find((r): r is string => r !== undefined);
+    const rotationChain = domainHint.domains.map((d) => kcfg.executor_rotation_by_domain[d]).find((c): c is string[] => c !== undefined);
+    const rotated = rotationChain !== undefined && (ledger.executorRotation ?? 0) > 0 ? rotationChain[Math.min(ledger.executorRotation ?? 0, rotationChain.length - 1)] : undefined;
+    const domainExecutor = rotated ?? domainHint.domains.map((d) => kcfg.executor_routing_by_domain[d]).find((r): r is string => r !== undefined);
     const synthesisRouting = (Array.isArray(requestTools) && requestTools.length > 0 ? domainExecutor : undefined) ?? kcfg.synthesis_routing ?? ctx.fusionConfig.fusion.model_routing;
     const fastRouting = ctx.fusionConfig.effort_levels[1].model_routing;
     const deepTask = ledger.lastSearch !== undefined || runtimeEffort >= 2;
@@ -2344,7 +2346,17 @@ export class FusionKernel {
         this.work.recordNegative(run.ledger.conversationId, replan.errorSignature, "repair_exhausted", replan.errorExcerpt ?? "tool error");
         this.pushNegative(run, replan.errorSignature, "repair_exhausted", `${replan.errorExcerpt ?? "tool error"} (repeated ${attempts + 1}×)`, attempts + 1);
         run.repair = { signature: replan.errorSignature, attempts: attempts + 1, exhausted: true };
-        await run.narrator.say("Kernel: this failure repeated after a repair attempt; forcing a strategy change instead of another repair wave.");
+        // The executor keeps hitting the same wall: rotate to the next family
+        // in the domain chain for the rest of the task (takes effect next step).
+        const chain = run.domains.map((d) => kcfg.executor_rotation_by_domain[d]).find((c): c is string[] => c !== undefined);
+        if (chain !== undefined && (run.ledger.executorRotation ?? 0) < chain.length - 1) {
+          run.ledger.executorRotation = (run.ledger.executorRotation ?? 0) + 1;
+          const next = chain[run.ledger.executorRotation]!;
+          log.info("kernel executor rotation", { conversationId: run.ledger.conversationId, from: run.executorRouting, to: next, signature: replan.errorSignature });
+          await run.narrator.say(`Kernel: this failure repeated after a repair attempt; handing the loop to ${next} for the rest of the task.`);
+        } else {
+          await run.narrator.say("Kernel: this failure repeated after a repair attempt; forcing a strategy change instead of another repair wave.");
+        }
       }
     }
 

@@ -69,6 +69,7 @@ const kernelConfig: FusionConfig = {
     compute_scratchpad_domains: ["math", "science"],
     compute_scratchpad_bands: ["max"],
     executor_routing_by_domain: {},
+    executor_rotation_by_domain: {},
     compute_timeout_seconds: 30,
     compute_rounds: 2,
     agentic_search_deadline_seconds: 240,
@@ -479,6 +480,27 @@ describe("Fusion kernel engine", () => {
     // The steer is folded into the executor's goal.
     const execText = allText(captured.synthesis[captured.synthesis.length - 1]!["messages"] as unknown[]);
     expect(execText).toContain("Steer: Continue using the tools");
+  });
+
+  it("rotates the tool-loop executor to the next family in the domain chain once a repair signature is exhausted", async () => {
+    const conversationId = `conv-rotate-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured, { synthesisToolCall: true });
+    const cfg = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, executor_routing_by_domain: { swe: "deepseek-v4-pro-0813" }, executor_rotation_by_domain: { swe: ["deepseek-v4-pro-0813", "glm-5.3"] } } };
+    const route = async (messages: unknown[]) => { const ctx = makeCtx(messages, conversationId); ctx.fusionConfig = cfg; return router.route(ctx); };
+    const turn1 = [SYSTEM, { role: "user", content: GOAL }];
+    const first = await route(turn1);
+    expect(String(captured.synthesis[captured.synthesis.length - 1]!["model"])).toBe("up-deepseek");
+    const fail = (id: string) => ({ role: "tool", tool_call_id: id, content: "error: Cannot find module './auth-old' imported from tests/auth.test.ts\nexit code 1" });
+    const turn2 = [...turn1, { role: "assistant", content: null, tool_calls: first.toolCalls }, fail("call_1")];
+    const second = await route(turn2); // first sighting → repair wave, executor still deepseek
+    expect(String(captured.synthesis[captured.synthesis.length - 1]!["model"])).toBe("up-deepseek");
+    const turn3 = [...turn2, { role: "assistant", content: null, tool_calls: second.toolCalls }, fail("call_2")];
+    const third = await route(turn3); // repeated → repair exhausted → rotation recorded
+    expect((third.fusionTrace?.kernel?.["repair"] as Record<string, unknown>)["exhausted"]).toBe(true);
+    const turn4 = [...turn3, { role: "assistant", content: null, tool_calls: third.toolCalls }, { role: "tool", tool_call_id: "call_3", content: "ok\n[exit 0]" }];
+    await route(turn4);
+    expect(String(captured.synthesis[captured.synthesis.length - 1]!["model"])).toBe("up-glm");
   });
 
   it("with repair_after_sightings=2 the first failure is left to the executor and the repeat triggers the repair wave", async () => {

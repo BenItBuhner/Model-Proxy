@@ -442,6 +442,7 @@ describe("kernel scheduler", () => {
     compute_scratchpad_domains: ["math", "science"],
     compute_scratchpad_bands: ["max"],
     executor_routing_by_domain: {},
+    executor_rotation_by_domain: {},
     compute_timeout_seconds: 30,
     compute_rounds: 2,
     agentic_search_deadline_seconds: 240,

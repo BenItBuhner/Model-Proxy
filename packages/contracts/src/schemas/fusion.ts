@@ -191,6 +191,13 @@ export const FusionKernelConfigSchema = z
     synthesis_routing: z.string().min(1).optional(),
     /** Executor/synthesizer routing per task domain (e.g. { swe: "deepseek-v4-pro-0813" }): the member that acts best in that domain drives tool loops there. */
     executor_routing_by_domain: z.record(z.string(), z.string().min(1)).default({}),
+    /**
+     * Executor rotation per domain: when a tool loop exhausts its repair budget
+     * on one failure signature (the executor keeps hitting the same wall), the
+     * kernel hands the loop to the next routing in this chain for the rest of
+     * the task. First entry should match executor_routing_by_domain.
+     */
+    executor_rotation_by_domain: z.record(z.string(), z.array(z.string().min(1)).min(1)).default({}),
     /** Fast, cheap routing for intent extraction and light structured passes. Defaults to the summarizer routing. */
     fast_routing: z.string().min(1).optional(),
     /** `reasoning_effort` forwarded to the synthesis/executor model (unset = model default, i.e. deepest). */

@@ -86,6 +86,8 @@ export interface KernelLedger {
   continuationSteps: number;
   /** Sightings per tool-error signature in this task (a repair wave fires on repeats, not first sight). */
   errorSightings?: Record<string, number>;
+  /** Executor rotation index for this task (advanced when a repair signature is exhausted). */
+  executorRotation?: number;
   /** Total continuation steps for the active task (observability). */
   totalContinuationSteps: number;
   lastSearch?: KernelSearchRecord;
