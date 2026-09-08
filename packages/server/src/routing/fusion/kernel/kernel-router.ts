@@ -1480,6 +1480,7 @@ export class FusionKernel {
       ].join("\n\n");
       await run.narrator.say(`Kernel: ${verified.length} verified program(s) disagree with two families' direct reads; running a discrimination wave.`);
       const judges = await this.proposalWave(ctx, run, intent, ledgerView, wave, widths, taskStartIndex, note, "proposer", Math.min(widths.proposals, 3));
+      for (const p of judges) p.judge = true;
       await Promise.all(judges.filter((p) => p.success).map(check));
       extra.push(...judges);
       for (const p of judges) if (p.execution?.verified === true && p.finalAnswer !== undefined && !run.verifiedPool.includes(p)) run.verifiedPool.push(p);
@@ -1504,6 +1505,7 @@ export class FusionKernel {
       ].join("\n\n");
       await run.narrator.say(`Kernel: ${groups.size} verified rules disagree on the test output; running a discrimination wave.`);
       const judges = await this.proposalWave(ctx, run, intent, ledgerView, wave, widths, taskStartIndex, note, "proposer", Math.min(widths.proposals, 3));
+      for (const p of judges) p.judge = true;
       await Promise.all(judges.filter((p) => p.success).map(check));
       extra.push(...judges);
       for (const p of judges) if (p.execution?.verified === true && p.finalAnswer !== undefined && !run.verifiedPool.includes(p)) run.verifiedPool.push(p);
@@ -1540,7 +1542,17 @@ export class FusionKernel {
         if (cur === undefined) counts.set(p.finalAnswer!, { n: 1, shortest: p, firstWave: p.wave });
         else counts.set(p.finalAnswer!, { n: cur.n + 1, shortest: (p.program?.length ?? Infinity) < (cur.shortest.program?.length ?? Infinity) ? p : cur.shortest, firstWave: Math.min(cur.firstWave, p.wave) });
       }
-      const winner = [...counts.entries()].sort((a, b) => b[1].n - a[1].n || a[1].firstWave - b[1].firstWave || (a[1].shortest.program?.length ?? 0) - (b[1].shortest.program?.length ?? 0))[0]!;
+      let winner = [...counts.entries()].sort((a, b) => b[1].n - a[1].n || a[1].firstWave - b[1].firstWave || (a[1].shortest.program?.length ?? 0) - (b[1].shortest.program?.length ?? 0))[0]!;
+      // Discrimination judges saw the competing rules side by side; a strict
+      // majority among their verified programs overrides the raw program count
+      // (which the pre-discrimination programs would otherwise tie or win).
+      const judgeOutputs = verified.filter((p) => p.judge === true).map((p) => p.finalAnswer!);
+      if (judgeOutputs.length >= 2) {
+        const jc = new Map<string, number>();
+        for (const o of judgeOutputs) jc.set(o, (jc.get(o) ?? 0) + 1);
+        const top = [...jc.entries()].sort((a, b) => b[1] - a[1]);
+        if (top[0]![1] * 2 > judgeOutputs.length && counts.has(top[0]![0])) winner = [top[0]![0], counts.get(top[0]![0])!];
+      }
       run.verifiedArtifact = winner[0];
       run.verifiedExplanation = proseOnly(winner[1].shortest.answer);
       const backingFamilies = new Set(verified.filter((p) => p.finalAnswer === winner[0]).map((p) => p.family));

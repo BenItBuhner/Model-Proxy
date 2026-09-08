@@ -137,6 +137,8 @@ export interface Proposal {
   directCheck?: { holdOut: number };
   /** Direct-answer (verbatim task) proposer, as opposed to a program synthesizer. */
   direct?: boolean;
+  /** Produced in a discrimination wave (saw the competing rules side by side). */
+  judge?: boolean;
   /** Result of executing the program against the task's examples. */
   execution?: { passed: number; total: number; verified: boolean; testOutputs: unknown[]; feedback: string; memorized?: boolean; /** Code tasks: cross-executed against every proposer's tests. */ crossValidated?: boolean; score?: number };
   raw: string;

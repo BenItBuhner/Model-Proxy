@@ -814,6 +814,52 @@ describe("Fusion kernel engine", () => {
     expect(result.content ?? "").not.toContain("[[1,2],[3,4]]");
   });
 
+  it("challenges TWO agreeing verified programs (two families) with two families' direct reads on a 2-pair task", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-twoprog-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[2,1]]\nOutput (2x2):\n[[1,2],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,0],[0,5]]\nOutput (2x2):\n[[5,0],[0,5]]\n\nTest input (2x2):\n[[1,2],[3,4]]";
+    const withProgram = (family: string, rule: string, program: string) =>
+      [`Rule: ${rule}`, "```python", program, "```", "```json", JSON.stringify({ answer_summary: `${family}: ${rule}`, final_answer: null, key_claims: ["Grid rule", "Applies to test", "Consistent"], assumptions: [], risks: [], confidence: 0.6 }), "```"].join("\n");
+    const identity = "def solve(grid):\n    return [list(r) for r in grid]";
+    const transpose = "def solve(grid):\n    return [list(r) for r in zip(*grid)]";
+    let discriminationPrompts = 0;
+    let identityGiven = 0;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        if (allText(messages).includes("EXECUTION FEEDBACK (discrimination)")) {
+          discriminationPrompts += 1;
+          return streamResponse(model, [withProgram(model, "the grid is transposed", transpose)]);
+        }
+        // Two synthesizers (whichever families land first) both fit the examples with identity; the rest fail.
+        if (identityGiven < 2) { identityGiven += 1; return streamResponse(model, [withProgram(model, "the grid is unchanged", identity)]); }
+        return streamResponse(model, [withProgram(model, "mirror left-right", "def solve(grid):\n    return [list(reversed(r)) for r in grid]")]);
+      }
+      if (!system.includes("final model of a multi-model fusion kernel") && !system.includes("adversarial") && allText(messages).includes("Test input")) {
+        return streamResponse(model, ["The grid is transposed.\n```json\n[[1,3],[2,4]]\n```"]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-twoprog-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "max" };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(discriminationPrompts).toBeGreaterThan(0);
+    expect(result.content ?? "").toContain("[[1,3],[2,4]]");
+    expect(result.content ?? "").not.toContain("[[1,2],[3,4]]");
+  });
+
   it("certifies a direct answer by leave-one-out: a reasoner that reproduces the withheld training pair is trusted like a verified program", async () => {
     closeOperationalDbForTests();
     setStorageRootForTests(path.join(tmpRoot, `storage-loo-${Date.now()}`));
