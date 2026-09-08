@@ -544,7 +544,25 @@ export class FusionKernel {
       kcfg.continuation.enabled &&
       ledger.intent !== undefined &&
       (classification.kind === "tool_continuation" || classification.kind === "trivial_ack");
-    if (continuing) mode = "continue";
+    // Steer: in a tool loop with an active task, a short new user message
+    // ("continue", "also run the tests", "use approach B") is guidance for the
+    // executor, not a new task. A search here would stall the agent for the
+    // whole band deadline; the executor sees the message in context instead.
+    const toolsPresentNow = Array.isArray(requestTools) && requestTools.length > 0;
+    const steer =
+      !continuing &&
+      kcfg.continuation.enabled &&
+      toolsPresentNow &&
+      ledger.intent !== undefined &&
+      ledger.totalContinuationSteps > 0 &&
+      (classification.kind === "clarification" || classification.kind === "fresh_task") &&
+      instruction.text.trim().length <= kcfg.continuation.steer_max_chars &&
+      !classification.historyRewritten;
+    if (steer) {
+      ledger.intent = { ...ledger.intent!, goal: `${ledger.intent!.goal}\nSteer: ${instruction.text.trim()}`, goalHash: classification.lastUserHash };
+      log.info("kernel steer: user message in an active tool loop handled as a continuation", { conversationId, chars: instruction.text.trim().length, kind: classification.kind });
+    }
+    if (continuing || steer) mode = "continue";
     else if (classification.kind === "replay" && ledger.intent !== undefined) {
       // Exact replay of the last turn (client retry): reproduce it. A deep
       // task replays its search — every work key hits the cache — while a

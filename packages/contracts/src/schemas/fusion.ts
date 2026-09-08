@@ -349,6 +349,8 @@ export const FusionKernelConfigSchema = z
         repair_after_sightings: z.number().int().min(1).max(5).default(2),
         /** Reasoning effort of the single executor call on tool-continuation steps (the plan is already in the brief). */
         executor_reasoning_effort: z.enum(["low", "medium", "high"]).default("medium"),
+        /** In a tool loop with an active task, a new user message up to this length is a steer for the executor (continuation), not a new task (search). 0 disables. */
+        steer_max_chars: z.number().int().min(0).max(4000).default(400),
       })
       .strict()
       .default({}),

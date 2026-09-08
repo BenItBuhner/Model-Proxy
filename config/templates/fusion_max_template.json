@@ -73,7 +73,8 @@
         "repair_on_error": true,
         "max_repairs_per_signature": 1,
         "repair_after_sightings": 2,
-        "executor_reasoning_effort": "medium"
+        "executor_reasoning_effort": "medium",
+        "steer_max_chars": 400
       },
       "policy_version": 2
     }

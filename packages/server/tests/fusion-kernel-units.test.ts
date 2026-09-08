@@ -461,7 +461,7 @@ describe("kernel scheduler", () => {
     straggler_grace_seconds: 25,
     search_deadline_seconds: { F2: 240, F3: 480, max: 1500 },
     intent_extraction: true,
-    continuation: { enabled: true, max_steps_before_replan: 14, repair_on_error: true, max_repairs_per_signature: 1, repair_after_sightings: 1, executor_reasoning_effort: "medium" },
+    continuation: { enabled: true, max_steps_before_replan: 14, repair_on_error: true, max_repairs_per_signature: 1, repair_after_sightings: 1, executor_reasoning_effort: "medium", steer_max_chars: 400 },
     policy_version: 1,
   };
 

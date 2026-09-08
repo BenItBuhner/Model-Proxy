@@ -88,7 +88,7 @@ const kernelConfig: FusionConfig = {
     straggler_grace_seconds: 5,
     search_deadline_seconds: { F2: 60, F3: 60, max: 60 },
     intent_extraction: true,
-    continuation: { enabled: true, max_steps_before_replan: 3, repair_on_error: true, max_repairs_per_signature: 1, repair_after_sightings: 1, executor_reasoning_effort: "medium" },
+    continuation: { enabled: true, max_steps_before_replan: 3, repair_on_error: true, max_repairs_per_signature: 1, repair_after_sightings: 1, executor_reasoning_effort: "medium", steer_max_chars: 400 },
     policy_version: 1,
   },
 };
@@ -458,6 +458,27 @@ describe("Fusion kernel engine", () => {
     ctx2.fusionConfig = cfg;
     await router.route(ctx2);
     expect(String(captured.synthesis[captured.synthesis.length - 1]!["model"])).toBe("up-deepseek");
+  });
+
+  it("treats a short user message inside an active tool loop as a steer for the executor, not a new search", async () => {
+    const conversationId = `conv-steer-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured, { synthesisToolCall: true });
+    const turn1 = [SYSTEM, { role: "user", content: GOAL }];
+    const first = await router.route(makeCtx(turn1, conversationId));
+    const turn2 = [...turn1, { role: "assistant", content: null, tool_calls: first.toolCalls }, { role: "tool", tool_call_id: "call_1", content: "ok\n[exit 0]" }];
+    const second = await router.route(makeCtx(turn2, conversationId));
+    expect(second.fusionTrace?.kernel?.["mode"]).toBe("continue");
+    const before = { proposer: captured.proposer.length, synthesis: captured.synthesis.length };
+    // The client (or user) nudges mid-task: this must not restart planning.
+    const turn3 = [...turn2, { role: "assistant", content: null, tool_calls: second.toolCalls }, { role: "tool", tool_call_id: "call_1", content: "ok\n[exit 0]" }, { role: "user", content: "Continue using the tools. When the fix is complete and verified, call submit." }];
+    const third = await router.route(makeCtx(turn3, conversationId));
+    expect(third.fusionTrace?.kernel?.["mode"]).toBe("continue");
+    expect(captured.proposer.length).toBe(before.proposer);
+    expect(captured.synthesis.length).toBe(before.synthesis + 1);
+    // The steer is folded into the executor's goal.
+    const execText = allText(captured.synthesis[captured.synthesis.length - 1]!["messages"] as unknown[]);
+    expect(execText).toContain("Steer: Continue using the tools");
   });
 
   it("with repair_after_sightings=2 the first failure is left to the executor and the repeat triggers the repair wave", async () => {
