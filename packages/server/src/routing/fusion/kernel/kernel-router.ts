@@ -635,7 +635,7 @@ export class FusionKernel {
       persist,
       narrator,
       semaphore: new Semaphore(kcfg.max_concurrency),
-      pool: this.poolFor(kcfg, configFingerprint),
+      pool: this.poolFor(kcfg, configFingerprint, new Set<string>([...domainHint.domains, ...(Array.isArray(requestTools) && requestTools.length > 0 ? ["agentic"] : []), ...(domainHint.domains.length === 0 ? ["general"] : [])])),
       startedAt,
       executorRouting,
       fastRouting,
@@ -857,19 +857,33 @@ export class FusionKernel {
     return Math.max(15_000, Math.min(seconds * 1000, this.remainingSearchMs(run)));
   }
 
-  private poolFor(kcfg: FusionKernelConfig, fingerprint: string): ModelPool {
-    const existing = this.pools.get(fingerprint);
+  private poolFor(kcfg: FusionKernelConfig, fingerprint: string, kinds?: Set<string>): ModelPool {
+    // Families scoped with only_for join only runs whose task kinds intersect.
+    const scoped = kinds === undefined ? kcfg.families : kcfg.families.filter((f) => f.only_for === undefined || f.only_for.some((k) => kinds.has(k)));
+    const active = scoped.length > 0 ? scoped : kcfg.families.filter((f) => f.only_for === undefined);
+    const key = `${fingerprint}|${active.map((f) => f.name).join(",")}`;
+    const existing = this.pools.get(key);
     if (existing !== undefined) return existing;
     // Never let a fusion model act as a worker (unbounded recursion).
-    const safe = kcfg.families.filter((family) => {
+    const safe = active.filter((family) => {
       const routings = [family.routing, ...family.alt_routings];
       const nested = routings.filter((routing) => this.isFusionModel(routing));
       if (nested.length > 0) log.warn("kernel family routes to a fusion model; skipping", { family: family.name, nested });
       return nested.length === 0;
     });
-    const pool = new ModelPool(safe.length > 0 ? safe : kcfg.families);
-    this.pools.set(fingerprint, pool);
+    const pool = new ModelPool(safe.length > 0 ? safe : (active.length > 0 ? active : kcfg.families));
+    this.pools.set(key, pool);
     return pool;
+  }
+
+  /** Task kinds for family scoping: domains plus examples / code / agentic / general. */
+  private taskKinds(run: KernelRun): Set<string> {
+    const kinds = new Set<string>(run.domains);
+    if (run.examples !== undefined) kinds.add("examples");
+    if (run.codeTask !== undefined) kinds.add("code");
+    if (run.toolsPresent) kinds.add("agentic");
+    if (kinds.size === 0) kinds.add("general");
+    return kinds;
   }
 
   private isFusionModel(routing: string): boolean {
@@ -1034,6 +1048,8 @@ export class FusionKernel {
       const taskText = messageText(ctx.messages[baseIntent.sourceMessageIndex] ?? ctx.messages[ctx.messages.length - 1]);
       run.examples = extractIoExamples(taskText);
       if (run.examples !== undefined) {
+        // Example-grounded task: families scoped to "examples" join the pool now.
+        run.pool = this.poolFor(kcfg, run.configFingerprint, this.taskKinds(run));
         await run.narrator.say(`Kernel: task carries ${run.examples.examples.length} input/output example(s); candidate programs will be executed against them.`);
       } else {
         // Only for tool-less requests: with tools the primary agent writes and

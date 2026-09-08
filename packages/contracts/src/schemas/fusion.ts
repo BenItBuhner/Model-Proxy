@@ -170,6 +170,14 @@ export const FusionKernelFamilySchema = z
     propose: z.boolean().default(true),
     /** Exclude this family from verifying (propose only). */
     verify: z.boolean().default(true),
+    /**
+     * Task kinds this family joins (omit = all). Kinds: "examples" (input/output
+     * example-grounded tasks such as ARC grids), "code" (tool-less code
+     * synthesis), "agentic" (request carries tools), plus the intent domains
+     * ("math", "science", "swe", "finance", "legal", "reasoning", "general").
+     * Lets a model that helps on grid puzzles stay out of olympiad math votes.
+     */
+    only_for: z.array(z.string().min(1)).optional(),
   })
   .strict();
 

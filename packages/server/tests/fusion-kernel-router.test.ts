@@ -27,6 +27,7 @@ const UPSTREAMS: Record<string, string> = {
   "kimi-k3": "up-kimi",
   "deepseek-v4-pro-0813": "up-deepseek",
   "glm-5.3-flash": "up-flash",
+  "mimo-v2.5-pro": "up-mimo",
   turbo: "up-turbo",
 };
 
@@ -501,6 +502,28 @@ describe("Fusion kernel engine", () => {
     const turn4 = [...turn3, { role: "assistant", content: null, tool_calls: third.toolCalls }, { role: "tool", tool_call_id: "call_3", content: "ok\n[exit 0]" }];
     await route(turn4);
     expect(String(captured.synthesis[captured.synthesis.length - 1]!["model"])).toBe("up-glm");
+  });
+
+  it("scopes a family with only_for to matching task kinds (joins example-grounded tasks, stays out of plain questions)", async () => {
+    const families = [...kernelConfig.kernel!.families, { name: "mimo", routing: "mimo-v2.5-pro", alt_routings: [], weight: 1, propose: true, verify: true, only_for: ["examples"] }];
+    const cfg = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, families, control_proposer: false, proposal_width: { F2: 4, F3: 4, max: 6 } } };
+    // Plain question: mimo must not be sampled.
+    const plain = emptyCaptured();
+    installFetch(plain, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const ctx1 = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-scope-plain-${Date.now()}`);
+    ctx1.fusionConfig = cfg;
+    delete (ctx1.requestData as Record<string, unknown>)["tools"];
+    await router.route(ctx1);
+    expect(plain.proposer.some((b) => String(b["model"]) === "up-mimo")).toBe(false);
+    // Example-grounded task: mimo joins the pool.
+    const grid = emptyCaptured();
+    installFetch(grid, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[4,3],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,6],[7,8]]\nOutput (2x2):\n[[8,7],[6,5]]\n\nTest input (2x2):\n[[2,3],[4,5]]";
+    const ctx2 = makeCtx([{ role: "user", content: task }], `conv-scope-grid-${Date.now()}`);
+    ctx2.fusionConfig = { ...cfg, kernel: { ...cfg.kernel!, execution_verification: true, execution_repair_rounds: 0 } };
+    delete (ctx2.requestData as Record<string, unknown>)["tools"];
+    await router.route(ctx2);
+    expect(grid.proposer.some((b) => String(b["model"]) === "up-mimo")).toBe(true);
   });
 
   it("with repair_after_sightings=2 the first failure is left to the executor and the repeat triggers the repair wave", async () => {
