@@ -448,6 +448,7 @@ describe("kernel scheduler", () => {
     agentic_search_deadline_seconds: 240,
     agentic_band: "F2",
     contested_extension_seconds: 0,
+    max_band_extension_seconds: 0,
     early_settle_min_families_by_domain: {},
     synthesis_timeout_seconds: 600,
     worker_reasoning_effort: {},

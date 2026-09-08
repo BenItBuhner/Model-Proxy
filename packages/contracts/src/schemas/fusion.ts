@@ -279,6 +279,13 @@ export const FusionKernelConfigSchema = z
      */
     contested_extension_seconds: z.number().int().min(0).max(3600).default(0),
     /**
+     * Same in-place extension at the max band: when the max-band wave reaches
+     * its deadline with fewer than two finished proposals and streams still
+     * progressing, extend once by this many seconds. 0 disables (default; the
+     * max budget is already large — measure before enabling).
+     */
+    max_band_extension_seconds: z.number().int().min(0).max(3600).default(0),
+    /**
      * Families that must share the leading answer before a wave settles early
      * and cancels its stragglers, per task domain (default 2). On frontier
      * math two families agreeing on the same wrong answer is common enough

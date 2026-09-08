@@ -1895,8 +1895,8 @@ export class FusionKernel {
     // fewer than two finished proposals while workers are still streaming, move
     // the shared deadline once instead of killing streams that are about to
     // finish and replacing them with fresh ones that need just as long.
-    const extensionMs = kcfg.contested_extension_seconds * 1000;
-    const canExtendInPlace = role === "proposer" && !run.agentic && run.band !== "max" && !run.extended && extensionMs > 0;
+    const extensionMs = (run.band === "max" ? kcfg.max_band_extension_seconds : kcfg.contested_extension_seconds) * 1000;
+    const canExtendInPlace = role === "proposer" && !run.agentic && !run.extended && extensionMs > 0;
     const extendTimer = canExtendInPlace
       ? setTimeout(() => {
           const finished = landed.filter((p) => p.success && (p.finalAnswer !== undefined || p.program !== undefined)).length;
@@ -1905,8 +1905,8 @@ export class FusionKernel {
           run.searchDeadlineAt += extensionMs;
           run.deadlineRef.deadlineAt = run.searchDeadlineAt;
           run.deadlineRef.extraMs += extensionMs;
-          log.info("kernel search extended in place", { conversationId: run.ledger.conversationId, wave, finished, extensionSeconds: kcfg.contested_extension_seconds });
-          void run.narrator.say(`Kernel: only ${finished} reasoner(s) finished by the ${kcfg.search_deadline_seconds[run.band]}s deadline while others are still working; extending the search by ${kcfg.contested_extension_seconds}s so they can finish.`);
+          log.info("kernel search extended in place", { conversationId: run.ledger.conversationId, wave, finished, extensionSeconds: Math.round(extensionMs / 1000), band: run.band });
+          void run.narrator.say(`Kernel: only ${finished} reasoner(s) finished by the ${kcfg.search_deadline_seconds[run.band]}s deadline while others are still working; extending the search by ${Math.round(extensionMs / 1000)}s so they can finish.`);
         }, Math.max(0, run.searchDeadlineAt - performance.now() - 10_000))
       : undefined;
     const results = await this.runWithQuorum<Proposal>(
