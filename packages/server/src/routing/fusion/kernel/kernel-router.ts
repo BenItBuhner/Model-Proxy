@@ -1899,8 +1899,11 @@ export class FusionKernel {
     const canExtendInPlace = role === "proposer" && !run.agentic && !run.extended && extensionMs > 0;
     const extendTimer = canExtendInPlace
       ? setTimeout(() => {
-          const finished = landed.filter((p) => p.success && (p.finalAnswer !== undefined || p.program !== undefined)).length;
-          if (run.extended || finished >= 2 || ctx.signal?.aborted === true) return;
+          // Distinct families with a finished answer, measured against the domain's
+          // settle minimum (math: 3): a fast control proposer plus one family is not
+          // a consensus worth killing two still-streaming families for.
+          const finished = new Set(landed.filter((p) => p.success && (p.finalAnswer !== undefined || p.program !== undefined)).map((p) => p.family)).size;
+          if (run.extended || finished >= this.minSettleFamilies(run) || ctx.signal?.aborted === true) return;
           run.extended = true;
           run.searchDeadlineAt += extensionMs;
           run.deadlineRef.deadlineAt = run.searchDeadlineAt;
