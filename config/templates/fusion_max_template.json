@@ -24,9 +24,10 @@
     "scheduler": { "allow_nested_fusion": false, "max_depth": 0, "max_leaf_calls": 64, "max_wall_ms": 1800000 },
     "kernel": {
       "families": [
-        { "name": "glm", "routing": "glm-5.3", "alt_routings": ["glm-5.3-alt"], "weight": 1 },
-        { "name": "kimi", "routing": "kimi-k3", "alt_routings": ["kimi-k3-alt"], "weight": 1 },
-        { "name": "deepseek", "routing": "deepseek-v4-pro-0813", "alt_routings": ["deepseek-v4-pro"], "weight": 1 }
+        { "name": "glm", "routing": "glm-5.3", "alt_routings": ["glm-5.3-alt", "glm-5.2"], "weight": 1 },
+        { "name": "kimi", "routing": "kimi-k3", "alt_routings": ["kimi-k3-alt", "kimi-k2.7-code"], "weight": 1 },
+        { "name": "deepseek", "routing": "deepseek-v4-pro-0813", "alt_routings": ["deepseek-v4-flash-0731", "deepseek-v4-pro"], "weight": 1 },
+        { "name": "mimo", "routing": "mimo-v2.5-pro", "alt_routings": [], "weight": 1, "only_for": ["examples"] }
       ],
       "synthesis_routing": "glm-5.3",
       "executor_routing_by_domain": { "swe": "deepseek-v4-pro-0813" },
