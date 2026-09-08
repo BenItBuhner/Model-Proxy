@@ -88,6 +88,14 @@ const UPSTREAMS: UpstreamModel[] = [
   { logical: "kimi-k3-alt", upstream: "kimi-k3-alt", contextWindow: 1_000_000 },
   { logical: "deepseek-v4-pro-0813", upstream: "deepseek-v4-pro-0813", alt: "deepseek-v4-pro", contextWindow: 1_000_000 },
   { logical: "deepseek-v4-pro", upstream: "deepseek-v4-pro", contextWindow: 1_000_000 },
+  // Pool v2 members and alternates (measured 2026-09-08: each solves ARC-AGI-2
+  // tasks the original trio does not; see results/2026-09-08).
+  { logical: "deepseek-v4-flash-0731", upstream: "deepseek-v4-flash-0731", contextWindow: 1_000_000 },
+  { logical: "glm-5.2", upstream: "glm-5.2", contextWindow: 1_000_000 },
+  { logical: "kimi-k2.7-code", upstream: "kimi-k2.7-code", contextWindow: 262_144 },
+  { logical: "mimo-v2.5-pro", upstream: "mimo-v2.5-pro", contextWindow: 1_000_000 },
+  // Not open-weight; exposed by the inference proxy. Opt-in family (see template).
+  { logical: "gemini-3.8-flash", upstream: "gemini-3.8-flash", contextWindow: 1_000_000 },
   { logical: "turbo", upstream: "turbo", contextWindow: 128_000 },
 ];
 

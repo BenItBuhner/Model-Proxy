@@ -1223,7 +1223,8 @@ export class FusionKernel {
           // flip. Below the max band, spend the contested extension once
           // (deadline + one wave) rather than settle on the leader.
           const extensionMs = kcfg.contested_extension_seconds * 1000;
-          const contested = consensus.answerVote === undefined || !consensus.answerVote.unanimous;
+          // One voter is not a consensus (the rest of the wave timed out): contested too.
+          const contested = consensus.answerVote === undefined || !consensus.answerVote.unanimous || consensus.answerVote.voters < 2;
           if (!run.extended && run.band !== "max" && extensionMs > 0 && contested && !run.agentic && this.remainingSearchMs(run) + extensionMs >= needed) {
             run.extended = true;
             run.searchDeadlineAt += extensionMs;

@@ -36,6 +36,9 @@ function optionalAnswer(value: unknown): string | undefined {
   const echo = trimmed.match(/^(.{1,40}?)(?:`|\s+(?:as|on|then|which|that way|so that)\b|[.,;]\s+(?:nothing|that|the|and|put|do)\b)/i);
   if (echo?.[1] !== undefined && echo[1].trim().length > 0 && trimmed.length > echo[1].length + 8) trimmed = echo[1].trim();
   trimmed = trimmed.replace(/^[`"'\s]+|[`"'\s.]+$/g, "");
+  // Deliberation leaked into the answer field ("2051325` or `\\frac{...}`? User
+  // says…", "either 5 or 7") is not an answer: it must not become a vote.
+  if (/\s(?:or|vs\.?|versus)\s|\?|\b(?:user says|the final answer should|we can put|i think|maybe|probably)\b/i.test(trimmed)) return undefined;
   return trimmed.length > 200 ? `${trimmed.slice(0, 197)}...` : trimmed;
 }
 
