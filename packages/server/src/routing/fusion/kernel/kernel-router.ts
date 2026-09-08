@@ -646,11 +646,17 @@ export class FusionKernel {
     if (verifiedOutputs.length > 0) {
       const counts = new Map<string, number>();
       for (const o of verifiedOutputs) counts.set(o, (counts.get(o) ?? 0) + 1);
+      const sinceFirst = run.firstVerifiedAt !== undefined ? performance.now() - run.firstVerifiedAt : 0;
+      const directLanded = settled.filter((p) => p.direct === true).length;
+      // Max band, few training pairs: agreeing programs can still fit the
+      // examples for the wrong reason (53fb4810: two programs, same wrong grid).
+      // Wait (bounded) for the direct readers so their agreement can challenge
+      // the programs before the wave settles.
+      const fewPairs = run.band === "max" && (run.examples?.examples.length ?? 99) <= 3;
+      if (fewPairs && counts.size === 1 && directLanded < directTotal && sinceFirst < run.kcfg.execution_settle_grace_seconds * 8 * 1000) return false;
       if ([...counts.values()].some((c) => c >= 2)) return true;
       // Max band, few training pairs, a single verified program: wait (bounded)
       // for the direct readers so two families' disagreement can challenge it.
-      const sinceFirst = run.firstVerifiedAt !== undefined ? performance.now() - run.firstVerifiedAt : 0;
-      const directLanded = settled.filter((p) => p.direct === true).length;
       if (counts.size === 1 && verifiedOutputs.length === 1 && run.band === "max" && (run.examples?.examples.length ?? 99) <= 3 && directLanded < directTotal && sinceFirst < run.kcfg.execution_settle_grace_seconds * 8 * 1000) return false;
       if (counts.size === 1 && run.firstVerifiedAt !== undefined && sinceFirst >= run.kcfg.execution_settle_grace_seconds * 1000) return true;
       if (counts.size === 1 && settled.filter((p) => p.success).length >= run.pool.proposerFamilyCount + 1) return true;
@@ -1456,19 +1462,23 @@ export class FusionKernel {
       const verifiedKeys = new Set(verified.map((p) => normalizeFinalAnswer(p.finalAnswer!)));
       return [...groups.entries()].filter(([key, ps]) => !verifiedKeys.has(key) && new Set(ps.map((p) => p.family)).size >= 2).sort((a, b) => b[1].length - a[1].length)[0]?.[1];
     };
-    const loneProgramConflict = verified.length === 1 && ex.examples.length <= 3 ? directAgreementAgainst() : undefined;
+    // Programs that all agree but come from at most two families, on a task with
+    // few training pairs, contradicted by two families' direct reads: the
+    // programs may fit the pairs for the wrong reason (53fb4810, 7b5033c1).
+    const programFamilies = new Set(verified.map((p) => p.family)).size;
+    const loneProgramConflict = verified.length >= 1 && distinctOutputs(verified) === 1 && programFamilies <= 2 && ex.examples.length <= 3 ? directAgreementAgainst() : undefined;
     if (loneProgramConflict !== undefined && this.remainingSearchMs(run) > 90_000) {
       run.executionStats.repairRounds += 1;
       run.phase = `execution discrimination (wave ${wave})`;
       const prog = verified[0]!;
       const dims = (out: string) => { try { const g = JSON.parse(out) as unknown[]; return Array.isArray(g) ? `${g.length}x${Array.isArray(g[0]) ? (g[0] as unknown[]).length : 1}` : "scalar"; } catch { return "?"; } };
       const note = [
-        `EXECUTION FEEDBACK (discrimination): one program reproduces all ${ex.examples.length} training pairs but ${new Set(loneProgramConflict.map((p) => p.family)).size} independent reasoners who read the grids directly agree on a DIFFERENT test output. With so few training pairs a program can fit them for the wrong reason.`,
+        `EXECUTION FEEDBACK (discrimination): ${verified.length} program(s) from ${programFamilies} model famil${programFamilies === 1 ? "y" : "ies"} reproduce all ${ex.examples.length} training pairs but ${new Set(loneProgramConflict.map((p) => p.family)).size} independent reasoners who read the grids directly agree on a DIFFERENT test output. With so few training pairs a program can fit them for the wrong reason.`,
         `Candidate rule 1 (verified program, test output ${dims(prog.finalAnswer!)}):\n${truncateMiddle(proseOnly(prog.answer), 1_200, "rule trimmed")}\n\`\`\`python\n${truncateMiddle(prog.program ?? "", 3_000, "program trimmed")}\n\`\`\``,
         `Candidate rule 2 (direct reasoning, test output ${dims(loneProgramConflict[0]!.finalAnswer!)}):\n${truncateMiddle(proseOnly(loneProgramConflict[0]!.answer), 1_500, "rule trimmed")}\n\`\`\`json\n${truncateMiddle(loneProgramConflict[0]!.finalAnswer!, 2_000, "grid trimmed")}\n\`\`\``,
         "Decide which rule the task intends — the one that explains WHY every training output looks the way it does — and return the complete program for the intended rule (fix or reuse candidate 1 if it is right; implement candidate 2's rule if that is the intended one).",
       ].join("\n\n");
-      await run.narrator.say("Kernel: a lone verified program disagrees with two families' direct reads; running a discrimination wave.");
+      await run.narrator.say(`Kernel: ${verified.length} verified program(s) disagree with two families' direct reads; running a discrimination wave.`);
       const judges = await this.proposalWave(ctx, run, intent, ledgerView, wave, widths, taskStartIndex, note, "proposer", Math.min(widths.proposals, 3));
       await Promise.all(judges.filter((p) => p.success).map(check));
       extra.push(...judges);
