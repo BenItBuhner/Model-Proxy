@@ -83,7 +83,7 @@ import type {
 } from "./types.ts";
 import { buildAnswerVote, buildConsensus, isDecisiveVote, normalizeFinalAnswer, novelClaimCount, parseProposal, parseVerdict } from "./waves.ts";
 import { WorkCache, computeWorkKey, type WorkSpec } from "./work-cache.ts";
-import { Semaphore, runWorker } from "./worker.ts";
+import { type WorkerDeadlineRef, Semaphore, runWorker } from "./worker.ts";
 
 const log = createLogger("routing.fusion.kernel");
 
@@ -150,6 +150,8 @@ interface KernelRun {
   agentic: boolean;
   /** The contested-extension budget has been spent on this run. */
   extended: boolean;
+  /** Shared with running workers: moving it forward extends them in place. */
+  deadlineRef: WorkerDeadlineRef;
   /** The request carries tools (agent loop): repair/checkpoint waves stay lean (no verification). */
   toolsPresent: boolean;
   /** Execution-verified proposals accumulated across waves (programs and certified direct answers). */
@@ -618,6 +620,7 @@ export class FusionKernel {
       executorRouting,
       fastRouting,
       searchDeadlineAt: startedAt + (agentic ? Math.min(kcfg.agentic_search_deadline_seconds, kcfg.search_deadline_seconds[band]) : kcfg.search_deadline_seconds[band]) * 1000,
+      deadlineRef: { deadlineAt: startedAt + (agentic ? Math.min(kcfg.agentic_search_deadline_seconds, kcfg.search_deadline_seconds[band]) : kcfg.search_deadline_seconds[band]) * 1000, extraMs: 0 },
       cancelledWorkers: 0,
       truncatedWorkers: 0,
       earlySettles: 0,
@@ -1228,6 +1231,7 @@ export class FusionKernel {
           if (!run.extended && run.band !== "max" && extensionMs > 0 && contested && !run.agentic && this.remainingSearchMs(run) + extensionMs >= needed) {
             run.extended = true;
             run.searchDeadlineAt += extensionMs;
+            run.deadlineRef.deadlineAt = run.searchDeadlineAt;
             maxWaves = Math.max(maxWaves, wave + 1);
             decision = { escalate: true, reason: `contested at the ${kcfg.search_deadline_seconds[run.band]}s deadline (agreement ${consensus.agreement}); extending the search by ${kcfg.contested_extension_seconds}s for one more wave` };
             await run.narrator.say(`Kernel: the search is still contested at its deadline; extending by ${kcfg.contested_extension_seconds}s for one more cross-family wave.`);
@@ -1819,7 +1823,9 @@ export class FusionKernel {
       directIndices.add(j);
     }
     const hooks: Promise<void>[] = [];
+    const landed: Proposal[] = [];
     const settle = (proposal: Proposal): Proposal => {
+      landed.push(proposal);
       if (onProposal !== undefined) hooks.push(onProposal(proposal).catch((err) => log.warn("proposal hook failed", { id: proposal.id, error: String(err) })));
       return proposal;
     };
@@ -1839,6 +1845,24 @@ export class FusionKernel {
     });
 
     const timeoutMs = this.workerTimeoutMs(run);
+    // In-place contested extension: if this wave reaches the band deadline with
+    // fewer than two finished proposals while workers are still streaming, move
+    // the shared deadline once instead of killing streams that are about to
+    // finish and replacing them with fresh ones that need just as long.
+    const extensionMs = kcfg.contested_extension_seconds * 1000;
+    const canExtendInPlace = role === "proposer" && !run.agentic && run.band !== "max" && !run.extended && extensionMs > 0;
+    const extendTimer = canExtendInPlace
+      ? setTimeout(() => {
+          const finished = landed.filter((p) => p.success && (p.finalAnswer !== undefined || p.program !== undefined)).length;
+          if (run.extended || finished >= 2 || ctx.signal?.aborted === true) return;
+          run.extended = true;
+          run.searchDeadlineAt += extensionMs;
+          run.deadlineRef.deadlineAt = run.searchDeadlineAt;
+          run.deadlineRef.extraMs += extensionMs;
+          log.info("kernel search extended in place", { conversationId: run.ledger.conversationId, wave, finished, extensionSeconds: kcfg.contested_extension_seconds });
+          void run.narrator.say(`Kernel: only ${finished} reasoner(s) finished by the ${kcfg.search_deadline_seconds[run.band]}s deadline while others are still working; extending the search by ${kcfg.contested_extension_seconds}s so they can finish.`);
+        }, Math.max(0, run.searchDeadlineAt - performance.now() - 10_000))
+      : undefined;
     const results = await this.runWithQuorum<Proposal>(
       run,
       picks.map((pick, i) => ({
@@ -1892,7 +1916,7 @@ export class FusionKernel {
             messages: capsule.messages,
             maxTokens,
             timeoutMs,
-            deadlineAt: run.searchDeadlineAt,
+            deadlineRef: run.deadlineRef,
             idleTimeoutMs: kcfg.worker_idle_timeout_seconds * 1000,
             reasoningEffort: this.proposerReasoningEffort(run, role),
             onSegment: run.narrator.segment,
@@ -1961,6 +1985,7 @@ export class FusionKernel {
       Math.min(2, run.pool.proposerFamilyCount),
       role === "proposer" ? (settled, quorumReached) => this.proposalsAlreadyAgree(run, settled, quorumReached, directIndices.size) : undefined,
     );
+    if (extendTimer !== undefined) clearTimeout(extendTimer);
     log.info("kernel proposal wave results", { conversationId: run.ledger.conversationId, role, wave, results: results.length, succeeded: results.filter((r) => r.success).length, hooks: hooks.length, elapsedMs: Math.round(performance.now() - started) });
     await Promise.all(hooks);
     log.info("kernel proposal wave hooks done", { conversationId: run.ledger.conversationId, role, wave, elapsedMs: Math.round(performance.now() - started) });
@@ -2067,7 +2092,7 @@ export class FusionKernel {
             messages: capsule.messages,
             maxTokens: Math.min(kcfg.worker_max_tokens, kcfg.verifier_max_tokens),
             timeoutMs,
-            deadlineAt: run.searchDeadlineAt,
+            deadlineRef: run.deadlineRef,
             idleTimeoutMs: kcfg.worker_idle_timeout_seconds * 1000,
             reasoningEffort: kcfg.worker_reasoning_effort.verifier,
             onSegment: run.narrator.segment,
@@ -2339,6 +2364,7 @@ export class FusionKernel {
   private boundAgenticWave(run: KernelRun): void {
     if (!run.toolsPresent || run.kcfg.agentic_search_deadline_seconds <= 0) return;
     run.searchDeadlineAt = Math.min(run.searchDeadlineAt, performance.now() + run.kcfg.agentic_search_deadline_seconds * 1000);
+    run.deadlineRef.deadlineAt = run.searchDeadlineAt;
   }
 
   private continuationBrief(run: KernelRun): string {

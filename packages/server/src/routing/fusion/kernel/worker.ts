@@ -55,6 +55,12 @@ export interface WorkerRequest {
   timeoutMs: number;
   /** Absolute deadline (performance.now() basis); the effective timeout is clipped to it AFTER the semaphore is acquired, so queued workers cannot outlive the search. */
   deadlineAt?: number;
+  /**
+   * Shared, mutable deadline: the kernel may move `deadlineAt` forward and add
+   * `extraMs` to every running worker's cap (in-place search extension) so a
+   * still-streaming worker is not killed just because the band clock ran out.
+   */
+  deadlineRef?: WorkerDeadlineRef;
   /** Abort when no upstream bytes arrive for this long (stalled socket / dead upstream). */
   idleTimeoutMs?: number;
   temperature?: number;
@@ -65,6 +71,11 @@ export interface WorkerRequest {
   semaphore?: Semaphore;
   /** Emit start/progress/completed subagent events for the admin UI. */
   emitEvents?: boolean;
+}
+
+export interface WorkerDeadlineRef {
+  deadlineAt: number;
+  extraMs: number;
 }
 
 export interface WorkerResult {
@@ -114,8 +125,9 @@ export async function runWorker(
   // Clip to the absolute deadline now that a slot is held: time spent queued
   // behind the semaphore must not extend the search.
   let effectiveTimeoutMs = req.timeoutMs;
-  if (req.deadlineAt !== undefined) {
-    const left = req.deadlineAt - performance.now();
+  const deadlineAt = req.deadlineRef?.deadlineAt ?? req.deadlineAt;
+  if (deadlineAt !== undefined) {
+    const left = deadlineAt - performance.now();
     if (left < 5_000) {
       release();
       if (emitEvents) {
@@ -125,7 +137,20 @@ export async function runWorker(
     }
     effectiveTimeoutMs = Math.min(req.timeoutMs, left);
   }
-  const timer = setTimeout(() => controller.abort(), effectiveTimeoutMs);
+  // Re-armed timer: the cap is re-read when it fires, so an in-place extension
+  // (deadlineRef moved forward) lets a streaming worker continue.
+  const startedAt = performance.now();
+  const capAt = (): number => {
+    const ref = req.deadlineRef;
+    const own = startedAt + req.timeoutMs + (ref?.extraMs ?? 0);
+    return ref !== undefined ? Math.min(own, ref.deadlineAt) : startedAt + effectiveTimeoutMs;
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = (): void => {
+    const wait = Math.max(0, capAt() - performance.now());
+    timer = setTimeout(() => { if (capAt() - performance.now() > 250) arm(); else controller.abort(); }, wait);
+  };
+  arm();
   const idleTimer = req.idleTimeoutMs !== undefined && req.idleTimeoutMs > 0
     ? setInterval(() => {
         if (performance.now() - lastActivity > req.idleTimeoutMs!) {
@@ -342,7 +367,7 @@ export async function runWorker(
     }
     return { content: "", success: false, error, durationMs, finishReason, attemptedToolCalls };
   } finally {
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
     if (idleTimer !== undefined) clearInterval(idleTimer);
     for (const source of sources) source.removeEventListener("abort", onAbort);
     release();

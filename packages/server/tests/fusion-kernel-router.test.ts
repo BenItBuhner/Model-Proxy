@@ -1157,6 +1157,46 @@ describe("Fusion kernel engine", () => {
     expect(extended.proposers).toBeGreaterThan(settled.proposers);
   });
 
+  it("extends a wave in place when the band deadline arrives with fewer than two finished proposals and workers still streaming", async () => {
+    const run = async (extension: number) => {
+      const captured = emptyCaptured();
+      installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+      const baseFetch = globalThis.fetch;
+      globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+        if (!system.includes("independent expert reasoners")) return baseFetch(input as string, init);
+        // Slow proposer: streams a keep-alive delta every 500 ms and delivers the whole proposal after 13 s (past the 10 s deadline).
+        const full = await (await baseFetch(input as string, init)).text();
+        const enc = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            let ticks = 0;
+            const tick = setInterval(() => {
+              ticks += 1;
+              if (init?.signal?.aborted) { clearInterval(tick); controller.error(new DOMException("Aborted", "AbortError")); return; }
+              if (ticks < 26) controller.enqueue(enc.encode(`data: ${JSON.stringify({ id: "s", object: "chat.completion.chunk", created: 1, model: body["model"], choices: [{ index: 0, delta: { reasoning_content: "…" }, finish_reason: null }] })}\n\n`));
+              else { clearInterval(tick); controller.enqueue(enc.encode(full)); controller.close(); }
+            }, 500);
+            init?.signal?.addEventListener("abort", () => { clearInterval(tick); try { controller.error(new DOMException("Aborted", "AbortError")); } catch { /* closed */ } }, { once: true });
+          },
+        });
+        return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }) as unknown as typeof fetch;
+      const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-inplace-${extension}-${Date.now()}`);
+      ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, control_proposer: false, search_deadline_seconds: { F2: 10, F3: 10, max: 10 }, worker_timeout_seconds_by_band: { F2: 10, F3: 10, max: 10 }, contested_extension_seconds: extension } };
+      delete (ctx.requestData as Record<string, unknown>)["tools"];
+      const result = await router.route(ctx);
+      const k = result.fusionTrace!.kernel as Record<string, unknown>;
+      return { truncated: k["truncatedWorkers"] as number, leader: (k["vote"] as Record<string, unknown> | undefined)?.["leader"] };
+    };
+    const cut = await run(0);
+    expect(cut.leader === undefined || !String(cut.leader).includes("750")).toBe(true); // every proposer was killed at the 10 s deadline: no vote
+    const kept = await run(60);
+    expect(kept.truncated).toBe(0); // the deadline moved; the streaming proposers finished
+    expect(String(kept.leader)).toContain("750");
+  }, 120_000);
+
   it("falls back to another family's synthesizer when the primary fails, and never leaks advisory notes", async () => {
     const captured = emptyCaptured();
     installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
