@@ -1910,7 +1910,7 @@ export class FusionKernel {
           run.deadlineRef.extraMs += extensionMs;
           log.info("kernel search extended in place", { conversationId: run.ledger.conversationId, wave, finished, extensionSeconds: Math.round(extensionMs / 1000), band: run.band });
           void run.narrator.say(`Kernel: only ${finished} reasoner(s) finished by the ${kcfg.search_deadline_seconds[run.band]}s deadline while others are still working; extending the search by ${Math.round(extensionMs / 1000)}s so they can finish.`);
-        }, Math.max(0, run.searchDeadlineAt - performance.now() - 10_000))
+        }, Math.max(0, Math.min(run.searchDeadlineAt, performance.now() + timeoutMs) - performance.now() - 10_000)) // before the earliest cap: band timeout or deadline
       : undefined;
     const results = await this.runWithQuorum<Proposal>(
       run,
