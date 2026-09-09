@@ -1,0 +1,54 @@
+ARC-AGI-2 public eval, 40 tasks (deterministic sample), max effort, single run per cell. ✓/✗ with latency; - not run.
+
+v47  = trio pool, 2026-09-06 (fast upstream day).
+v69  = shipped template pool (trio + mimo-v2.5-pro on example tasks + fast alternates deepseek-v4-flash-0731 / glm-5.2 / kimi-k2.7-code), same width/timeouts as v47, 2026-09-09 (slow upstream day), set A only.
+v72  = v69 pool + kernel: mixed proposer effort on example-grounded max waves (odd program slots medium, even high), watchdog follows the live deadline, LaTeX-wrapper vote normalization. 2026-09-09, full n=40 (set A items 28a6681f/898e7135/53fb4810/271d71e2/80a900e0 taken from the same-build v72 probe run).
+
+task        v47        v69(A)     v72        note
+7ed72f31    ✓  180s   ✓  255s   ✓  237s   
+53fb4810    ✓  431s   ✗  510s   ✗  930s   lost (v47 solved)
+20270e3b    ✓  676s   ✓  294s   ✓ 1057s   
+28a6681f    ✓ 2400s   ✗ 2400s   ✓ 2666s   
+898e7135    ✓ 2400s   ✗ 2400s   ✓ 1694s   
+409aa875    ✓  919s   ✓ 2049s   ✓ 1537s   
+4c416de3    ✗ 2400s   ✗ 2400s   ✗ 3000s   
+b10624e5    ✓ 2129s   ✓ 1547s   ✗ 1573s   lost (v47 solved)
+7b5033c1    ✗  162s   ✗  320s   ✓  172s   new solve (never solved by any fusion run before 2026-09-09)
+eee78d87    ✓  486s   ✓  782s   ✓  424s   
+d8e07eb2    ✓  975s   ✓ 1021s   ✓  638s   
+7b3084d4    ✗ 3000s   ✓ 1200s   ✓ 1648s   new solve (never solved by any fusion run before 2026-09-09)
+64efde09    ✗ 3000s   ✗ 2125s   ✗ 3000s   
+65b59efc    ✓  512s   ✓  692s   ✓  892s   
+36a08778    ✓  831s   ✓ 1556s   ✓  576s   
+271d71e2    ✓ 2400s   ✗ 2306s   ✗ 3000s   lost (v47 solved)
+db0c5428    ✓  624s   ✓  645s   ✗ 1205s   lost (v47 solved)
+20a9e565    ✗ 3000s   ✗ 3000s   ✗ 2344s   
+db695cfb    ✓  900s   ✓  862s   ✓ 1356s   
+80a900e0    ✓  622s   ✓  838s   ✓  719s   
+b99e7126    ✓  590s   -         ✓ 1708s   
+71e489b6    ✗  782s   -         ✗ 2339s   
+142ca369    ✓ 2882s   -         ✓ 1554s   
+247ef758    ✓  843s   -         ✓  537s   
+13e47133    ✓ 2009s   -         ✓ 2378s   
+195c6913    ✓  918s   -         ✓ 1984s   
+67e490f4    ✓  492s   -         ✓  582s   
+7b0280bc    ✓ 1426s   -         ✓ 1152s   
+6ffbe589    ✓ 2079s   -         ✗ 3000s   lost (v47 solved)
+58f5dbd5    ✓  713s   -         ✓  272s   
+136b0064    ✓  864s   -         ✓  505s   
+62593bfd    ✗ 2400s   -         ✗ 2910s   
+31f7f899    ✓  286s   -         ✓  208s   
+b9e38dc0    ✗ 3000s   -         ✗ 3000s   
+b5ca7ac4    ✓  828s   -         ✓  440s   
+38007db0    ✓  316s   -         ✓  145s   
+89565ca0    ✓ 1938s   -         ✓ 2718s   
+aa4ec2a5    ✓ 1939s   -         ✓  559s   
+7491f3cf    ✗ 1919s   -         ✓ 1229s   new solve (never solved by any fusion run before 2026-09-09)
+a47bf94d    ✓ 2400s   -         ✗ 3000s   lost (v47 solved)
+
+n=40: v47 31/40 · v72 28/40 · ever solved by fusion (any run) 34/40
+v72 set A 13/20 (v69 12/20, v47 15/20) · set B 15/20 (v47 16/20).
+Never-before solves under v72: 7b3084d4, 7b5033c1, 7491f3cf (plus 64efde09 under the lean pool on 09-08). Lost vs v47 on the slow day: 53fb4810, 271d71e2, db0c5428, b10624e5 (set A); 6ffbe589, a47bf94d (set B) — all but 53fb4810 at the 2400–3000s budget.
+Mixed-effort same-day evidence (identical items, identical pool, same upstream day): 28a6681f, 898e7135, 13e47133, 195c6913 all ✗ under v66/v69/v70/v71 (2400–4200s, 10–13 dead workers) and ✓ under v72 (1694–2666s).
+
+Reference (ARC Prize leaderboard, semi-private eval, 2026-09): GPT-6 Astra 95.0%, Claude Fable 5.1 (max effort) 90.0%. Public-eval and semi-private are not the same distribution; the rows above are directly comparable to each other. Members single-model on this 40-task sample (2026-09-06): see 2026-09-06/arcagi2-40-per-item.txt. Fusion v72 single-run: 28/40 = 70%.
