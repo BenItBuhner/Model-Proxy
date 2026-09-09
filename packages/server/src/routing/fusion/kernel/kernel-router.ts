@@ -1010,22 +1010,25 @@ export class FusionKernel {
   }
 
   private async runSearch(ctx: FusionRequestContext, run: KernelRun): Promise<void> {
-    const { kcfg } = run;
     // Heartbeat: where the run is and how many workers are in flight, so a
     // silent stall is diagnosable from the log. Watchdog: a search that
     // outlives its budget by five minutes aborts every worker and settles.
     const heartbeat = setInterval(() => {
       log.info("kernel heartbeat", { conversationId: run.ledger.conversationId, phase: run.phase, elapsedMs: Math.round(performance.now() - run.startedAt), remainingSearchMs: this.remainingSearchMs(run), inFlight: run.semaphore.inFlight, waves: run.waves, workItems: run.totalWork, programs: run.executionStats.programs, verified: run.executionStats.verified });
     }, 60_000);
-    const watchdog = setTimeout(() => {
+    // Polled rather than a fixed timer so it follows the live deadline when a
+    // contested or in-place extension moves it.
+    const watchdog = setInterval(() => {
+      if (performance.now() <= run.searchDeadlineAt + 300_000) return;
+      clearInterval(watchdog);
       log.error("kernel run watchdog fired; aborting outstanding workers", { conversationId: run.ledger.conversationId, phase: run.phase, elapsedMs: Math.round(performance.now() - run.startedAt), inFlight: run.semaphore.inFlight });
       run.abort.abort();
-    }, kcfg.search_deadline_seconds[run.band] * 1000 + 300_000);
+    }, 5_000);
     try {
       await this.runSearchInner(ctx, run);
     } finally {
       clearInterval(heartbeat);
-      clearTimeout(watchdog);
+      clearInterval(watchdog);
     }
   }
 
