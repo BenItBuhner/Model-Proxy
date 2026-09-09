@@ -839,14 +839,18 @@ export class FusionKernel {
    * F3/max requests (an explicit ask for more compute) run proposers at high
    * reasoning effort, matching what a client would get from the base model.
    */
-  private proposerReasoningEffort(run: KernelRun, role: WorkerRole): "low" | "medium" | "high" | undefined {
+  private proposerReasoningEffort(run: KernelRun, role: WorkerRole, slot?: number): "low" | "medium" | "high" | undefined {
     const configured = run.kcfg.worker_reasoning_effort[role === "intent" ? "proposer" : role];
     if (configured !== undefined) return configured;
-    // Example-grounded tasks are verified by execution: several quick program
-    // attempts plus repair beat one exhaustive think that never finishes.
-    // Example-grounded tasks: several quick program attempts filtered by execution beat one exhaustive think.
+    // Example-grounded tasks are verified by execution, so effort is free
+    // diversity: at max, odd program slots run at medium and land programs in
+    // minutes while the even slots keep thinking at high — six long streams
+    // that die together on a slow upstream verify nothing.
     // Code tasks graded by hidden tests reward careful spec reading instead: keep high effort.
-    if (role === "proposer" && run.examples !== undefined && run.kcfg.execution_verification) return run.band === "max" ? "high" : "medium";
+    if (role === "proposer" && run.examples !== undefined && run.kcfg.execution_verification) {
+      if (run.band !== "max") return "medium";
+      return slot !== undefined && slot % 2 === 1 ? "medium" : "high";
+    }
     if (role === "proposer" && run.band !== "F2") return "high";
     return undefined;
   }
@@ -1970,7 +1974,7 @@ export class FusionKernel {
             timeoutMs,
             deadlineRef: run.deadlineRef,
             idleTimeoutMs: kcfg.worker_idle_timeout_seconds * 1000,
-            reasoningEffort: this.proposerReasoningEffort(run, role),
+            reasoningEffort: this.proposerReasoningEffort(run, role, isControl ? undefined : i),
             onSegment: run.narrator.segment,
             semaphore: run.semaphore,
             signal,

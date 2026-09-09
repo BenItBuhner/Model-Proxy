@@ -792,6 +792,11 @@ describe("Fusion kernel engine", () => {
     expect((trace["execution"] as Record<string, unknown>)["artifact"]).toBe(true);
     expect(result.content ?? "").toContain("[[1,3],[2,4]]");
     expect(result.content ?? "").not.toContain("[[1,2],[3,4]]");
+    // Example-grounded max waves mix effort across program slots: execution
+    // verifies the result, so quick medium attempts ride alongside high ones.
+    const programSlotEfforts = new Set(captured.proposer.map((p) => p["reasoning_effort"]));
+    expect(programSlotEfforts.has("high")).toBe(true);
+    expect(programSlotEfforts.has("medium")).toBe(true);
   });
 
   it("repairs from the best failing PROGRAM even when an unverified leave-one-out direct answer scored higher", async () => {
