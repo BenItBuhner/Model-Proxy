@@ -52,6 +52,8 @@ export function normalizeFinalAnswer(raw: string): string {
   s = s.replace(/^[`"'*\s]+|[`"'*\s]+$/g, "").trim();
   s = s.replace(/^(?:final\s*answer|answer|final)\s*[:=]\s*/i, "");
   s = s.replace(/^\$+|\$+$/g, "");
+  s = s.replace(/^\\[(\[]\s*|\s*\\[)\]]$/g, "");
+  s = s.replace(/\\(?:displaystyle|mathrm|operatorname)\b/g, "");
   s = s.replace(/\\boxed\{([\s\S]*)\}/, "$1");
   s = s.replace(/\\text\{([^}]*)\}/g, "$1");
   s = s.replace(/\\d?frac\s*\{([^}]*)\}\s*\{([^}]*)\}/g, "$1/$2");

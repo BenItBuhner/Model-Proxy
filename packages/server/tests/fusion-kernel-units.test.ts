@@ -230,6 +230,8 @@ describe("kernel wave parsing and consensus", () => {
     expect(normalizeFinalAnswer("(C)")).toBe("c");
     expect(normalizeFinalAnswer("**042**")).toBe("42");
     expect(normalizeFinalAnswer("$\\frac{3}{4}$")).toBe("3/4");
+    expect(normalizeFinalAnswer("\\(4\\pi\\)")).toBe(normalizeFinalAnswer("4\\pi"));
+    expect(normalizeFinalAnswer("\\[ \\displaystyle \\frac{3}{4} \\]")).toBe("3/4");
     expect(normalizeFinalAnswer("Yes.")).toBe("yes");
     expect(normalizeFinalAnswer("1,000")).toBe("1000");
     const verdict = parseVerdict("```json\n{\"verdict\":\"revise\",\"issues\":[\"x\"],\"candidate_final_answer_correct\":false,\"corrected_final_answer\":\"751\",\"confidence\":0.7}\n```");
