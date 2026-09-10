@@ -1231,7 +1231,7 @@ describe("Fusion kernel engine", () => {
   });
 
   it("extends a wave in place when the band deadline arrives with fewer than two finished proposals and workers still streaming", async () => {
-    const run = async (extension: number) => {
+    const run = async (extension: number, domains?: string[]) => {
       const captured = emptyCaptured();
       installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
       const baseFetch = globalThis.fetch;
@@ -1257,7 +1257,7 @@ describe("Fusion kernel engine", () => {
         return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
       }) as unknown as typeof fetch;
       const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-inplace-${extension}-${Date.now()}`);
-      ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, control_proposer: false, search_deadline_seconds: { F2: 10, F3: 10, max: 10 }, worker_timeout_seconds_by_band: { F2: 10, F3: 10, max: 10 }, contested_extension_seconds: extension } };
+      ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, control_proposer: false, search_deadline_seconds: { F2: 10, F3: 10, max: 10 }, worker_timeout_seconds_by_band: { F2: 10, F3: 10, max: 10 }, contested_extension_seconds: extension, ...(domains !== undefined ? { in_place_extension_domains: domains } : {}) } };
       delete (ctx.requestData as Record<string, unknown>)["tools"];
       const result = await router.route(ctx);
       const k = result.fusionTrace!.kernel as Record<string, unknown>;
@@ -1268,7 +1268,10 @@ describe("Fusion kernel engine", () => {
     const kept = await run(60);
     expect(kept.truncated).toBe(0); // the deadline moved; the streaming proposers finished
     expect(String(kept.leader)).toContain("750");
-  }, 120_000);
+    // Scoped to other domains, this math task's streams are not kept alive in place.
+    const scoped = await run(60, ["legal"]);
+    expect(scoped.leader === undefined || !String(scoped.leader).includes("750")).toBe(true);
+  }, 180_000);
 
   it("falls back to another family's synthesizer when the primary fails, and never leaks advisory notes", async () => {
     const captured = emptyCaptured();

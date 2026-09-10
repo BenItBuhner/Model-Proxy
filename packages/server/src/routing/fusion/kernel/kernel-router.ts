@@ -1903,7 +1903,9 @@ export class FusionKernel {
     // the shared deadline once instead of killing streams that are about to
     // finish and replacing them with fresh ones that need just as long.
     const extensionMs = (run.band === "max" ? kcfg.max_band_extension_seconds : kcfg.contested_extension_seconds) * 1000;
-    const canExtendInPlace = role === "proposer" && !run.agentic && !run.extended && extensionMs > 0;
+    const extensionDomains = kcfg.in_place_extension_domains;
+    const domainAllowsInPlace = extensionDomains === undefined || run.domains.some((d) => extensionDomains.includes(d));
+    const canExtendInPlace = role === "proposer" && !run.agentic && !run.extended && extensionMs > 0 && domainAllowsInPlace;
     const extendTimer = canExtendInPlace
       ? setTimeout(() => {
           // Distinct families with a finished answer, measured against the domain's

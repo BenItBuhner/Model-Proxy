@@ -286,6 +286,14 @@ export const FusionKernelConfigSchema = z
      */
     max_band_extension_seconds: z.number().int().min(0).max(3600).default(0),
     /**
+     * Domains whose still-streaming workers are kept alive by the in-place
+     * extension (contested_extension_seconds / max_band_extension_seconds).
+     * Unset = every domain. Long derivations (math, science) are worth waiting
+     * for; a multiple-choice legal or finance stream that has not finished in
+     * 900 s is stuck, and a fresh wave replaces it faster.
+     */
+    in_place_extension_domains: z.array(z.string()).optional(),
+    /**
      * Families that must share the leading answer before a wave settles early
      * and cancels its stragglers, per task domain (default 2). On frontier
      * math two families agreeing on the same wrong answer is common enough

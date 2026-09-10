@@ -54,6 +54,7 @@
       "agentic_band": "F2",
       "contested_extension_seconds": 900,
       "max_band_extension_seconds": 1200,
+      "in_place_extension_domains": ["math", "science"],
       "early_settle_min_families_by_domain": { "math": 3, "science": 3 },
       "synthesis_timeout_seconds": 600,
       "worker_reasoning_effort": { "verifier": "low", "intent": "low", "repair": "medium", "checkpoint": "medium" },
