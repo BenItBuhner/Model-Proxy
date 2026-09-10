@@ -27,5 +27,5 @@ sympy__sympy-22914                ✓      ✓      224
 sympy__sympy-23824                ✓      ✓      358
 
 09-07 (v55): 23/23 · v72 (pool): 22/23 as measured · p50 1132 s · p90 2591 s (incl. env setup, slow upstream day).
-sympy__sympy-21379: RESOLVED_NO after 45 steps (solved in all three 09-07 runs); a labelled second attempt (v72-rerun) is recorded in swebench-verified-fusion-template-v72-rerun.jsonl when it lands.
+sympy__sympy-21379: RESOLVED_NO after 45 steps (solved in all three 09-07 runs); a labelled second attempt (v72-rerun, swebench-verified-fusion-template-v72-rerun.jsonl) is RESOLVED_FULL in 2554 s — 22/23 single run, 23/23 with one re-run, the same shape as 09-07's hard-tier result.
 Members (09-07): deepseek 21/23, glm 20/23, kimi 18/23; union 22/23 (pytest-6197 solved by no member, by fusion in every run). Reference: Claude Fable 5 95.0%, Claude Opus 5 96% on the full 500 (vendor-reported); this harness covers pure-Python repos only.
