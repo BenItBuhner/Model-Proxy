@@ -1904,7 +1904,8 @@ export class FusionKernel {
     // finish and replacing them with fresh ones that need just as long.
     const extensionMs = (run.band === "max" ? kcfg.max_band_extension_seconds : kcfg.contested_extension_seconds) * 1000;
     const extensionDomains = kcfg.in_place_extension_domains;
-    const domainAllowsInPlace = extensionDomains === undefined || run.domains.some((d) => extensionDomains.includes(d));
+    // Execution-verified tasks are always worth waiting for (a verified program ends the search); other tasks only in the configured domains.
+    const domainAllowsInPlace = extensionDomains === undefined || (run.examples !== undefined && kcfg.execution_verification) || run.domains.some((d) => extensionDomains.includes(d));
     const canExtendInPlace = role === "proposer" && !run.agentic && !run.extended && extensionMs > 0 && domainAllowsInPlace;
     const extendTimer = canExtendInPlace
       ? setTimeout(() => {
@@ -1912,7 +1913,14 @@ export class FusionKernel {
           // settle minimum (math: 3): a fast control proposer plus one family is not
           // a consensus worth killing two still-streaming families for.
           const finished = new Set(landed.filter((p) => p.success && (p.finalAnswer !== undefined || p.program !== undefined)).map((p) => p.family)).size;
-          if (run.extended || finished >= this.minSettleFamilies(run) || ctx.signal?.aborted === true) return;
+          // Example-grounded tasks are settled by a verified program, not by a
+          // vote: finished-but-failing attempts (the quick medium slots) are no
+          // reason to kill the streams still thinking, so the trigger there is
+          // "nothing verified yet". Elsewhere it is the domain's settle minimum.
+          const enough = run.examples !== undefined && kcfg.execution_verification
+            ? run.verifiedArtifact !== undefined || run.executionStats.verified > 0
+            : finished >= this.minSettleFamilies(run);
+          if (run.extended || enough || ctx.signal?.aborted === true) return;
           run.extended = true;
           run.searchDeadlineAt += extensionMs;
           run.deadlineRef.deadlineAt = run.searchDeadlineAt;

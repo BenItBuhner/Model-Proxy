@@ -1273,6 +1273,46 @@ describe("Fusion kernel engine", () => {
     expect(scoped.leader === undefined || !String(scoped.leader).includes("750")).toBe(true);
   }, 180_000);
 
+  it("keeps example-grounded max waves alive past the band cap while nothing is verified, whatever the domain scoping", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-inplace-examples-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[1,3],[2,4]]\n\nTraining pair 2\nInput (2x2):\n[[5,6],[7,8]]\nOutput (2x2):\n[[5,7],[6,8]]\n\nTest input (2x2):\n[[1,0],[0,1]]";
+    const transpose = "def solve(grid):\n    return [list(r) for r in zip(*grid)]";
+    const proposal = ["Rule: transpose", "```python", transpose, "```", "```json", JSON.stringify({ answer_summary: "transpose", final_answer: null, key_claims: ["transpose"], assumptions: [], risks: [], confidence: 0.7 }), "```"].join("\n");
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      if (!system.includes("independent expert reasoners")) return baseFetch(input as string, init);
+      // Every proposer is slow: keep-alive deltas, then the correct program after 13 s (past the 10 s cap).
+      const enc = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          let ticks = 0;
+          const tick = setInterval(() => {
+            ticks += 1;
+            if (init?.signal?.aborted) { clearInterval(tick); controller.error(new DOMException("Aborted", "AbortError")); return; }
+            if (ticks < 26) controller.enqueue(enc.encode(`data: ${JSON.stringify({ id: "s", object: "chat.completion.chunk", created: 1, model: body["model"], choices: [{ index: 0, delta: { reasoning_content: "…" }, finish_reason: null }] })}\n\n`));
+            else { clearInterval(tick); controller.enqueue(enc.encode(`data: ${JSON.stringify({ id: "s", object: "chat.completion.chunk", created: 1, model: body["model"], choices: [{ index: 0, delta: { content: proposal }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`)); controller.close(); }
+          }, 500);
+          init?.signal?.addEventListener("abort", () => { clearInterval(tick); try { controller.error(new DOMException("Aborted", "AbortError")); } catch { /* closed */ } }, { once: true });
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as unknown as typeof fetch;
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-inplace-examples-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: false, execution_repair_rounds: 0, search_deadline_seconds: { F2: 10, F3: 10, max: 10 }, worker_timeout_seconds_by_band: { F2: 10, F3: 10, max: 10 }, max_band_extension_seconds: 60, in_place_extension_domains: ["math"] } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "max" };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    expect((trace["execution"] as Record<string, unknown>)["artifact"]).toBe(true);
+    expect(result.content ?? "").toContain("[[1,0],[0,1]]");
+  }, 120_000);
+
   it("falls back to another family's synthesizer when the primary fails, and never leaks advisory notes", async () => {
     const captured = emptyCaptured();
     installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
