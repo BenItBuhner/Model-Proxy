@@ -529,6 +529,25 @@ describe("kernel scheduler", () => {
     expect(pool.reliability("glm-5.3")).toBeLessThan(1);
     expect(pool.reliability("kimi-k3")).toBe(1);
   });
+
+  it("keeps the configured primary routing first until it fails at least half of its recent calls, and forgets old failures", () => {
+    const pool = new ModelPool(kcfg.families);
+    const first = () => pool.proposers(3).find((p) => p.family === "glm")!.routing;
+    expect(first()).toBe("glm-5.3");
+    // One failure in three recent calls: still the primary (an untested alternate is not known to be better).
+    pool.recordOutcome("glm-5.3", false, 100);
+    pool.recordOutcome("glm-5.3", true, 100);
+    pool.recordOutcome("glm-5.3", true, 100);
+    expect(first()).toBe("glm-5.3");
+    // Failing most recent calls: the alternate takes the family's first slot.
+    for (let i = 0; i < 8; i++) pool.recordOutcome("glm-5.3", false, 100);
+    expect(pool.reliability("glm-5.3")).toBeLessThanOrEqual(0.5);
+    expect(first()).toBe("glm-5.3-alt");
+    // A run of successes pushes the old failures out of the window and restores the primary.
+    for (let i = 0; i < 12; i++) pool.recordOutcome("glm-5.3", true, 100);
+    expect(pool.reliability("glm-5.3")).toBe(1);
+    expect(first()).toBe("glm-5.3");
+  });
 });
 
 describe("kernel stream assembly", () => {

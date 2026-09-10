@@ -9,7 +9,14 @@ interface RoutingStats {
   calls: number;
   failures: number;
   totalLatencyMs: number;
+  /** Most recent outcomes (true = success), newest last; bounded to RELIABILITY_WINDOW. */
+  recent: boolean[];
 }
+
+/** Outcomes a routing is judged on: a burst of max-band timeouts hours ago must not demote it for the rest of the process. */
+const RELIABILITY_WINDOW = 12;
+/** A configured primary keeps its family's first slot until it fails at least this share of its recent calls. */
+const DEMOTION_RELIABILITY = 0.5;
 
 /**
  * Model family pool. No permanent hierarchy: every family proposes and every
@@ -20,7 +27,10 @@ interface RoutingStats {
  * Selection is deterministic for a given pool state so that an identical turn
  * compiles identical (routing, objective) work items and hits the work cache.
  * Empirical reliability only reorders a family's routings after a routing has
- * actually failed — never on success alone.
+ * actually failed — never on success alone — and only over a recent window:
+ * the configured primary stays first until it fails at least half of its
+ * recent calls, because an untested alternate is not known to be better and is
+ * often slower (a code-tuned alternate answering finance questions).
  */
 export class ModelPool {
   private readonly families: FusionKernelFamily[];
@@ -80,19 +90,23 @@ export class ModelPool {
   }
 
   recordOutcome(routing: string, success: boolean, latencyMs: number): void {
-    const stats = this.stats.get(routing) ?? { calls: 0, failures: 0, totalLatencyMs: 0 };
+    const stats = this.stats.get(routing) ?? { calls: 0, failures: 0, totalLatencyMs: 0, recent: [] };
     stats.calls += 1;
     if (!success) stats.failures += 1;
     stats.totalLatencyMs += Math.max(0, latencyMs);
+    stats.recent.push(success);
+    if (stats.recent.length > RELIABILITY_WINDOW) stats.recent.splice(0, stats.recent.length - RELIABILITY_WINDOW);
     this.stats.set(routing, stats);
   }
 
+  /** Recent-window reliability in (0, 1]. Untested routings score 1. */
   reliability(routing: string): number {
     const stats = this.stats.get(routing);
-    if (stats === undefined || stats.calls === 0) return 1;
+    if (stats === undefined || stats.recent.length === 0) return 1;
     // Successes never lower a routing below an untested one; one failure does
     // not zero it either (1 failure → 0.5, 1 failure in 3 → 0.75).
-    return (stats.calls - stats.failures + 1) / (stats.calls + 1);
+    const failures = stats.recent.filter((ok) => !ok).length;
+    return (stats.recent.length - failures + 1) / (stats.recent.length + 1);
   }
 
   snapshot(): Record<string, { calls: number; failures: number; avgLatencyMs: number }> {
@@ -110,11 +124,13 @@ export class ModelPool {
   private nextRouting(family: FusionKernelFamily, perFamilyUse: Map<string, number>): string {
     const used = perFamilyUse.get(family.name) ?? 0;
     perFamilyUse.set(family.name, used + 1);
-    // Round-robin across the family's routings, most reliable first, so the
-    // n-th use of a family lands on a different alternate than the (n-1)-th.
+    // Round-robin across the family's routings in config order, so the n-th use
+    // of a family lands on a different alternate than the (n-1)-th. A routing
+    // that is failing at least half of its recent calls moves behind the ones
+    // that are not; nothing else reorders the configured preference.
     const ordered = [family.routing, ...family.alt_routings]
-      .map((routing, index) => ({ routing, index }))
-      .sort((a, b) => this.reliability(b.routing) - this.reliability(a.routing) || a.index - b.index);
+      .map((routing, index) => ({ routing, index, failing: this.reliability(routing) <= DEMOTION_RELIABILITY }))
+      .sort((a, b) => Number(a.failing) - Number(b.failing) || a.index - b.index);
     return ordered[used % ordered.length]!.routing;
   }
 
