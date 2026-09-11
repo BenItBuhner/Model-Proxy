@@ -214,6 +214,20 @@ describe("transcribe-1 capability routing", () => {
     expect(calls).toHaveLength(0);
   });
 
+  test("stream=true is still a 422 while the Gemini key is benched", async () => {
+    const calls = mockUpstream((url) =>
+      url === GEMINI_URL ? geminiError(429, "RESOURCE_EXHAUSTED", "quota") : groqOk("groq covered"),
+    );
+    expect(await (await transcribe({ model: "transcribe-1" })).json()).toEqual({ text: "groq covered" });
+    expect(calls.map((call) => call.url)).toEqual([GEMINI_URL, GROQ_URL]);
+
+    const res = await transcribe({ model: "transcribe-1", stream: "true" });
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { error: { type: string } };
+    expect(body.error.type).toBe("unsupported_audio_feature");
+    expect(calls).toHaveLength(2);
+  });
+
   test("URL input skips Gemini and goes to Groq, which supports it", async () => {
     const calls = mockUpstream(() => groqOk("from url"));
     const fd = new FormData();

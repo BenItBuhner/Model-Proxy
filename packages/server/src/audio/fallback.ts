@@ -18,6 +18,7 @@ import {
   type AudioProviderResponse,
   AudioProviderCapabilityError,
   AudioProviderUpstreamError,
+  requireAudioCapabilities,
 } from "./base.ts";
 import { getAudioProviderAdapter } from "./registry.ts";
 import { recordRequestProgress } from "../server/request-log.ts";
@@ -66,6 +67,28 @@ export class AudioFallbackRouter {
     let onlyCapabilityFailures = true;
     let attempt = 0;
     for (const tuple of routes) {
+      // Declared capabilities are checked before any key is resolved so the
+      // verdict for an unsupported request never depends on key cooldowns.
+      const unsupported = declaredCapabilityError(tuple.routeConfig, args.request);
+      if (unsupported !== undefined) {
+        emit({
+          type: "route.skipped",
+          at: nowIso(),
+          provider: tuple.routeConfig.provider,
+          model: tuple.routeConfig.model,
+          reason: "audio_capability_unsupported",
+          sourceLogicalModel: tuple.sourceModel,
+          isFallback: tuple.isFallback,
+        });
+        errors.push({
+          provider: tuple.routeConfig.provider,
+          model: tuple.routeConfig.model,
+          status: unsupported.statusCode,
+          error: unsupported.message,
+        });
+        continue;
+      }
+
       const modelConfig = this.getModelConfig(tuple.sourceModel);
       const tracker = this.createTracker(tuple.routeConfig, modelConfig, args.maxKeyCycles);
       let keyInfo = this.resolveApiKey(tuple.routeConfig, tracker);
@@ -297,6 +320,19 @@ export class AudioFallbackRouter {
     const key = tracker.getNextKey();
     if (key === undefined) return undefined;
     return { apiKey: key, envVar: "(auto)" };
+  }
+}
+
+function declaredCapabilityError(
+  routeConfig: AudioRouteConfig,
+  request: AudioTranscriptionRequest,
+): AudioProviderCapabilityError | undefined {
+  try {
+    requireAudioCapabilities(routeConfig.capabilities ?? {}, request);
+    return undefined;
+  } catch (err) {
+    if (err instanceof AudioProviderCapabilityError) return err;
+    throw err;
   }
 }
 
