@@ -1,0 +1,26 @@
+MathArena Apex 2025 (12 problems), regraded with the fixed numeric grader. ✓ correct, ✗ wrong, - not run.
+
+problem  [1]  [2]  [3]  [4]  [5]  [6]  [7]    ever-solved
+apex25:1 ✗    ✓    -    ✗    ✗    ✗    ✗      ✓
+apex25:2 ✗    ✗    ✗    ✗    ✗    ✗    ✗      ✗
+apex25:3 ✓    -    -    ✓    ✓    ✗    ✗      ✓
+apex25:4 ✓    ✓    -    ✗    ✗    ✗    ✗      ✓
+apex25:5 ✓    ✓    -    -    ✗    ✗    ✓      ✓
+apex25:6 ✓    -    -    -    ✗    ✓    ✓      ✓
+apex25:7 ✓    -    -    -    ✓    ✗    ✗      ✓
+apex25:8 ✓    -    -    -    ✓    ✗    ✗      ✓
+apex25:9 ✗    ✗    ✓    ✓    ✗    ✗    ✗      ✓
+apex25:10✗    ✗    ✓    ✓    ✗    ✗    ✗      ✓
+apex25:11✓    ✓    -    ✓    ✓    ✗    ✗      ✓
+apex25:12✗    ✗    ✗    ✗    ✗    ✗    ✗      ✗
+
+[1] fusion F3 (v27): 7/12
+[2] fusion max, no scratchpad (v27-maxeffort): 4/8
+[3] fusion max + scratchpad (v36): 2/4
+[4] fusion max + scratchpad (v42): 4/8
+[5] deepseek-v4-pro-0813: 4/12
+[6] glm-5.3: 1/12
+[7] kimi-k3: 2/12
+ever solved by fusion (any effort/config): 10/12; by any member: 6/12
+
+Reference (MathArena Apex 2025, 2026-09): top published scores ~80-81% (Claude Opus 4.8 / GPT-5.5 class); no Fable 5.1 entry is published.

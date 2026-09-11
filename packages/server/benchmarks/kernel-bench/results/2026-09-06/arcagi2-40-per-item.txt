@@ -1,0 +1,56 @@
+ARC-AGI-2 public eval, 40-task deterministic sample (kernel-bench seed). Members: latest attempt per task (failed calls retried). Every fusion column is ONE run per task on a clean ledger.
+  fusion-F3      = default effort (reasoning_effort=high), build v27/v39
+  fusion-max-v45 = {"fusion":{"effort":"max"}}, build before the second-attempt logic
+  fusion-max-v47 = {"fusion":{"effort":"max"}}, final build (second attempt on weak artifacts, cross-wave verified pool, discrimination)
+  F3∪max-v47     = solved by either single run (best of two attempts)
+
+task             set  deepseek  glm  kimi  fusion-F3  fusion-max-v45  fusion-max-v47  F3∪max-v47
+arcagi2:136b0064 B    ✓         ✓    ✓     ✓          ✓               ✓               ✓
+arcagi2:13e47133 B    ✗         ✗    ✗     ✓          ✓               ✓               ✓
+arcagi2:142ca369 B    ✗         ✓    ✗     ✓          ✗               ✓               ✓
+arcagi2:195c6913 B    ✗         ✗    !     ✗          ✓               ✓               ✓
+arcagi2:20270e3b A    ✗         ✗    ✓     ✓          ✓               ✓               ✓
+arcagi2:20a9e565 A    ✗         ✓    !     ✗          ✗               ✗               ✗
+arcagi2:247ef758 B    ✓         ✗    ✗     ✓          ✓               ✓               ✓
+arcagi2:271d71e2 A    ✗         ✗    ✗     ✗          ✗               ✓               ✓
+arcagi2:28a6681f A    ✗         !    ✓     ✗          ✗               ✓               ✓
+arcagi2:31f7f899 B    ✓         ✗    ✓     ✓          ✓               ✓               ✓
+arcagi2:36a08778 A    ✓         ✗    ✗     ✓          ✓               ✓               ✓
+arcagi2:38007db0 B    ✗         ✓    ✗     ✓          ✓               ✓               ✓
+arcagi2:409aa875 A    ✗         ✓    ✗     ✓          ✓               ✓               ✓
+arcagi2:4c416de3 A    ✗         !    !     ✗          ✗               ✗               ✗
+arcagi2:53fb4810 A    ✗         ✗    !     ✓          ✗               ✓               ✓
+arcagi2:58f5dbd5 B    ✓         ✗    ✗     ✓          ✓               ✓               ✓
+arcagi2:62593bfd B    ✗         ✗    ✗     ✓          ✗               ✗               ✓
+arcagi2:64efde09 A    ✗         ✗    !     ✗          ✗               ✗               ✗
+arcagi2:65b59efc A    ✓         ✓    ✓     ✓          ✓               ✓               ✓
+arcagi2:67e490f4 B    ✓         ✓    ✓     ✓          ✓               ✓               ✓
+arcagi2:6ffbe589 B    ✗         !    !     ✗          ✗               ✓               ✓
+arcagi2:71e489b6 B    ✗         ✓    ✗     ✗          ✗               ✗               ✗
+arcagi2:7491f3cf B    ✓         ✓    ✓     ✓          ✓               ✗               ✓
+arcagi2:7b0280bc B    ✗         ✓    ✗     ✓          ✓               ✓               ✓
+arcagi2:7b3084d4 A    ✗         !    ✓     ✗          ✗               ✗               ✗
+arcagi2:7b5033c1 A    ✓         ✗    ✗     ✗          ✓               ✗               ✗
+arcagi2:7ed72f31 A    ✓         ✓    ✗     ✓          ✓               ✓               ✓
+arcagi2:80a900e0 A    ✗         ✓    ✗     ✓          ✓               ✓               ✓
+arcagi2:89565ca0 B    ✓         ✓    ✗     ✗          ✓               ✓               ✓
+arcagi2:898e7135 A    ✗         !    !     ✓          ✓               ✓               ✓
+arcagi2:a47bf94d B    ✗         ✗    ✗     ✗          ✗               ✓               ✓
+arcagi2:aa4ec2a5 B    ✗         ✗    !     ✓          ✓               ✓               ✓
+arcagi2:b10624e5 A    ✗         !    ✗     ✓          ✓               ✓               ✓
+arcagi2:b5ca7ac4 B    ✗         ✗    ✗     ✓          ✗               ✓               ✓
+arcagi2:b99e7126 B    ✗         ✗    ✓     ✓          ✓               ✓               ✓
+arcagi2:b9e38dc0 B    ✗         ✓    ✗     ✗          ✗               ✗               ✗
+arcagi2:d8e07eb2 A    ✓         ✓    ✗     ✓          ✓               ✓               ✓
+arcagi2:db0c5428 A    ✓         ✓    ✓     ✓          ✓               ✓               ✓
+arcagi2:db695cfb A    ✓         ✓    ✓     ✓          ✓               ✓               ✓
+arcagi2:eee78d87 A    ✓         ✓    ✓     ✓          ✓               ✓               ✓
+
+n=40: deepseek 15/40 (37.5%) | glm 18/40 (45.0%) | kimi 12/40 (30.0%) | union of members 27/40 (67.5%)
+      fusion F3 27/40 (67.5%) | fusion max v45 26/40 (65.0%) | fusion max v47 31/40 (77.5%) | F3∪max-v47 (best of two) 33/40 (82.5%) | solved in any fusion run of the campaign 35/40 (87.5%)
+set A (original 20): F3 13/20 | max v45 13/20 | max v47 15/20 | F3∪max-v47 15/20 | best member 9/20
+set B (new 20):      F3 14/20 | max v45 13/20 | max v47 16/20 | F3∪max-v47 18/20 | best member 9/20
+max v47 solves 10 tasks no member solved (13e47133, 195c6913, 271d71e2, 53fb4810, 6ffbe589, 898e7135, a47bf94d, aa4ec2a5, b10624e5, b5ca7ac4); misses 6 tasks some member solved (20a9e565, 71e489b6, 7491f3cf, 7b3084d4, 7b5033c1, b9e38dc0)
+never solved by fusion in any run: 5 — 4c416de3, 64efde09, 71e489b6, 7b3084d4, b9e38dc0
+
+Reference (ARC Prize leaderboard, semi-private eval, 2026-09): GPT-6 Astra 95.0%, Claude Fable 5.1 (max effort) 90.0%. Public-eval and semi-private are not the same distribution; the rows above are directly comparable to each other.

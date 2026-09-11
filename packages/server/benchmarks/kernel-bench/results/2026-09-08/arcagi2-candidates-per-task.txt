@@ -1,0 +1,55 @@
+ARC-AGI-2 set A/B per-task: trio members (best attempt, 9/05-06), fusion-max v47 max (9/06), candidate members (9/08, direct, reasoning_effort high, 30 min cap). ✓ correct ✗ wrong ! failed/timeout – not attempted
+
+task       glm kimi ds  | v47 | gemini mimo k2.7 dsflash
+7ed72f31   ✓   ✗   ✓   | ✓   | ✓      ✓      ✓      ✓      
+53fb4810   ✗   !   ✗   | ✓   | ✓      !      ✓      ✓      
+20270e3b   ✗   ✓   ✗   | ✓   | ✓      !      ✗      ✗      
+28a6681f   !   ✓   ✗   | ✓   | !      ✓      !      ✗      
+898e7135   !   !   ✗   | ✓   | !      ✗      ✗      ✓      
+409aa875   ✓   ✗   ✗   | ✓   | !      ✓      !      ✓      
+4c416de3   !   !   ✗   | ✗   | !      ✗      !      ✗      
+b10624e5   !   ✗   ✗   | ✓   | !      !      !      ✗      
+7b5033c1   ✗   ✗   ✓   | ✗   | !      ✗      ✓      ✗      
+eee78d87   ✓   ✓   ✓   | ✓   | !      ✓      !      ✓      
+d8e07eb2   ✓   ✗   ✓   | ✓   | ✓      ✗      !      ✓      
+7b3084d4   !   ✓   ✗   | ✗   | !      !      ✓      ✓      
+64efde09   ✗   !   ✗   | ✗   | !      ✓      ✓      ✗      
+65b59efc   ✓   ✓   ✓   | ✓   | !      ✓      ✓      ✗      
+36a08778   ✗   ✗   ✓   | ✓   | !      –      –      !      
+271d71e2   ✗   ✗   ✗   | ✓   | !      –      –      ✗      
+db0c5428   ✓   ✓   ✓   | ✓   | ✓      –      –      ✓      
+20a9e565   ✓   !   ✗   | ✗   | ✓      –      –      !      
+db695cfb   ✓   ✓   ✓   | ✓   | ✗      –      –      ✓      
+80a900e0   ✓   ✗   ✗   | ✓   | !      –      –      –      
+b99e7126   ✗   ✓   ✗   | ✓   | ✓      –      –      –      
+71e489b6   ✓   ✗   ✗   | ✗   | ✓      –      –      –      
+142ca369   ✓   ✗   ✗   | ✓   | !      –      –      –      
+247ef758   ✗   ✗   ✓   | ✓   | ✓      –      –      –      
+13e47133   ✗   ✗   ✗   | ✓   | !      –      –      –      
+195c6913   ✗   !   ✗   | ✓   | ✗      –      –      –      
+67e490f4   ✓   ✓   ✓   | ✓   | ✓      –      –      –      
+7b0280bc   ✓   ✗   ✗   | ✓   | ✗      –      –      –      
+6ffbe589   !   !   ✗   | ✓   | !      –      –      –      
+58f5dbd5   ✗   ✗   ✓   | ✓   | ✓      –      –      –      
+136b0064   ✓   ✓   ✓   | ✓   | ✓      –      –      –      
+62593bfd   ✗   ✗   ✗   | ✗   | ✗      –      –      –      
+31f7f899   ✗   ✓   ✓   | ✓   | ✓      –      –      –      
+b9e38dc0   ✓   ✗   ✗   | ✗   | ✗      –      –      –      
+b5ca7ac4   ✗   ✗   ✗   | ✓   | !      –      –      –      
+38007db0   ✓   ✗   ✗   | ✓   | !      –      –      –      
+89565ca0   ✓   ✗   ✓   | ✓   | !      –      –      –      
+aa4ec2a5   ✗   !   ✗   | ✓   | ✗      –      –      –      
+7491f3cf   ✓   ✓   ✓   | ✗   | !      –      –      –      
+a47bf94d   ✗   ✗   ✗   | ✓   | !      –      –      –      
+
+glm-5.3        18/40
+kimi-k3        12/40
+deepseek-v4-pro-0813 15/40
+trio union     27/40
+fusion v47 max 31/40
+gemini-3.8-flash         13/19 attempted-ok; solves v47 misses: 20a9e565,71e489b6
+mimo-v2.5-pro            6/10 attempted-ok; solves v47 misses: 64efde09
+kimi-k2.7-code           6/8 attempted-ok; solves v47 misses: 7b5033c1,7b3084d4,64efde09
+deepseek-v4-flash-0731   9/17 attempted-ok; solves v47 misses: 7b3084d4
+union incl. candidates 30/40
+v47 ∪ candidates 36/40

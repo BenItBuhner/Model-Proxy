@@ -19,6 +19,7 @@ import type {
 } from "./types.ts";
 import { FallbackRouter } from "../fallback.ts";
 import { ImagePreprocessor } from "./image-preprocessor.ts";
+import { FusionKernel } from "./kernel/kernel-router.ts";
 import { captureFusionEmitter, emitFusion, nowIso } from "./fusion-events.ts";
 import { resolvePricing, calculateCosts } from "../../observability/pricing.ts";
 import { currentRequestId } from "../../observability/request-context.ts";
@@ -127,6 +128,7 @@ export class FusionRouter {
   private readonly reasoningCache: ReasoningCache;
   private readonly imagePreprocessor: ImagePreprocessor;
   private readonly summarizer: ReasoningSummarizer;
+  private readonly kernel: FusionKernel;
 
   constructor() {
     this.fallbackRouter = new FallbackRouter();
@@ -137,6 +139,7 @@ export class FusionRouter {
     this.responseFuser = new ResponseFuser(this.summarizer);
     this.reasoningCache = new ReasoningCache();
     this.imagePreprocessor = new ImagePreprocessor();
+    this.kernel = new FusionKernel(this.fallbackRouter, this.responseFuser, this.summarizer);
   }
 
   // ── Public API ────────────────────────────────────────────────────
@@ -202,15 +205,19 @@ export class FusionRouter {
     });
 
     try {
-      switch (effectiveEffort) {
-        case 1: {
-          result = await this.handleEffort1(ctx, score, steps, costs);
-          break;
-        }
-        case 2:
-        case 3: {
-          result = await this.executeFusionPipeline(ctx, score, steps, costs);
-          break;
+      if (ctx.fusionConfig.engine === "kernel") {
+        result = await this.kernel.route(ctx, score, steps, costs);
+      } else {
+        switch (effectiveEffort) {
+          case 1: {
+            result = await this.handleEffort1(ctx, score, steps, costs);
+            break;
+          }
+          case 2:
+          case 3: {
+            result = await this.executeFusionPipeline(ctx, score, steps, costs);
+            break;
+          }
         }
       }
       this.finishRun(ctx, "completed", result);
@@ -261,6 +268,7 @@ export class FusionRouter {
       fusionEffort: effortDecision.resolvedEffort,
       fusedByModelRouting: result.fusedByModelRouting,
       requestId: ctx.requestId,
+      ...(ctx.kernelTrace !== undefined ? { kernel: ctx.kernelTrace } : {}),
     };
 
     log.info("fusion trace complete", {
@@ -312,6 +320,22 @@ export class FusionRouter {
     const pipelineStart = performance.now();
 
     try {
+      if (ctx.fusionConfig.engine === "kernel") {
+        yield* this.kernel.stream(ctx, score);
+        if (ctx.streamFusionTrace !== undefined) {
+          ctx.streamFusionTrace["complexityScore"] = score.score;
+          ctx.streamFusionTrace["complexityReason"] = score.reason;
+          ctx.streamFusionTrace["effort"] = effectiveEffort;
+        }
+        this.finishRun(ctx, "completed");
+        emitFusion(ctx, {
+          type: "fusion.pipeline.completed",
+          at: nowIso(),
+          totalMs: Math.round(performance.now() - pipelineStart),
+          trace: ctx.streamFusionTrace,
+        });
+        return;
+      }
       switch (effectiveEffort) {
         case 1: {
           log.info("effort 1: delegating to fallback router (stream)");
