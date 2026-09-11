@@ -8,12 +8,6 @@ import {
 } from "./base.ts";
 import { ProviderAPIError, ProviderTimeoutError } from "./errors.ts";
 import {
-  isSmoothStreamingEnabled,
-  pureContentDelta,
-  StreamPacer,
-  withDeltaContent,
-} from "./stream-pacer.ts";
-import {
   parseRetryAfterFromErrorBody,
   parseRetryAfterHeader,
   readBodyWithDeadline,
@@ -47,6 +41,41 @@ function isStreamOptionsRejection(err: unknown): boolean {
     err.status === 400 &&
     /stream_options/i.test(`${err.message} ${err.body ?? ""}`)
   );
+}
+
+/**
+ * Upstream rejected `max_tokens` for this model. OpenAI reasoning models
+ * (o-series, gpt-5) require `max_completion_tokens` instead, but clients like
+ * Cursor still send `max_tokens`.
+ */
+function isMaxTokensRejection(err: unknown): boolean {
+  const text = err instanceof ProviderAPIError ? `${err.message} ${err.body ?? ""}` : "";
+  return (
+    err instanceof ProviderAPIError &&
+    err.status === 400 &&
+    /max_tokens/.test(text) &&
+    /(max_completion_tokens|not supported|unsupported)/i.test(text)
+  );
+}
+
+/** One-shot payload repair for known pre-flight 400 rejections. */
+function retryPayloadForRejection(
+  payload: Record<string, unknown>,
+  err: unknown,
+): Record<string, unknown> | undefined {
+  if (payload["stream_options"] !== undefined && isStreamOptionsRejection(err)) {
+    const { stream_options: _dropped, ...rest } = payload;
+    return rest;
+  }
+  if (
+    payload["max_tokens"] !== undefined &&
+    payload["max_completion_tokens"] === undefined &&
+    isMaxTokensRejection(err)
+  ) {
+    const { max_tokens: maxTokens, ...rest } = payload;
+    return { ...rest, max_completion_tokens: maxTokens };
+  }
+  return undefined;
 }
 
 /**
@@ -207,14 +236,15 @@ export class OpenAIProvider extends AbstractProvider {
           yield chunk;
         }
       } catch (err) {
-        // The proxy injects stream_options by default so usage chunks are
-        // emitted, but some openai-compatible upstreams reject the field
-        // outright. Retry once without it (safe: the 400 fires before any
-        // chunk is yielded).
-        if (yieldedAny || !isStreamOptionsRejection(err) || payload["stream_options"] === undefined) {
+        // Known pre-flight 400s get exactly one shape-repair retry (safe: the
+        // 400 fires before any chunk is yielded): stream_options rejections
+        // drop the field; max_tokens rejections translate the limit to
+        // max_completion_tokens (required by OpenAI reasoning models).
+        const retryPayload =
+          yieldedAny ? undefined : retryPayloadForRejection(payload, err);
+        if (retryPayload === undefined) {
           throw err;
         }
-        const { stream_options: _dropped, ...retryPayload } = payload;
         yield* this.streamOpenAIInner(args, ctx, {
           payload: retryPayload,
           url,
@@ -294,21 +324,35 @@ export class OpenAIProvider extends AbstractProvider {
       for (const chunk of bufferedToolCallChunks) yield chunk;
       bufferedToolCallChunks = [];
     };
-    const pacer = isSmoothStreamingEnabled(ctx) ? new StreamPacer() : undefined;
-    let lastContentChunk: Record<string, unknown> | undefined = undefined;
-    const drainPacer = function* (): Generator<string, void, unknown> {
-      if (pacer === undefined || lastContentChunk === undefined) return;
-      const rest = pacer.drain();
-      if (rest.length > 0) {
-        yield `data: ${JSON.stringify(withDeltaContent(lastContentChunk, rest))}\n\n`;
+    let sawDone = false;
+    // Choices that streamed deltas but never received a terminal
+    // finish_reason (some openai-compatible upstreams end with a bare
+    // [DONE]). Strict clients rely on the terminal chunk to close out tool
+    // calls, so synthesize one from what actually streamed.
+    const pendingFinishChoices = (): number[] =>
+      [...normalizeState.sawDelta].filter((idx) => !normalizeState.finishEmitted.has(idx)).sort((a, b) => a - b);
+    const terminalChunks = function* (): Generator<string> {
+      for (const idx of pendingFinishChoices()) {
+        yield `data: ${JSON.stringify({
+          id: normalizeState.canonicalId ?? streamId,
+          object: "chat.completion.chunk",
+          created: normalizeState.canonicalCreated ?? Math.floor(Date.now() / 1000),
+          model: args.model,
+          choices: [{
+            index: idx,
+            delta: {},
+            finish_reason: normalizeState.sawToolCalls.has(idx) ? "tool_calls" : "stop",
+          }],
+        })}\n\n`;
       }
     };
     for await (const line of readSSELines(response.body)) {
       const trimmed = line.trim();
       if (trimmed === "" || trimmed === "data:") continue;
       if (trimmed === "data: [DONE]") {
+        sawDone = true;
         if (bufferPartialToolCalls) yield* flushBufferedToolCallChunks();
-        yield* drainPacer();
+        yield* terminalChunks();
         yield "data: [DONE]\n\n";
         return;
       }
@@ -326,8 +370,9 @@ export class OpenAIProvider extends AbstractProvider {
       const jsonStr = trimmed.slice(5).trim();
       if (jsonStr.length === 0) continue;
       if (jsonStr === "[DONE]") {
+        sawDone = true;
         if (bufferPartialToolCalls) yield* flushBufferedToolCallChunks();
-        yield* drainPacer();
+        yield* terminalChunks();
         yield "data: [DONE]\n\n";
         return;
       }
@@ -361,17 +406,6 @@ export class OpenAIProvider extends AbstractProvider {
         if (bufferPartialToolCalls && bufferedToolCallChunks.length > 0) {
           yield* flushBufferedToolCallChunks();
         }
-        if (pacer !== undefined) {
-          const content = pureContentDelta(normalized);
-          if (content !== undefined) {
-            lastContentChunk = normalized;
-            for await (const piece of pacer.feed(content)) {
-              yield `data: ${JSON.stringify(withDeltaContent(normalized, piece))}\n\n`;
-            }
-            continue;
-          }
-          yield* drainPacer();
-        }
         yield output;
       } catch (err) {
         if (err instanceof ProviderAPIError) throw err;
@@ -389,13 +423,19 @@ export class OpenAIProvider extends AbstractProvider {
         });
       }
     }
-    if (pacer !== undefined) yield* drainPacer();
     if (bufferPartialToolCalls && bufferedToolCallChunks.length > 0) {
       throw new ProviderAPIError(
         `${this.providerName} stream ended before completing a tool call`,
         502,
         { provider: this.providerName },
       );
+    }
+    if (!sawDone) {
+      // Clean body close without [DONE]: still close out the client stream
+      // with the terminal finish_reason chunk so tool calls are committed.
+      yield* flushBufferedToolCallChunks();
+      yield* terminalChunks();
+      yield "data: [DONE]\n\n";
     }
   }
 
@@ -545,7 +585,11 @@ async function* synthesizeSingleChunkStream(
     object: "chat.completion.chunk",
     created: now,
     model,
-    choices: [{ index: 0, delta }],
+    choices: [{
+      index: 0,
+      delta,
+      finish_reason: Array.isArray(toolCalls) && toolCalls.length > 0 ? "tool_calls" : "stop",
+    }],
   };
   yield `data: ${JSON.stringify(chunk)}\n\n`;
   yield "data: [DONE]\n\n";
@@ -705,10 +749,23 @@ interface StreamNormalizeState {
   canonicalCreated?: number;
   /** Choices whose delta already carried `role` (spec: role on first delta only). */
   roleEmitted: Set<number>;
+  /** Choices whose stream emitted tool-call deltas (for finish_reason repair). */
+  sawToolCalls: Set<number>;
+  /** Choices that streamed any delta (for terminal finish_reason synthesis). */
+  sawDelta: Set<number>;
+  /** Choices that already received a non-null finish_reason from upstream. */
+  finishEmitted: Set<number>;
 }
 
 function createStreamNormalizeState(): StreamNormalizeState {
-  return { slots: new Map(), nextOutIndex: new Map(), roleEmitted: new Set() };
+  return {
+    slots: new Map(),
+    nextOutIndex: new Map(),
+    roleEmitted: new Set(),
+    sawToolCalls: new Set(),
+    sawDelta: new Set(),
+    finishEmitted: new Set(),
+  };
 }
 
 function normalizeStreamChoice(
@@ -724,8 +781,20 @@ function normalizeStreamChoice(
   const delta = normalized["delta"];
   if (typeof delta === "object" && delta !== null && !Array.isArray(delta)) {
     normalized["delta"] = normalizeStreamDelta(delta as Record<string, unknown>, index, state);
+    state.sawDelta.add(index);
   } else if (delta !== undefined) {
     normalized["delta"] = {};
+  }
+  // Strict clients (Cursor, OpenCode) branch on finish_reason to decide
+  // whether to execute tools. Several providers emit `stop` on streams that
+  // produced tool calls, which makes the agent think the turn ended; repair
+  // the terminal reason to match what actually streamed.
+  const finish = normalized["finish_reason"];
+  if (finish === "stop" && state.sawToolCalls.has(index)) {
+    normalized["finish_reason"] = "tool_calls";
+  }
+  if (typeof finish === "string") {
+    state.finishEmitted.add(index);
   }
   // OpenAI includes `finish_reason` (null until the terminal chunk) on every
   // streamed choice; some upstreams omit the key entirely on non-final chunks.
@@ -780,6 +849,9 @@ function normalizeStreamDelta(
       choiceIndex,
       state,
     );
+    if ((normalized["tool_calls"] as unknown[]).length > 0) {
+      state.sawToolCalls.add(choiceIndex);
+    }
   } else if ("tool_calls" in normalized) {
     // Some upstreams emit `tool_calls: null` on non-tool deltas; the OpenAI
     // contract omits the key entirely.

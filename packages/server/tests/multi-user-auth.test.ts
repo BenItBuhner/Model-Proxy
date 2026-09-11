@@ -1,5 +1,6 @@
 import { rmWithRetry } from "./support.ts";
 
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,20 +14,61 @@ import {
   resetRequestLogForTests,
 } from "../src/server/request-log.ts";
 import { setStorageRootForTests } from "../src/storage/storage-paths.ts";
+import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
+import { modelConfigLoader } from "../src/config/model-loader.ts";
+import { providerConfigLoader } from "../src/config/provider-loader.ts";
 
 const tmpRoot = join(tmpdir(), `mp-users-${process.pid}-${Date.now()}`);
 
 beforeEach(() => {
   process.env.CLIENT_API_KEY = "multi-user-admin-key";
   setStorageRootForTests(tmpRoot);
+  setPrimaryConfigDirForTests(tmpRoot);
   closeOperationalDbForTests();
   rmWithRetry(tmpRoot, { recursive: true, force: true });
+  mkdirSync(join(tmpRoot, "models"), { recursive: true });
+  mkdirSync(join(tmpRoot, "providers"), { recursive: true });
+  writeFileSync(
+    join(tmpRoot, "providers", "env-test.json"),
+    JSON.stringify({
+      name: "env-test",
+      display_name: "Env Test",
+      enabled: true,
+      api_keys: { env_var_patterns: ["ENV_TEST_API_KEY"] },
+      endpoints: {
+        base_url: "https://env-test.invalid/v1",
+        completions: "/chat/completions",
+        streaming: "/chat/completions",
+        compatible_format: "openai",
+      },
+      authentication: {
+        type: "bearer",
+        header_name: "Authorization",
+        header_format: "Bearer {api_key}",
+      },
+    }),
+  );
+  writeFileSync(
+    join(tmpRoot, "models", "env-test-model.json"),
+    JSON.stringify({
+      logical_name: "env-test-model",
+      timeout_seconds: 5,
+      default_cooldown_seconds: 1,
+      model_routings: [{ provider: "env-test", model: "env-test-upstream" }],
+      fallback_model_routings: [],
+    }),
+  );
+  providerConfigLoader.clearCache();
+  modelConfigLoader.clearCache();
 });
 
 afterEach(() => {
   delete process.env.CLIENT_API_KEY;
   closeOperationalDbForTests();
   setStorageRootForTests(undefined);
+  setPrimaryConfigDirForTests(undefined);
+  providerConfigLoader.clearCache();
+  modelConfigLoader.clearCache();
   rmWithRetry(tmpRoot, { recursive: true, force: true });
 });
 

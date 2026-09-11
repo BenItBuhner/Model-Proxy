@@ -113,7 +113,7 @@ like `GROQ_API_KEY`. See [.env.example](.env.example) for the full list.
 }
 ```
 
-Optional `context_window` on the model or on a route overrides discovery when upstream metadata is missing.
+Optional `context_window` on the model or on a route takes precedence over upstream-discovered metadata when advertising the window to clients (`GET /v1/models`).
 
 ## API surface
 
@@ -155,9 +155,9 @@ For a native provider, configure `endpoints.responses` and optionally
 
 For each logical model (primary route `model_routings[0]`):
 
-1. Upstream provider `GET /v1/models` (cached)
-2. `provider.models.<id>.context_length` in provider JSON
-3. Route or model `context_window` in config
+1. Route or model `context_window` in config (explicit operator override wins, e.g. to advertise a larger window than the upstream reports)
+2. Upstream provider `GET /v1/models` (cached)
+3. `provider.models.<id>.context_length` in provider JSON
 4. `DEFAULT_CONTEXT_WINDOW` env
 5. `128000` system default
 

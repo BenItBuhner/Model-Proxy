@@ -68,8 +68,9 @@ function routeConfigContextWindow(
 
 /**
  * Resolve context window for a logical model using the primary route
- * (`model_routings[0]`). Precedence: upstream catalog → provider.models JSON →
- * route/model config → DEFAULT_CONTEXT_WINDOW → 128_000.
+ * (`model_routings[0]`). Precedence: route/model config (explicit operator
+ * override, e.g. advertising a larger window to clients) → upstream catalog →
+ * provider.models JSON → DEFAULT_CONTEXT_WINDOW → 128_000.
  */
 export async function resolveContextWindow(logicalModel: string): Promise<number> {
   const cfg = modelConfigLoader.loadConfig(logicalModel);
@@ -77,6 +78,9 @@ export async function resolveContextWindow(logicalModel: string): Promise<number
   if (primary === undefined) {
     return envContextWindow() ?? SYSTEM_DEFAULT_CONTEXT_WINDOW;
   }
+
+  const routeOverride = routeConfigContextWindow(primary, cfg);
+  if (routeOverride !== undefined) return routeOverride;
 
   const upstream = await getUpstreamContextWindow(primary.provider, primary.model);
   if (upstream !== undefined) return upstream;
@@ -86,9 +90,6 @@ export async function resolveContextWindow(logicalModel: string): Promise<number
     primary.model,
   );
   if (providerCatalog !== undefined) return providerCatalog;
-
-  const routeOverride = routeConfigContextWindow(primary, cfg);
-  if (routeOverride !== undefined) return routeOverride;
 
   return envContextWindow() ?? SYSTEM_DEFAULT_CONTEXT_WINDOW;
 }

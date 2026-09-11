@@ -183,6 +183,7 @@ export interface DescribeRequestImagesResult {
   requestData: Record<string, unknown>;
   imageCount: number;
   cacheHits: number;
+  descriptions: string[];
 }
 async function describeImage(
   source: string,
@@ -237,6 +238,7 @@ export async function describeRequestImages(
   if (targets.length === 0) return undefined;
   const imageCount = targets.reduce((sum, target) => sum + target.occurrences.length, 0);
   let cacheHits = 0;
+  const descriptions: string[] = [];
   for (const target of targets) {
     for (const occurrence of target.occurrences) {
       const key = createHash("sha256").update(occurrence.source).digest("hex");
@@ -250,6 +252,7 @@ export async function describeRequestImages(
         text = described.text;
         if (described.cacheable) cacheSet(key, described.text);
       }
+      descriptions.push(text);
       occurrence.container[occurrence.index] = { type: "text", text: wrapDescription(occurrence.detail, text) };
     }
   }
@@ -258,5 +261,5 @@ export async function describeRequestImages(
     imageCount,
     cacheHits,
   });
-  return { requestData: clone, imageCount, cacheHits };
+  return { requestData: clone, imageCount, cacheHits, descriptions };
 }

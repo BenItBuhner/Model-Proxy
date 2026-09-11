@@ -931,7 +931,7 @@ export function chatStreamChunkToResponsesEvents(
  * reads/writes, while OpenAI `prompt_tokens` includes them, so cached tokens
  * are folded back in and surfaced via `prompt_tokens_details.cached_tokens`.
  */
-function mergeAnthropicUsageIntoChatUsage(
+export function mergeAnthropicUsageIntoChatUsage(
   usage: Record<string, unknown>,
   previous: Record<string, unknown> | undefined,
 ): Record<string, unknown> {

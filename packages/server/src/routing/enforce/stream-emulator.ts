@@ -61,7 +61,25 @@ async function* emulateOpenAI(
   const delta: Record<string, unknown> = { role: "assistant" };
   if (typeof content === "string" && content.length > 0) delta["content"] = content;
   if (Array.isArray(toolCalls) && toolCalls.length > 0) {
-    delta["tool_calls"] = toolCalls;
+    // Streaming tool_calls are DELTAS: each fragment needs an index so strict
+    // client accumulators (Cursor, OpenCode) keep parallel calls separate.
+    delta["tool_calls"] = toolCalls
+      .filter(isObject)
+      .map((tc, i) => {
+        const fn = isObject(tc["function"]) ? tc["function"] : {};
+        return {
+          index: typeof tc["index"] === "number" ? tc["index"] : i,
+          id: typeof tc["id"] === "string" && tc["id"].length > 0 ? tc["id"] : `call_${i}`,
+          type: "function",
+          function: {
+            name: typeof fn["name"] === "string" ? fn["name"] : "",
+            arguments:
+              typeof fn["arguments"] === "string"
+                ? fn["arguments"]
+                : JSON.stringify(fn["arguments"] ?? {}),
+          },
+        };
+      });
   }
 
   const first = {

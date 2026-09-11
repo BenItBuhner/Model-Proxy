@@ -484,9 +484,6 @@ export class FallbackRouter {
     if (modelConfig.buffer_partial_tool_calls) {
       route.bufferPartialToolCalls = true;
     }
-    if (modelConfig.smooth_streaming) {
-      route.smoothStreaming = true;
-    }
     return route;
   }
 
@@ -1547,22 +1544,21 @@ export class FallbackRouter {
     return "throw";
   }
 
-  /**
-   * When a request carries images but no route of the chosen logical model
-   * accepts them, describe the images via a vision-capable model and swap the
-   * image parts for their descriptions so the original model can still answer.
-   */
+  private ownRouteTuples(logicalModel: string, principal: Principal | undefined): RouteTuple[] {
+    return this.collectRouteConfigs(logicalModel, principal).filter(
+      (tuple) => tuple.sourceModel === logicalModel && tuple.isFallback !== true,
+    );
+  }
   private async withImageDescriptions(args: CallWithFallbackArgs): Promise<CallWithFallbackArgs> {
     if (args.skipImageDescription === true) return args;
     const principal = args.principal ?? this.principal;
     const analysis = analyzeRequestForRouting(args.requestData);
     if (!analysis.hasMultimodalContent) return args;
-    const routeTuples = this.collectRouteConfigs(args.logicalModel, principal);
-    if (routeTuples.length === 0) return args;
-    const { eligible, skipped } = this.eligibleRouteTuples(routeTuples, analysis, { emitSkips: false });
-    if (eligible.length > 0) return args;
+    const ownTuples = this.ownRouteTuples(args.logicalModel, principal);
+    if (ownTuples.length === 0) return args;
+    const { skipped } = this.eligibleRouteTuples(ownTuples, analysis, { emitSkips: false });
     if (!skipped.some((skip) => skip.reason === "multimodal_unsupported")) return args;
-    const visionModel = resolveVisionModel(principal, new Set([args.logicalModel]));
+    const visionModel = resolveVisionModel(principal);
     if (visionModel === undefined) {
       log.info("no vision-capable model available to describe images", { logicalModel: args.logicalModel });
       return args;
@@ -1977,6 +1973,11 @@ export class FallbackRouter {
           recordRouteProgress(route, attemptNumber);
 
           const streamStartMs = performance.now();
+          // Once any byte reached the client the response is committed: a
+          // restarted attempt would append a second stream (fresh tool-call
+          // fragments at index 0) onto the same SSE response and corrupt the
+          // client's accumulator. Surface the error instead.
+          let yieldedToClient = false;
           try {
             const stream = executeStream({
               route,
@@ -1991,6 +1992,7 @@ export class FallbackRouter {
               targetProtocol,
               { allowEmptyPassthrough },
             )) {
+              yieldedToClient = true;
               yield chunk;
             }
             emit({
@@ -2003,7 +2005,19 @@ export class FallbackRouter {
             });
             return;
           } catch (err) {
-            if (signal?.aborted === true) throw err;
+            if (signal?.aborted === true || yieldedToClient) {
+              emit({
+                type: "route.failed",
+                at: nowIso(),
+                attempt: attemptNumber,
+                provider: route.provider,
+                model: route.model,
+                errorType: err instanceof Error ? err.name : "Unknown",
+                message: err instanceof Error ? err.message : String(err),
+                willFallback: false,
+              });
+              throw err;
+            }
             const actionInfo = resolveErrorAction(route.provider, err);
             if (actionInfo.action === "auto_fix_tool_responses") {
               if (targetProtocol === "responses") throw err;
@@ -2025,6 +2039,7 @@ export class FallbackRouter {
                   targetProtocol,
                   { allowEmptyPassthrough },
                 )) {
+                  yieldedToClient = true;
                   yield chunk;
                 }
                 emit({
@@ -2037,7 +2052,7 @@ export class FallbackRouter {
                 });
                 return;
               } catch (retryErr) {
-                if (signal?.aborted) throw retryErr;
+                if (signal?.aborted || yieldedToClient) throw retryErr;
                 const disposition = this.handleAttemptError(
                   retryErr,
                   route,

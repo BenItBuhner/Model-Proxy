@@ -298,7 +298,7 @@ export function openaiToAnthropicRequest(
     const role = rawMsg["role"];
     const content = rawMsg["content"];
 
-    if (role === "system") {
+    if (role === "system" || role === "developer") {
       if (Array.isArray(content)) {
         const joined = content
           .filter(isObject)
