@@ -13,10 +13,12 @@ import {
   type ErrorAction,
 } from "../providers/api-key-manager.ts";
 import { createLogger } from "../observability/logger.ts";
+import { isAbortLikeError } from "../routing/error-classification.ts";
 import {
   type AudioProviderResponse,
   AudioProviderCapabilityError,
   AudioProviderUpstreamError,
+  requireAudioCapabilities,
 } from "./base.ts";
 import { getAudioProviderAdapter } from "./registry.ts";
 import { recordRequestProgress } from "../server/request-log.ts";
@@ -62,11 +64,43 @@ export class AudioFallbackRouter {
     }
 
     const errors: Array<Record<string, unknown>> = [];
+    let onlyCapabilityFailures = true;
     let attempt = 0;
     for (const tuple of routes) {
+      // Declared capabilities are checked before any key is resolved so the
+      // verdict for an unsupported request never depends on key cooldowns.
+      const unsupported = declaredCapabilityError(tuple.routeConfig, args.request);
+      if (unsupported !== undefined) {
+        emit({
+          type: "route.skipped",
+          at: nowIso(),
+          provider: tuple.routeConfig.provider,
+          model: tuple.routeConfig.model,
+          reason: "audio_capability_unsupported",
+          sourceLogicalModel: tuple.sourceModel,
+          isFallback: tuple.isFallback,
+        });
+        errors.push({
+          provider: tuple.routeConfig.provider,
+          model: tuple.routeConfig.model,
+          status: unsupported.statusCode,
+          error: unsupported.message,
+        });
+        continue;
+      }
+
       const modelConfig = this.getModelConfig(tuple.sourceModel);
       const tracker = this.createTracker(tuple.routeConfig, modelConfig, args.maxKeyCycles);
       let keyInfo = this.resolveApiKey(tuple.routeConfig, tracker);
+      if (keyInfo === undefined) {
+        onlyCapabilityFailures = false;
+        errors.push({
+          provider: tuple.routeConfig.provider,
+          model: tuple.routeConfig.model,
+          error: "no API key available (none configured, or all keys in cooldown)",
+        });
+        continue;
+      }
       while (keyInfo !== undefined) {
         attempt += 1;
         const route = this.buildResolvedRoute(
@@ -108,8 +142,11 @@ export class AudioFallbackRouter {
           });
           return response;
         } catch (err) {
+          // The client went away: nothing downstream can use a fallback answer.
+          if (args.signal?.aborted === true) throw err;
+
           const status = extractStatusCode(err);
-          const willFallback = !(err instanceof AudioProviderCapabilityError);
+          const capabilityFailure = err instanceof AudioProviderCapabilityError;
           emit({
             type: "route.failed",
             at: nowIso(),
@@ -119,7 +156,7 @@ export class AudioFallbackRouter {
             status,
             errorType: err instanceof Error ? err.name : "Error",
             message: err instanceof Error ? err.message : String(err),
-            willFallback,
+            willFallback: true,
           });
           errors.push({
             provider: route.provider,
@@ -128,22 +165,31 @@ export class AudioFallbackRouter {
             error: err instanceof Error ? err.message : String(err),
           });
 
-          if (!willFallback) break;
-          const action = resolveErrorAction(route.provider, status);
-          if (action.action !== "pass_through") {
-            tracker.markFailed(route.apiKey, {
-              action: action.action,
-              cooldownSeconds: action.cooldownSeconds,
-            });
-            emit({
-              type: "key.cooldown",
-              at: nowIso(),
-              provider: route.provider,
-              model: route.model,
-              action: action.action,
-              cooldownSeconds: action.cooldownSeconds,
-            });
+          // A capability mismatch is about the request, not the key: skip
+          // straight to the next route without touching cooldowns.
+          if (capabilityFailure) break;
+          onlyCapabilityFailures = false;
+
+          const action = isAbortLikeError(err)
+            ? { action: "fallback_no_cooldown" as ErrorAction }
+            : resolveErrorAction(route.provider, status);
+          // Request-shaped failures (bad audio, timeouts) would fail on every
+          // key of this route: move on without benching the key.
+          if (action.action === "fallback_no_cooldown" || action.action === "pass_through") {
+            break;
           }
+          tracker.markFailed(route.apiKey, {
+            action: action.action,
+            cooldownSeconds: action.cooldownSeconds,
+          });
+          emit({
+            type: "key.cooldown",
+            at: nowIso(),
+            provider: route.provider,
+            model: route.model,
+            action: action.action,
+            cooldownSeconds: action.cooldownSeconds,
+          });
           if (route.apiKeyEnvVar === "(none)") {
             break;
           }
@@ -153,6 +199,12 @@ export class AudioFallbackRouter {
     }
 
     log.warn("all audio routes failed", { logicalModel: args.logicalModel, errors });
+    if (onlyCapabilityFailures && errors.length > 0) {
+      throw new AudioProviderCapabilityError(
+        `No audio route for '${args.logicalModel}' supports this request: ` +
+          errors.map((entry) => `${entry.provider}/${entry.model}: ${entry.error}`).join("; "),
+      );
+    }
     throw new AudioRoutingError(
       args.logicalModel,
       errors,
@@ -268,6 +320,19 @@ export class AudioFallbackRouter {
     const key = tracker.getNextKey();
     if (key === undefined) return undefined;
     return { apiKey: key, envVar: "(auto)" };
+  }
+}
+
+function declaredCapabilityError(
+  routeConfig: AudioRouteConfig,
+  request: AudioTranscriptionRequest,
+): AudioProviderCapabilityError | undefined {
+  try {
+    requireAudioCapabilities(routeConfig.capabilities ?? {}, request);
+    return undefined;
+  } catch (err) {
+    if (err instanceof AudioProviderCapabilityError) return err;
+    throw err;
   }
 }
 

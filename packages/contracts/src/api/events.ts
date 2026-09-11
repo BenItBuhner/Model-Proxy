@@ -52,7 +52,10 @@ export type RequestEvent =
       at: string;
       provider: string;
       model: string;
-      reason: "multimodal_unsupported" | "context_window_exceeded";
+      reason:
+        | "multimodal_unsupported"
+        | "context_window_exceeded"
+        | "audio_capability_unsupported";
       sourceLogicalModel: string;
       isFallback: boolean;
       estimatedPromptTokens?: number;

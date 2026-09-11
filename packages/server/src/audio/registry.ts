@@ -1,5 +1,6 @@
 import type { AudioProviderAdapter, AudioProviderCallContext, AudioProviderResponse } from "./base.ts";
 import type { AudioProviderFormat } from "@model-proxy/contracts/schemas/audio-routing.ts";
+import { GeminiTranscribeAudioProvider } from "./gemini-transcribe-audio-provider.ts";
 import { NvidiaNimHttpAudioProvider } from "./nvidia-nim-http-audio-provider.ts";
 import { OpenAICompatibleAudioProvider } from "./openai-compatible-audio-provider.ts";
 
@@ -24,6 +25,7 @@ const lazyRivaAdapter: AudioProviderAdapter = {
 
 const adapters = new Map<AudioProviderFormat, AudioProviderAdapter>([
   ["openai_audio", new OpenAICompatibleAudioProvider()],
+  ["gemini_transcribe", new GeminiTranscribeAudioProvider()],
   ["nvidia_nim_http", new NvidiaNimHttpAudioProvider()],
   ["nvidia_riva_grpc", lazyRivaAdapter],
 ]);
