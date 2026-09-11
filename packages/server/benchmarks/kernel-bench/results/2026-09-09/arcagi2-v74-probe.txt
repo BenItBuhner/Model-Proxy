@@ -1,4 +1,4 @@
-ARC-AGI-2 v74 probe (2026-09-11, 22:50–03:00 UTC, upstream 3–10x slower than 09-08 evening): the six tasks v47 solved that v72 lost at the 2400 s budget, re-run with the example-grounded in-place extension trigger changed to "nothing verified yet" (max_band_extension_seconds 1200 from the template).
+ARC-AGI-2 v74 probe (2026-09-11, 22:50–03:00 UTC, upstream 3–10x slower than 09-08 evening): the six tasks v47 solved that v72 missed (three at the budget, three as fast wrong settles), re-run with the example-grounded in-place extension trigger changed to "nothing verified yet" (max_band_extension_seconds 1200 from the template).
 
 task        v72 (today)   v74           note
 53fb4810    ✗  930s       ✓ 1248s     
