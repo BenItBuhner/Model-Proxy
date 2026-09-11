@@ -1,0 +1,11 @@
+ARC-AGI-2 v74 probe (2026-09-11, 22:50–03:00 UTC, upstream 3–10x slower than 09-08 evening): the six tasks v47 solved that v72 lost at the 2400 s budget, re-run with the example-grounded in-place extension trigger changed to "nothing verified yet" (max_band_extension_seconds 1200 from the template).
+
+task        v72 (today)   v74           note
+53fb4810    ✗  930s       ✓ 1248s     
+b10624e5    ✗ 1573s       ✓ 2782s     
+271d71e2    ✗ 3000s       ✓ 1654s     
+db0c5428    ✗ 1205s       ✓  619s     
+6ffbe589    ✗ 3000s       ✗ 4200s     no grid at 4200 s
+a47bf94d    ✗ 3000s       ✗ 4200s     no grid at 4200 s
+
+v74 4/6 on items that were 0/6 under v72 the same day. Mechanism: with mixed effort, the medium slots finish (and fail verification) before the 1200 s cap, which satisfied the old finished-family trigger and killed the still-thinking high slots; example-grounded waves now extend while no program is verified, regardless of in_place_extension_domains.
