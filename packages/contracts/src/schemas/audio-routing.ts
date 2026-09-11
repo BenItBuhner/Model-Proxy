@@ -7,6 +7,7 @@ const EnvSubstitutedUrlSchema = z.string().min(1).refine(
 
 export const AudioProviderFormatSchema = z.enum([
   "openai_audio",
+  "gemini_transcribe",
   "nvidia_nim_http",
   "nvidia_riva_grpc",
 ]);

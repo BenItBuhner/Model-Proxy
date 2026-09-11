@@ -12,7 +12,7 @@ OpenAI- and Anthropic-compatible LLM proxy on **Bun** and **TypeScript**. Route 
 - **Format conversion** — OpenAI ↔ Anthropic at the proxy boundary
 - **Streaming** — SSE for chat completions
 - **Context window metadata** — `GET /v1/models` exposes `context_window`, `context_length`, and `limit.context` for harness compaction
-- **Audio** — OpenAI-style `/v1/audio/transcriptions` with provider routing
+- **Audio** — OpenAI-style `/v1/audio/transcriptions`; one logical model `transcribe-1` routes to Gemini 3.5 Transcribe (native API) with Groq Whisper fallbacks
 - **Admin UI** — Next.js static app served at `/` (models, providers, keys, test bench, bundle import/export)
 
 ## Requirements
@@ -68,7 +68,7 @@ Bun workspaces monorepo:
 | `config/providers/` | Provider endpoint + auth JSON (often gitignored locally; samples may ship in repo) |
 | `config/models/` | Per logical model routing JSON (gitignored locally) |
 | `config/templates/` | Templates for new provider/model files |
-| `config/audio-models/` | Audio transcription routing |
+| `config/audio-models/` | Audio transcription routing (`transcribe-1.json`: Gemini `gemini_transcribe` primary, Groq `openai_audio` fallbacks) |
 
 ## Configuration
 

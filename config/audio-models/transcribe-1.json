@@ -1,0 +1,54 @@
+{
+  "logical_name": "transcribe-1",
+  "timeout_seconds": 120,
+  "default_cooldown_seconds": 60,
+  "audio_routings": [
+    {
+      "provider": "gemini",
+      "model": "gemini-3.5-transcribe",
+      "format": "gemini_transcribe",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "timeout_seconds": 120,
+      "capabilities": {
+        "streaming": false,
+        "text": true,
+        "verbose_json": true,
+        "srt": true,
+        "vtt": true,
+        "timestamps": true,
+        "url_input": false
+      }
+    },
+    {
+      "provider": "groq",
+      "model": "whisper-large-v3",
+      "format": "openai_audio",
+      "timeout_seconds": 60,
+      "capabilities": {
+        "streaming": false,
+        "text": true,
+        "verbose_json": true,
+        "srt": false,
+        "vtt": false,
+        "timestamps": true,
+        "url_input": true
+      }
+    },
+    {
+      "provider": "groq",
+      "model": "whisper-large-v3-turbo",
+      "format": "openai_audio",
+      "timeout_seconds": 60,
+      "capabilities": {
+        "streaming": false,
+        "text": true,
+        "verbose_json": true,
+        "srt": false,
+        "vtt": false,
+        "timestamps": true,
+        "url_input": true
+      }
+    }
+  ],
+  "fallback_audio_routings": []
+}

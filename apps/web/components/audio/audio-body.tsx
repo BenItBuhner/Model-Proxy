@@ -25,7 +25,7 @@ export function AudioBody({
   embedded?: boolean;
 }): React.ReactElement {
   const [models, setModels] = useState<string[]>([]);
-  const [model, setModel] = useState("complete-stt");
+  const [model, setModel] = useState("transcribe-1");
   const [responseFormat, setResponseFormat] = useState("json");
   const [language, setLanguage] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -266,7 +266,7 @@ export function AudioBody({
         <PageHeader
           eyebrow="audio"
           title="Audio transcription"
-          description="Upload speech, route it through OpenAI-compatible or NVIDIA NIM audio providers, and inspect the exact proxy events."
+          description="Upload speech, route it through Gemini Transcribe with Groq Whisper fallbacks, and inspect the exact proxy events."
         />
       ) : null}
 
