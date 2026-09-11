@@ -15,7 +15,7 @@ import {
   parseProposal,
   parseVerdict,
 } from "../src/routing/fusion/kernel/waves.ts";
-import { decideEscalation, effortBandFor, escalationStrategyNote, parseRequestedKernelEffort, widthsFor } from "../src/routing/fusion/kernel/scheduler.ts";
+import { decideEscalation, effortBandFor, escalationStrategyNote, parseRequestedKernelEffort, widthsFor, shouldExtendForDisagreement } from "../src/routing/fusion/kernel/scheduler.ts";
 import { extractIoExamples } from "../src/routing/fusion/kernel/examples.ts";
 import { checkCandidateProgram, describeFailures, extractSolveProgram } from "../src/routing/fusion/kernel/execution.ts";
 import { ARC_UTILS_SOURCE } from "../src/routing/fusion/kernel/arc-utils-source.ts";
@@ -515,6 +515,16 @@ describe("kernel scheduler", () => {
     expect(widened.reason).toContain("< 3 required");
     // With only two families in the pool the requirement is capped at the pool size.
     expect(decideEscalation({ consensus, wave: 1, widths, agreementThreshold: 0.62, novelClaimsLastWave: 3, familyCount: 2, minSettleFamilies: 3 }).escalate).toBe(false);
+  });
+
+  it("extends the max band once for a verified disagreement that no longer fits a discrimination wave", () => {
+    const base = { distinctOutputs: 2, remainingMs: 30_000, extended: false, band: "max", extensionSeconds: 1200 };
+    expect(shouldExtendForDisagreement(base)).toBe(true);
+    expect(shouldExtendForDisagreement({ ...base, distinctOutputs: 1 })).toBe(false); // agreeing programs: nothing to discriminate
+    expect(shouldExtendForDisagreement({ ...base, remainingMs: 120_000 })).toBe(false); // discrimination still fits
+    expect(shouldExtendForDisagreement({ ...base, extended: true })).toBe(false); // one extension per search
+    expect(shouldExtendForDisagreement({ ...base, band: "F3" })).toBe(false); // non-max bands use the contested extension
+    expect(shouldExtendForDisagreement({ ...base, extensionSeconds: 0 })).toBe(false); // opt-in
   });
 
   it("rotates proposers across families and never verifies a family with itself when others exist", () => {

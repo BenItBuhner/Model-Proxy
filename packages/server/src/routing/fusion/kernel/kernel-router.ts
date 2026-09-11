@@ -63,6 +63,7 @@ import {
   effortBandFor,
   escalationStrategyNote,
   parseRequestedKernelEffort,
+  shouldExtendForDisagreement,
   widthsFor,
   type RequestedKernelEffort,
 } from "./scheduler.ts";
@@ -1543,6 +1544,19 @@ export class FusionKernel {
       extra.push(...judges);
       for (const p of judges) if (p.execution?.verified === true && p.finalAnswer !== undefined && !run.verifiedPool.includes(p)) run.verifiedPool.push(p);
       verified = [...run.verifiedPool];
+    }
+    if (shouldExtendForDisagreement({ distinctOutputs: distinctOutputs(verified), remainingMs: this.remainingSearchMs(run), extended: run.extended, band: run.band, extensionSeconds: run.kcfg.max_band_extension_seconds })) {
+      // Verified programs that disagree are the strongest evidence that one
+      // more wave pays: a discrimination wave decides between concrete
+      // candidates. A second attempt that lands at the deadline must not lose
+      // that decision to a tie-break on wave order.
+      const extensionMs = run.kcfg.max_band_extension_seconds * 1000;
+      run.extended = true;
+      run.searchDeadlineAt += extensionMs;
+      run.deadlineRef.deadlineAt = run.searchDeadlineAt;
+      run.deadlineRef.extraMs += extensionMs;
+      log.info("kernel search extended for discrimination", { conversationId: run.ledger.conversationId, wave, distinctOutputs: distinctOutputs(verified), extensionSeconds: run.kcfg.max_band_extension_seconds });
+      void run.narrator.say(`Kernel: ${distinctOutputs(verified)} verified programs disagree on the test output at the deadline; extending the search by ${run.kcfg.max_band_extension_seconds}s to discriminate between them.`);
     }
     if (distinctOutputs(verified) > 1 && this.remainingSearchMs(run) > 90_000) {
       // Every candidate reproduces the examples yet they disagree on the test:

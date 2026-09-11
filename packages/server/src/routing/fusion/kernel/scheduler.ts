@@ -153,3 +153,14 @@ export function escalationStrategyNote(consensus: Consensus, wave: number): stri
   }
   return lines.join("\n");
 }
+
+/**
+ * Max-band extension for a verified disagreement: two or more execution-verified
+ * programs produce different test outputs, but the discrimination wave (needs
+ * ~90 s) no longer fits. That disagreement is the strongest evidence that one
+ * more wave pays, so the search extends once rather than letting wave order
+ * break the tie. Only at the max band, only once, only when configured.
+ */
+export function shouldExtendForDisagreement(input: { distinctOutputs: number; remainingMs: number; extended: boolean; band: string; extensionSeconds: number }): boolean {
+  return input.distinctOutputs > 1 && input.remainingMs <= 90_000 && !input.extended && input.band === "max" && input.extensionSeconds > 0;
+}
