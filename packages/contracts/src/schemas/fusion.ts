@@ -294,6 +294,14 @@ export const FusionKernelConfigSchema = z
      */
     in_place_extension_domains: z.array(z.string()).optional(),
     /**
+     * Example-grounded (execution-verified) tasks: extend in place while no
+     * program is verified yet, regardless of in_place_extension_domains, so the
+     * quick medium slots finishing (and failing) do not kill the streams still
+     * thinking. Measured 4/6 on same-day ARC budget losses but 26/40 vs 28/40
+     * on the full n=40, so it is opt-in until a run shows a single-run gain.
+     */
+    examples_in_place_extension: z.boolean().default(false),
+    /**
      * Families that must share the leading answer before a wave settles early
      * and cancels its stragglers, per task domain (default 2). On frontier
      * math two families agreeing on the same wrong answer is common enough

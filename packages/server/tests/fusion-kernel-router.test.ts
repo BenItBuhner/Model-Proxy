@@ -77,6 +77,7 @@ const kernelConfig: FusionConfig = {
     agentic_band: "F2",
     contested_extension_seconds: 0,
     max_band_extension_seconds: 0,
+    examples_in_place_extension: false,
     early_settle_min_families_by_domain: {},
     synthesis_timeout_seconds: 600,
     worker_reasoning_effort: { verifier: "low" },
@@ -1273,7 +1274,7 @@ describe("Fusion kernel engine", () => {
     expect(scoped.leader === undefined || !String(scoped.leader).includes("750")).toBe(true);
   }, 180_000);
 
-  it("keeps example-grounded max waves alive past the band cap while nothing is verified, whatever the domain scoping", async () => {
+  it("with examples_in_place_extension, keeps example-grounded max waves alive past the band cap while nothing is verified, whatever the domain scoping", async () => {
     closeOperationalDbForTests();
     setStorageRootForTests(path.join(tmpRoot, `storage-inplace-examples-${Date.now()}`));
     router = new FusionRouter();
@@ -1304,7 +1305,7 @@ describe("Fusion kernel engine", () => {
       return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
     }) as unknown as typeof fetch;
     const ctx = makeCtx([{ role: "user", content: task }], `conv-inplace-examples-${Date.now()}`);
-    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: false, execution_repair_rounds: 0, search_deadline_seconds: { F2: 10, F3: 10, max: 10 }, worker_timeout_seconds_by_band: { F2: 10, F3: 10, max: 10 }, max_band_extension_seconds: 60, in_place_extension_domains: ["math"] } };
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: false, execution_repair_rounds: 0, search_deadline_seconds: { F2: 10, F3: 10, max: 10 }, worker_timeout_seconds_by_band: { F2: 10, F3: 10, max: 10 }, max_band_extension_seconds: 60, in_place_extension_domains: ["math"], examples_in_place_extension: true } };
     (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "max" };
     delete (ctx.requestData as Record<string, unknown>)["tools"];
     const result = await router.route(ctx);

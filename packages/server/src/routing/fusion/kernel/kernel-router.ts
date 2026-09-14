@@ -1918,8 +1918,9 @@ export class FusionKernel {
     // finish and replacing them with fresh ones that need just as long.
     const extensionMs = (run.band === "max" ? kcfg.max_band_extension_seconds : kcfg.contested_extension_seconds) * 1000;
     const extensionDomains = kcfg.in_place_extension_domains;
-    // Execution-verified tasks are always worth waiting for (a verified program ends the search); other tasks only in the configured domains.
-    const domainAllowsInPlace = extensionDomains === undefined || (run.examples !== undefined && kcfg.execution_verification) || run.domains.some((d) => extensionDomains.includes(d));
+    // Execution-verified tasks are worth waiting for when enabled (a verified program ends the search); other tasks only in the configured domains.
+    const examplesRule = run.examples !== undefined && kcfg.execution_verification && kcfg.examples_in_place_extension;
+    const domainAllowsInPlace = extensionDomains === undefined || examplesRule || run.domains.some((d) => extensionDomains.includes(d));
     const canExtendInPlace = role === "proposer" && !run.agentic && !run.extended && extensionMs > 0 && domainAllowsInPlace;
     const extendTimer = canExtendInPlace
       ? setTimeout(() => {
@@ -1931,7 +1932,7 @@ export class FusionKernel {
           // vote: finished-but-failing attempts (the quick medium slots) are no
           // reason to kill the streams still thinking, so the trigger there is
           // "nothing verified yet". Elsewhere it is the domain's settle minimum.
-          const enough = run.examples !== undefined && kcfg.execution_verification
+          const enough = examplesRule
             ? run.verifiedArtifact !== undefined || run.executionStats.verified > 0
             : finished >= this.minSettleFamilies(run);
           if (run.extended || enough || ctx.signal?.aborted === true) return;
