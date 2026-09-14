@@ -1,0 +1,52 @@
+ARC-AGI-2 public eval, 40 tasks, max effort, single run on the SHIPPED build v76 (2026-09-14; set A and set B on two instances in parallel; upstream 3-10x slower than the 09-08 evening window).
+v76 = shipped template + kernel at HEAD: pool v2 (trio + mimo on example tasks + fast alternates), mixed proposer effort, watchdog on the live deadline, windowed pool reliability, in-place extension scoped to math/science (examples_in_place_extension off), max-band disagreement extension (shouldExtendForDisagreement), LaTeX vote normalization.
+
+task        v47        v72        v76        note
+7ed72f31    ✓  180s  ✓  237s  ✓  199s  
+53fb4810    ✓  431s  ✗  930s  ✗  456s  
+20270e3b    ✓  676s  ✓ 1057s  ✓  362s  
+28a6681f    ✓ 2400s  ✓ 2666s  ✗ 3057s  lost (v47 and v72 solved)
+898e7135    ✓ 2400s  ✓ 1694s  ✓ 2425s  
+409aa875    ✓  919s  ✓ 1537s  ✗ 1249s  lost (v47 and v72 solved)
+4c416de3    ✗ 2400s  ✗ 3000s  ✗ 3000s  
+b10624e5    ✓ 2129s  ✗ 1573s  ✗ 1407s  
+7b5033c1    ✗  162s  ✓  172s  ✗  201s  
+eee78d87    ✓  486s  ✓  424s  ✓  542s  
+d8e07eb2    ✓  975s  ✓  638s  ✓  392s  
+7b3084d4    ✗ 3000s  ✓ 1648s  ✗ 4200s  
+64efde09    ✗ 3000s  ✗ 3000s  ✗ 4200s  
+65b59efc    ✓  512s  ✓  892s  ✗ 3846s  lost (v47 and v72 solved)
+36a08778    ✓  831s  ✓  576s  ✓  294s  
+271d71e2    ✓ 2400s  ✗ 3000s  ✗ 3839s  
+db0c5428    ✓  624s  ✗ 1205s  ✓ 2334s  
+20a9e565    ✗ 3000s  ✗ 2344s  ✗ 2560s  
+db695cfb    ✓  900s  ✓ 1356s  ✗ 3712s  lost (v47 and v72 solved)
+80a900e0    ✓  622s  ✓  719s  ✗ 2421s  lost (v47 and v72 solved)
+b99e7126    ✓  590s  ✓ 1708s  ✓  509s  
+71e489b6    ✗  782s  ✗ 2339s  ✓ 1406s  solved by v76; never by v47/v72
+142ca369    ✓ 2882s  ✓ 1554s  ✗ 2528s  lost (v47 and v72 solved)
+247ef758    ✓  843s  ✓  537s  ✓  662s  
+13e47133    ✓ 2009s  ✓ 2378s  ✓ 1790s  
+195c6913    ✓  918s  ✓ 1984s  ✓ 2034s  
+67e490f4    ✓  492s  ✓  582s  ✓  523s  
+7b0280bc    ✓ 1426s  ✓ 1152s  ✓ 1294s  
+6ffbe589    ✓ 2079s  ✗ 3000s  ✗ 4200s  
+58f5dbd5    ✓  713s  ✓  272s  ✓  593s  
+136b0064    ✓  864s  ✓  505s  ✓  619s  
+62593bfd    ✗ 2400s  ✗ 2910s  ✗ 4200s  
+31f7f899    ✓  286s  ✓  208s  ✓  849s  
+b9e38dc0    ✗ 3000s  ✗ 3000s  ✗ 4200s  
+b5ca7ac4    ✓  828s  ✓  440s  ✗ 3842s  lost (v47 and v72 solved)
+38007db0    ✓  316s  ✓  145s  ✓ 1610s  
+89565ca0    ✓ 1938s  ✓ 2718s  ✗ 1565s  lost (v47 and v72 solved)
+aa4ec2a5    ✓ 1939s  ✓  559s  ✗ 2302s  lost (v47 and v72 solved)
+7491f3cf    ✗ 1919s  ✓ 1229s  ✗ 3562s  
+a47bf94d    ✓ 2400s  ✗ 3000s  ✗ 2053s  
+
+n=40: v47 31/40 (2026-09-06, fast upstream) · v72 28/40 (2026-09-09) · v76 18/40 (2026-09-14).
+v76 new vs v47/v72: 71e489b6 · lost vs both: 28a6681f, 409aa875, 65b59efc, db695cfb, 80a900e0, 142ca369, b5ca7ac4, 89565ca0, aa4ec2a5.
+Reference (ARC Prize leaderboard, semi-private eval, 2026-09): GPT-6 Astra 95.0%, Claude Fable 5.1 (max effort) 90.0%. Public-eval and semi-private are not the same distribution; the rows above are directly comparable to each other.
+
+Throughput signature: dead (timed-out) workers per task v76 5.6 vs v72 5.8; median latency v76 2034 s vs v72 1356 s. Upstream probe during the run (600-token low-effort reply): deepseek-v4-pro 21–47 s and glm-5.3 10–27 s, both timing out at 60 s by 22:20 UTC; the 09-08 evening window that produced v47-class numbers measured 4.7 s / 10.9 s.
+v72 ✓ → v76 ✗ (12): 28a6681f v72 ✓2666s → v76 ✗3057s; 409aa875 v72 ✓1537s → v76 ✗1249s; 7b5033c1 v72 ✓172s → v76 ✗201s; 7b3084d4 v72 ✓1648s → v76 ✗4200s; 65b59efc v72 ✓892s → v76 ✗3846s; db695cfb v72 ✓1356s → v76 ✗3712s; 80a900e0 v72 ✓719s → v76 ✗2421s; 142ca369 v72 ✓1554s → v76 ✗2528s; b5ca7ac4 v72 ✓440s → v76 ✗3842s; 89565ca0 v72 ✓2718s → v76 ✗1565s; aa4ec2a5 v72 ✓559s → v76 ✗2302s; 7491f3cf v72 ✓1229s → v76 ✗3562s
+v76 gained vs v72 (2): db0c5428, 71e489b6.

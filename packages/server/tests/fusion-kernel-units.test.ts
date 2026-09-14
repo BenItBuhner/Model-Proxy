@@ -541,6 +541,18 @@ describe("kernel scheduler", () => {
     expect(pool.reliability("kimi-k3")).toBe(1);
   });
 
+  it("rotates every family onto its next routing when asked (independent second attempts on example-grounded tasks)", () => {
+    const pool = new ModelPool(kcfg.families);
+    const first = pool.proposers(3).map((p) => p.routing);
+    const rotated = pool.proposers(3, 1).map((p) => p.routing);
+    expect(first).toContain("glm-5.3");
+    expect(rotated).toContain("glm-5.3-alt"); // glm's first alternate leads the rotated ring
+    expect(rotated).not.toContain("glm-5.3");
+    // a family without alternates keeps its only routing
+    const solo = new ModelPool([{ ...kcfg.families[0]!, alt_routings: [] }]);
+    expect(solo.proposers(1, 1)[0]!.routing).toBe(kcfg.families[0]!.routing);
+  });
+
   it("keeps the configured primary routing first until it fails at least half of its recent calls, and forgets old failures", () => {
     const pool = new ModelPool(kcfg.families);
     const first = () => pool.proposers(3).find((p) => p.family === "glm")!.routing;

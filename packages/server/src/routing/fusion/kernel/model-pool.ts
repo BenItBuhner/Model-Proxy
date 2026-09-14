@@ -49,8 +49,15 @@ export class ModelPool {
     return this.families.filter((f) => f.propose).length || this.families.length;
   }
 
-  /** Choose `width` proposers: one per proposing family first, then extras cycling by weight across alt routings. */
-  proposers(width: number): PoolPick[] {
+  /**
+   * Choose `width` proposers: one per proposing family first, then extras
+   * cycling by weight across alt routings. `rotation` shifts every family's
+   * routing ring by that many steps: an independent second attempt on an
+   * example-grounded task passes wave−1 so each family proposes through a
+   * different model than in wave 1 (execution verification makes a weaker
+   * alternate harmless and a stronger one decisive).
+   */
+  proposers(width: number, rotation = 0): PoolPick[] {
     const eligible = this.families.filter((f) => f.propose);
     const pool = eligible.length > 0 ? eligible : this.families;
     const picks: PoolPick[] = [];
@@ -58,11 +65,11 @@ export class ModelPool {
 
     for (let i = 0; i < pool.length && picks.length < width; i++) {
       const family = pool[i]!;
-      picks.push({ family: family.name, routing: this.nextRouting(family, perFamilyUse) });
+      picks.push({ family: family.name, routing: this.nextRouting(family, perFamilyUse, rotation) });
     }
     while (picks.length < width) {
       const family = this.pickWeighted(pool, perFamilyUse);
-      picks.push({ family: family.name, routing: this.nextRouting(family, perFamilyUse) });
+      picks.push({ family: family.name, routing: this.nextRouting(family, perFamilyUse, rotation) });
     }
     return picks;
   }
@@ -121,7 +128,7 @@ export class ModelPool {
     return out;
   }
 
-  private nextRouting(family: FusionKernelFamily, perFamilyUse: Map<string, number>): string {
+  private nextRouting(family: FusionKernelFamily, perFamilyUse: Map<string, number>, rotation = 0): string {
     const used = perFamilyUse.get(family.name) ?? 0;
     perFamilyUse.set(family.name, used + 1);
     // Round-robin across the family's routings in config order, so the n-th use
@@ -131,7 +138,7 @@ export class ModelPool {
     const ordered = [family.routing, ...family.alt_routings]
       .map((routing, index) => ({ routing, index, failing: this.reliability(routing) <= DEMOTION_RELIABILITY }))
       .sort((a, b) => Number(a.failing) - Number(b.failing) || a.index - b.index);
-    return ordered[used % ordered.length]!.routing;
+    return ordered[(used + rotation) % ordered.length]!.routing;
   }
 
   private pickWeighted(pool: FusionKernelFamily[], perFamilyUse: Map<string, number>): FusionKernelFamily {

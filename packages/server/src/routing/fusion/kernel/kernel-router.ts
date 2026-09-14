@@ -1876,7 +1876,10 @@ export class FusionKernel {
   ): Promise<Proposal[]> {
     const { kcfg } = run;
     const started = performance.now();
-    const picks = run.pool.proposers(widthOverride ?? widths.proposals);
+    // Example-grounded waves after the first rotate each family onto its next
+    // routing: the second attempt is independent in model, not only in prompt.
+    const rotation = run.examples !== undefined && kcfg.execution_verification && wave > 1 ? wave - 1 : 0;
+    const picks = run.pool.proposers(widthOverride ?? widths.proposals, rotation);
     // Direct-answer (verbatim task) slots: the control proposer, plus on
     // example-grounded tasks a second one at the max band — taken from the
     // END of the pick list and from DISTINCT families, so their agreement is
