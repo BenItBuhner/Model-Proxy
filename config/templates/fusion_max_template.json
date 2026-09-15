@@ -80,7 +80,7 @@
         "executor_reasoning_effort": "medium",
         "steer_max_chars": 400
       },
-      "policy_version": 2
+      "policy_version": 3
     }
   }
 }
