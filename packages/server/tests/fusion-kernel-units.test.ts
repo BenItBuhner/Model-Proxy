@@ -588,6 +588,16 @@ describe("grid consistency gate", () => {
     const foreign = gridConsistencyIssues(sameShape, [[1, 2], [3, 4]], [[4, 3], [2, 7]]);
     expect(foreign.some((i) => i.includes("introduces 7"))).toBe(true);
   });
+  it("flags a same-shape candidate that erases or repaints non-background input cells when no training pair does", () => {
+    // Background 0; every pair keeps its painted cells and adds a 2 to the right of each 1.
+    const keep = [
+      { input: [[1, 0, 0], [0, 0, 0]], output: [[1, 2, 0], [0, 0, 0]] },
+      { input: [[0, 0, 0], [1, 0, 0]], output: [[0, 0, 0], [1, 2, 0]] },
+    ];
+    expect(gridConsistencyIssues(keep, [[0, 1, 0], [0, 0, 0]], [[0, 1, 2], [0, 0, 0]])).toEqual([]);
+    expect(gridConsistencyIssues(keep, [[0, 1, 0], [0, 0, 0]], [[0, 0, 2], [0, 0, 0]]).some((i) => i.includes("unchanged in place"))).toBe(true);
+    expect(gridConsistencyIssues(keep, [[0, 1, 0], [0, 0, 0]], [[0, 2, 2], [0, 0, 0]]).some((i) => i.includes("unchanged in place"))).toBe(true);
+  });
   it("accepts a consistent candidate and stays silent without two grid pairs", () => {
     expect(gridConsistencyIssues(sameShape, [[1, 2], [3, 4]], [[4, 3], [2, 1]])).toEqual([]);
     expect(gridConsistencyIssues(sameShape.slice(0, 1), [[1, 2], [3, 4]], [[9, 9], [9, 9]])).toEqual([]);

@@ -1,0 +1,19 @@
+# Grid consistency gate — offline audit (ARC-AGI-2 public evaluation, 120 tasks)
+
+Rules a verified program's or direct read's TEST grid must respect when every training pair shares them:
+  shape: same-dims-as-input / transposed / constant integer ratio;  palette: output colours ⊆ input colours ∪ colours common to all training outputs;
+  cell preservation (same-shape tasks): non-background input cells kept in place / never erased;  degeneracy: single-colour grid when no training output is.
+A suspect grid stays votable but never settles a search: at max it forces the independent second attempt (any wave, once), it is excluded from direct-read agreement and backing, and a consistent verified rule outranks it.
+
+## False positives (rule fires on the GROUND-TRUTH test output)
+ground-truth checked 120, flagged 0
+
+Rejected rules (fire on ground truths): constant output size 3/120 (38007db0, a32d8b75, e87109e9); background colour preserved 2/120; colour counts / non-bg count conserved 1/120; output symmetry 1/120 each; number of output colours constant 14/120.
+
+## v76 (n=40, slowest-upstream run) wrong grids the gate would have flagged
+✗ 89565ca0 pred=4x4 exp=5x6 SUSPECT: training outputs only use colours from their input (plus 1,2); the candidate introduces 7
+✗ 4c416de3 pred=23x23 exp=19x22 SUSPECT: every training output has its input's dimensions; the candidate is 23x23 for a 19x22 input | training outputs only use colours from their input (plus 1,3,8,0,4,2); the candidate introduces 7
+✗ b10624e5 pred=27x30 exp=27x27 SUSPECT: every training output has its input's dimensions; the candidate is 27x30 for a 27x27 input
+✗ 7b3084d4 pred=4x4 exp=14x14 SUSPECT: training outputs only use colours from their input (plus 5,7); the candidate introduces 6
+
+Not flagged (right shape and palette): 7b5033c1, 142ca369, b5ca7ac4, a47bf94d, 53fb4810, 28a6681f, 409aa875, db695cfb. 13 of the 22 v76 misses had no program at all (20-minute streams cut by the worker timeout) or no grid (8 hit the 4200 s harness cap) — throughput, not selection.

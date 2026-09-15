@@ -218,6 +218,17 @@ export function gridConsistencyIssues(examples: IoExample[], testInput: unknown,
     const foreign = [...gridColors(candidate)].filter((c) => !allowed.has(c));
     if (foreign.length > 0) issues.push(`training outputs only use colours from their input (plus ${[...commonOut].join(",") || "none"}); the candidate introduces ${foreign.join(",")}`);
   }
+  // Same-shape tasks: when every training pair keeps each non-background input
+  // cell in place (or at least never erases it to background), so must the
+  // candidate. Both rules flag 0/120 ARC-AGI-2 ground truths.
+  const sameShapePairs = pairs.every((p) => dims(p.output)[0] === dims(p.input)[0] && dims(p.output)[1] === dims(p.input)[1]);
+  if (sameShapePairs && cH === tH && cW === tW) {
+    const background = (g: number[][]) => { const m = new Map<number, number>(); for (const r of g) for (const c of r) m.set(c, (m.get(c) ?? 0) + 1); return [...m.entries()].sort((x, y) => y[1] - x[1])[0]![0]; };
+    const keepsCells = (input: number[][], output: number[][]) => { const b = background(input); return input.every((r, i) => r.every((x, j) => x === b || output[i]![j] === x)); };
+    const keepsPainted = (input: number[][], output: number[][]) => { const b = background(input); return input.every((r, i) => r.every((x, j) => x === b || output[i]![j] !== b)); };
+    if (pairs.every((p) => keepsCells(p.input, p.output)) && !keepsCells(testInput, candidate)) issues.push("every training output keeps each non-background input cell unchanged in place; the candidate repaints or erases some");
+    else if (pairs.every((p) => keepsPainted(p.input, p.output)) && !keepsPainted(testInput, candidate)) issues.push("no training output erases a non-background input cell to background; the candidate does");
+  }
   // Degenerate: a single-colour output when no training output is single-colour.
   const constantGrid = (g: number[][]) => gridColors(g).size === 1 && g.length * g[0]!.length >= 4;
   if (constantGrid(candidate) && !pairs.some((p) => constantGrid(p.output))) issues.push("the candidate is a single-colour grid while no training output is");
