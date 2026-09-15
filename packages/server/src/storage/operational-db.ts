@@ -324,4 +324,45 @@ function runMigrations(database: Database): void {
       INSERT INTO schema_migrations (version, applied_at) VALUES (8, datetime('now'));
     `);
   }
+  if (version < 9) {
+    // Fusion kernel: durable per-conversation ledger, content-addressed work
+    // cache, and negative-result memory.
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS fusion_kernel_sessions (
+        conversation_id TEXT PRIMARY KEY,
+        logical_model TEXT NOT NULL,
+        policy_version INTEGER NOT NULL DEFAULT 1,
+        ledger_json TEXT NOT NULL,
+        message_hashes_json TEXT NOT NULL DEFAULT '[]',
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS fusion_kernel_work (
+        work_key TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        model_routing TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
+        result_json TEXT NOT NULL,
+        conversation_id TEXT,
+        created_at TEXT NOT NULL,
+        hit_count INTEGER NOT NULL DEFAULT 0,
+        last_hit_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_fusion_kernel_work_conversation
+        ON fusion_kernel_work(conversation_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS fusion_kernel_negatives (
+        signature TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        detail_json TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (conversation_id, signature)
+      );
+
+      INSERT INTO schema_migrations (version, applied_at) VALUES (9, datetime('now'));
+    `);
+  }
 }

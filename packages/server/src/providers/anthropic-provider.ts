@@ -7,7 +7,7 @@ import {
 } from "./base.ts";
 import { ProviderAPIError } from "./errors.ts";
 import { upstreamFetch } from "./upstream-fetch.ts";
-import { readSSELines } from "./openai-provider.ts";
+import { readSSELines, sseInactivityTimeoutMs } from "./openai-provider.ts";
 
 const log = createLogger("provider.anthropic");
 
@@ -90,7 +90,7 @@ export class AnthropicProvider extends AbstractProvider {
         );
       }
 
-      for await (const line of readSSELines(response.body)) {
+      for await (const line of readSSELines(response.body, sseInactivityTimeoutMs(ctx.timeoutSeconds))) {
         if (line.length === 0) continue;
         yield `${line}\n\n`;
       }

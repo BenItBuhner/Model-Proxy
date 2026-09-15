@@ -1,0 +1,11 @@
+FinQA, LegalBench SCALR, LegalBench SARA-numeric, BBEH — fusion-max default effort (F3), single run, shipped pool v2 (trio + fast alternates), kernel v72/v73 (windowed pool reliability, in-place extension scoped to math/science from SCALR item ~76 onward), 2026-09-10, slow upstream day.
+Compared on the items both runs share with the 2026-09-07 trio F3 run and with the members (09-07, best attempt).
+
+suite                     n    09-07 fusion  v72 fusion  ds    glm   kimi  union   p50 v72   p90 v72   flips (09-07 → v72)
+finqa                    46   40/46         41/46       36    35    37    37      110s      494s      HUM_2017_page_118.pdf-3 ✗→✓
+legalbench-scalr         46   42/46         42/46       36    33    33    37      101s      1208s     40 ✓→✗, 58 ✓→✗, 84 ✗→✓, 38 ✗→✓
+legalbench-sara_numeric  40   33/40         32/40       33    31    33    34      350s      1141s     10 ✓→✗, 79 ✗→✓, 60 ✓→✗
+bbeh                     46   37/46         40/46       34    34    37    40      606s      1498s     hyperbaton-154 ✗→✓, movie_recommendation-92 ✗→✓, nycc-53 ✗→✓   (all BBEH cells regraded with the current exact grader; the 09-07 stored flags predate the <…>/[…] wrapper fix)
+
+BBEH v72 40/46 = the members' regraded union (40/46); fusion had been 3 below the union on 09-07. items run today that the 09-07 run did not have (SARA sample grew to 45): 5, 5 correct — excluded from the comparison rows above.
+Latency note: 09-07 p50 was 44 s (FinQA), 75 s (SCALR), 113 s (SARA), 261 s (BBEH). Today the upstream streamed at roughly half of 09-07 throughput; in addition, until the pool-reliability fix (v73) the process-wide reliability score had demoted kimi-k3/glm-5.3 behind their code alternates after the max-band Apex timeouts (kimi-k2.7-code answered a 600-token probe in 106 s vs 23 s for kimi-k3), and until in_place_extension_domains the F3 in-place extension kept 900 s legal/finance streams alive for another 900 s. Both fixed same-day and measured on the remaining items.

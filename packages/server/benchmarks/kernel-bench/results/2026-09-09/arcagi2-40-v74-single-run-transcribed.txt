@@ -1,0 +1,48 @@
+ARC-AGI-2, 40 tasks, max effort, single run under v74 (2026-09-11 03:10–12:10 UTC; set A on one instance, set B on another; upstream 3–10x slower than the 09-08 evening).
+v74 = v72 pool and kernel + example-grounded in-place extension triggering on 'nothing verified yet' (now opt-in: examples_in_place_extension, default false).
+The per-task outcomes below were transcribed from the run log as each task completed; the JSONL rows were lost when the host VM was rebuilt from its snapshot before they could be committed. a47bf94d was still running (set B) when the VM was lost; it was ✗ in every other run.
+
+task        v47        v72        v74
+7ed72f31    ✓  180s    ✓  237s    ✓  326s
+53fb4810    ✓  431s    ✗  930s    ✗  423s
+20270e3b    ✓  676s    ✓ 1057s    ✓ 1034s
+28a6681f    ✓ 2400s    ✓ 2666s    ✗ 2400s
+898e7135    ✓ 2400s    ✓ 1694s    ✗ 2400s
+409aa875    ✓  919s    ✓ 1537s    ✓ 1390s
+4c416de3    ✗ 2400s    ✗ 3000s    ✗ 3000s
+b10624e5    ✓ 2129s    ✗ 1573s    ✓ 1918s
+7b5033c1    ✗  162s    ✓  172s    ✗  211s
+eee78d87    ✓  486s    ✓  424s    ✓  630s
+d8e07eb2    ✓  975s    ✓  638s    ✓  390s
+7b3084d4    ✗ 3000s    ✓ 1648s    ✗ 4200s
+64efde09    ✗ 3000s    ✗ 3000s    ✗ 2400s
+65b59efc    ✓  512s    ✓  892s    ✓ 1135s
+36a08778    ✓  831s    ✓  576s    ✓ 1511s
+271d71e2    ✓ 2400s    ✗ 3000s    ✗ 2306s
+db0c5428    ✓  624s    ✗ 1205s    ✓  930s
+20a9e565    ✗ 3000s    ✗ 2344s    ✗ 3228s
+db695cfb    ✓  900s    ✓ 1356s    ✓  274s
+80a900e0    ✓  622s    ✓  719s    ✓ 1912s
+b99e7126    ✓  590s    ✓ 1708s    ✓  537s
+71e489b6    ✗  782s    ✗ 2339s    ✗ 3000s
+142ca369    ✓ 2882s    ✓ 1554s    ✓ 3600s
+247ef758    ✓  843s    ✓  537s    ✓ 1126s
+13e47133    ✓ 2009s    ✓ 2378s    ✓ 1926s
+195c6913    ✓  918s    ✓ 1984s    ✗ 4200s
+67e490f4    ✓  492s    ✓  582s    ✓  915s
+7b0280bc    ✓ 1426s    ✓ 1152s    ✓ 1530s
+6ffbe589    ✓ 2079s    ✗ 3000s    ✗ 3888s
+58f5dbd5    ✓  713s    ✓  272s    ✓  670s
+136b0064    ✓  864s    ✓  505s    ✓  422s
+62593bfd    ✗ 2400s    ✗ 2910s    ✓ 1199s
+31f7f899    ✓  286s    ✓  208s    ✓  313s
+b9e38dc0    ✗ 3000s    ✗ 3000s    ✗ 4200s
+b5ca7ac4    ✓  828s    ✓  440s    ✓  681s
+38007db0    ✓  316s    ✓  145s    ✓  198s
+89565ca0    ✓ 1938s    ✓ 2718s    ✓ 1201s
+aa4ec2a5    ✓ 1939s    ✓  559s    ✓ 1187s
+7491f3cf    ✗ 1919s    ✓ 1229s    ✓  733s
+a47bf94d    ✓ 2400s    ✗ 3000s    - (unfinished)
+
+n=40: v47 31/40 · v72 28/40 · v74 26/39 finished (26/40 counting a47bf94d as ✗).
+Reading: the four same-day probe flips (53fb4810, b10624e5, 271d71e2, db0c5428) did not all reproduce in the full run (53fb4810 and 271d71e2 flipped back), and 28a6681f/898e7135 were lost to the disagreement-at-deadline tie (lone wrong verified program early; the disagreeing second-attempt program lands at ~2300 s; discrimination cut at 2400 s; wave order breaks the tie) — the case v75's shouldExtendForDisagreement addresses. 62593bfd was solved for the first time by any fusion run. Run-to-run variance on this upstream is ±3–4 tasks per 20 between adjacent builds; v74 is therefore opt-in and the shipped template keeps v72 behaviour plus the v75 disagreement extension.

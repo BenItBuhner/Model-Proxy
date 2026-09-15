@@ -28,6 +28,7 @@ const testFusionConfig: FusionConfig = {
   cache: { enabled: false, scope: "permanent" },
   summarizer: { enabled: true, model_routing: "turbo", segment_chars: 600, max_summary_tokens: 256 },
   scheduler: { allow_nested_fusion: false, max_depth: 0, max_leaf_calls: 8, max_wall_ms: 120_000 },
+  engine: "legacy",
 };
 
 function makeCtx(messages: unknown[]): FusionRequestContext {
