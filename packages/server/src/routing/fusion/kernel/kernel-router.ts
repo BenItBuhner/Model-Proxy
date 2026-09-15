@@ -28,7 +28,7 @@ import type {
 import { assembleStream } from "./assemble.ts";
 import { leaveOneOutCapsule, compileCapsule, controlCapsule, type Capsule } from "./capsule.ts";
 import { INTENT_OBJECTIVE, deterministicIntent, mergeModelIntent } from "./intent.ts";
-import { deepEqualJson, detectCodeTask, extractAllGrids, extractGridAnswer, extractIoExamples, type CodeTask, type IoExample, type TaskExamples } from "./examples.ts";
+import { deepEqualJson, detectCodeTask, extractAllGrids, extractGridAnswer, extractIoExamples, type CodeTask, type IoExample, type TaskExamples, gridConsistencyIssues } from "./examples.ts";
 import { checkCandidateProgram, crossExecute, describeFailures, extractComputeBlock, extractSolutionAndTests, extractSolveProgram, runComputeProgram } from "./execution.ts";
 
 /** Strip fenced code/JSON blocks and kernel metadata from a proposal, keeping its explanatory prose. */
@@ -1515,7 +1515,7 @@ export class FusionKernel {
     // an output no verified program produced: with a lone verified program this
     // is a conflict worth a discrimination wave, not a vote to be outweighed.
     const directAgreementAgainst = (): Proposal[] | undefined => {
-      const direct = [...waveProposals, ...extra].filter((p) => p.success && p.program === undefined && p.finalAnswer !== undefined && /^\s*\[\s*\[/.test(p.finalAnswer));
+      const direct = [...waveProposals, ...extra].filter((p) => p.success && p.program === undefined && p.finalAnswer !== undefined && p.gridIssues === undefined && /^\s*\[\s*\[/.test(p.finalAnswer));
       const groups = new Map<string, Proposal[]>();
       for (const p of direct) { const key = normalizeFinalAnswer(p.finalAnswer!); groups.set(key, [...(groups.get(key) ?? []), p]); }
       const verifiedKeys = new Set(verified.map((p) => normalizeFinalAnswer(p.finalAnswer!)));
@@ -1586,7 +1586,7 @@ export class FusionKernel {
     if (verified.length === 0) {
       // No program reproduced the examples: fall back to independent direct
       // answers. Two families producing the identical grid is strong evidence.
-      const direct = [...waveProposals, ...extra].filter((p) => p.success && p.program === undefined && p.finalAnswer !== undefined && /^\s*\[\s*\[/.test(p.finalAnswer));
+      const direct = [...waveProposals, ...extra].filter((p) => p.success && p.program === undefined && p.finalAnswer !== undefined && p.gridIssues === undefined && /^\s*\[\s*\[/.test(p.finalAnswer));
       const groups = new Map<string, Proposal[]>();
       for (const p of direct) {
         const key = normalizeFinalAnswer(p.finalAnswer!);
@@ -1614,7 +1614,8 @@ export class FusionKernel {
         if (cur === undefined) counts.set(p.finalAnswer!, { n: 1, shortest: p, firstWave: p.wave });
         else counts.set(p.finalAnswer!, { n: cur.n + 1, shortest: (p.program?.length ?? Infinity) < (cur.shortest.program?.length ?? Infinity) ? p : cur.shortest, firstWave: Math.min(cur.firstWave, p.wave) });
       }
-      let winner = [...counts.entries()].sort((a, b) => b[1].n - a[1].n || a[1].firstWave - b[1].firstWave || (a[1].shortest.program?.length ?? 0) - (b[1].shortest.program?.length ?? 0))[0]!;
+      const suspectOf = (e: [string, { shortest: Proposal }]) => (e[1].shortest.gridIssues !== undefined ? 1 : 0);
+      let winner = [...counts.entries()].sort((a, b) => suspectOf(a) - suspectOf(b) || b[1].n - a[1].n || a[1].firstWave - b[1].firstWave || (a[1].shortest.program?.length ?? 0) - (b[1].shortest.program?.length ?? 0))[0]!;
       // Discrimination judges saw the competing rules side by side; a strict
       // majority among their verified programs overrides the raw program count
       // (which the pre-discrimination programs would otherwise tie or win).
@@ -1629,8 +1630,14 @@ export class FusionKernel {
       run.verifiedExplanation = proseOnly(winner[1].shortest.answer);
       const backingFamilies = new Set(verified.filter((p) => p.finalAnswer === winner[0]).map((p) => p.family));
       // Independent direct reads that agree with the winner count as backing families too.
-      for (const p of [...waveProposals, ...extra]) if (p.success && p.program === undefined && p.execution === undefined && p.finalAnswer !== undefined && normalizeFinalAnswer(p.finalAnswer) === normalizeFinalAnswer(winner[0])) backingFamilies.add(p.family);
-      run.artifactBacking = { proposals: winner[1].n, families: backingFamilies.size };
+      for (const p of [...waveProposals, ...extra]) if (p.success && p.program === undefined && p.execution === undefined && p.finalAnswer !== undefined && p.gridIssues === undefined && normalizeFinalAnswer(p.finalAnswer) === normalizeFinalAnswer(winner[0])) backingFamilies.add(p.family);
+      // A winner that breaks the training pairs' shape/palette regularities is
+      // never treated as settled evidence: at max it gets the independent
+      // second attempt whatever its backing, and the disagreement machinery
+      // decides if that attempt finds a consistent rule.
+      const suspect = winner[1].shortest.gridIssues !== undefined;
+      run.artifactBacking = { proposals: winner[1].n, families: suspect ? 1 : backingFamilies.size };
+      if (suspect) log.info("kernel execution artifact suspect", { conversationId: run.ledger.conversationId, wave, issues: winner[1].shortest.gridIssues });
       log.info("kernel execution artifact", { conversationId: run.ledger.conversationId, wave, verifiedPrograms: verified.length, distinctOutputs: counts.size, backing: winner[1].n, backingFamilies: backingFamilies.size });
     }
     const durationMs = Math.round(performance.now() - started);
@@ -1685,6 +1692,9 @@ export class FusionKernel {
         const grid = extractGridAnswer(p.raw);
         if (grid !== undefined) p.finalAnswer = JSON.stringify(grid);
       }
+      if (p.finalAnswer !== undefined && ex.tests.length > 0) {
+        try { const issues = gridConsistencyIssues(ex.examples, ex.tests[0], JSON.parse(p.finalAnswer)); if (issues.length > 0) p.gridIssues = issues; } catch { /* not a grid */ }
+      }
       return;
     }
     p.program = program;
@@ -1699,6 +1709,11 @@ export class FusionKernel {
       run.executionStats.verified += 1;
       if (result.testOutputs.length > 0) {
         p.finalAnswer = JSON.stringify(result.testOutputs[0]);
+        const issues = gridConsistencyIssues(ex.examples, ex.tests[0], result.testOutputs[0]);
+        if (issues.length > 0) {
+          p.gridIssues = issues;
+          log.info("kernel verified program suspect", { conversationId: run.ledger.conversationId, proposal: p.id, issues });
+        }
         run.confirmedAnswerKeys.add(normalizeFinalAnswer(p.finalAnswer));
         if (run.firstVerifiedAt === undefined) {
           run.firstVerifiedAt = performance.now();

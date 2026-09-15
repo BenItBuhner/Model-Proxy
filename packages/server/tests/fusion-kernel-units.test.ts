@@ -16,7 +16,7 @@ import {
   parseVerdict,
 } from "../src/routing/fusion/kernel/waves.ts";
 import { decideEscalation, effortBandFor, escalationStrategyNote, parseRequestedKernelEffort, widthsFor, shouldExtendForDisagreement } from "../src/routing/fusion/kernel/scheduler.ts";
-import { extractIoExamples } from "../src/routing/fusion/kernel/examples.ts";
+import { extractIoExamples, gridConsistencyIssues } from "../src/routing/fusion/kernel/examples.ts";
 import { checkCandidateProgram, describeFailures, extractSolveProgram } from "../src/routing/fusion/kernel/execution.ts";
 import { ARC_UTILS_SOURCE } from "../src/routing/fusion/kernel/arc-utils-source.ts";
 import { readFileSync } from "node:fs";
@@ -570,6 +570,31 @@ describe("kernel scheduler", () => {
     for (let i = 0; i < 12; i++) pool.recordOutcome("glm-5.3", true, 100);
     expect(pool.reliability("glm-5.3")).toBe(1);
     expect(first()).toBe("glm-5.3");
+  });
+});
+
+describe("grid consistency gate", () => {
+  const sameShape = [
+    { input: [[1, 2], [3, 4]], output: [[4, 3], [2, 1]] },
+    { input: [[5, 6, 7], [8, 9, 0], [1, 1, 1]], output: [[1, 1, 1], [0, 9, 8], [7, 6, 5]] },
+  ];
+  it("flags a candidate whose shape breaks a regularity every training pair shares", () => {
+    const issues = gridConsistencyIssues(sameShape, [[1, 2, 3], [4, 5, 6], [7, 8, 9], [1, 1, 1]], [[1, 1], [1, 1]]);
+    expect(issues.some((i) => i.includes("dimensions"))).toBe(true);
+  });
+  it("flags a single-colour candidate when no training output is single-colour, and foreign colours", () => {
+    const constant = gridConsistencyIssues(sameShape, [[1, 2], [3, 4]], [[4, 4], [4, 4]]);
+    expect(constant.some((i) => i.includes("single-colour"))).toBe(true);
+    const foreign = gridConsistencyIssues(sameShape, [[1, 2], [3, 4]], [[4, 3], [2, 7]]);
+    expect(foreign.some((i) => i.includes("introduces 7"))).toBe(true);
+  });
+  it("accepts a consistent candidate and stays silent without two grid pairs", () => {
+    expect(gridConsistencyIssues(sameShape, [[1, 2], [3, 4]], [[4, 3], [2, 1]])).toEqual([]);
+    expect(gridConsistencyIssues(sameShape.slice(0, 1), [[1, 2], [3, 4]], [[9, 9], [9, 9]])).toEqual([]);
+    // constant-size outputs: the rule is the constant, not the input's size
+    const constantOut = [{ input: [[1, 2, 3], [4, 5, 6]], output: [[1]] }, { input: [[7, 8], [9, 0], [1, 2]], output: [[7]] }];
+    expect(gridConsistencyIssues(constantOut, [[3, 3], [3, 3]], [[3]])).toEqual([]);
+    expect(gridConsistencyIssues(constantOut, [[3, 3], [3, 3]], [[3, 3], [3, 3]]).length).toBeGreaterThan(0);
   });
 });
 

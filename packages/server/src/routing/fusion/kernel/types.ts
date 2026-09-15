@@ -143,6 +143,8 @@ export interface Proposal {
   judge?: boolean;
   /** Result of executing the program against the task's examples. */
   execution?: { passed: number; total: number; verified: boolean; testOutputs: unknown[]; feedback: string; memorized?: boolean; /** Code tasks: cross-executed against every proposer's tests. */ crossValidated?: boolean; score?: number };
+  /** Example-grounded tasks: regularities of the training pairs that this proposal's test grid violates (shape, palette, degeneracy). Suspect grids stay votable but never settle a search by themselves. */
+  gridIssues?: string[];
   raw: string;
   workKey: string;
   cached: boolean;

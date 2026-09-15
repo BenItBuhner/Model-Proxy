@@ -170,3 +170,54 @@ export function detectCodeTask(text: string): CodeTask | undefined {
   if (!(hasPythonFence || signature !== null) || !asksForCode) return undefined;
   return { language: "python", entryPoint: signature?.[1] };
 }
+
+/** True for a rectangular 2-D grid of small non-negative integers (ARC-style). */
+export function isIntGrid(value: unknown): value is number[][] {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  const width = Array.isArray(value[0]) ? (value[0] as unknown[]).length : -1;
+  if (width <= 0) return false;
+  return value.every((row) => Array.isArray(row) && row.length === width && row.every((c) => Number.isInteger(c) && (c as number) >= 0 && (c as number) <= 99));
+}
+
+const gridColors = (g: number[][]): Set<number> => new Set(g.flat());
+
+/**
+ * Regularities every training pair shares that a candidate test output should
+ * respect. A program that reproduces the training pairs but breaks all of
+ * them on the test input is the classic "fits the examples for the wrong
+ * reason" failure: an all-4s grid, a 2x2 answer to a 14x14 task. Each returned
+ * string names a violated regularity; an empty list means the candidate is
+ * consistent (or the pairs share no regularity to check).
+ */
+export function gridConsistencyIssues(examples: IoExample[], testInput: unknown, candidate: unknown): string[] {
+  const pairs = examples.filter((e) => isIntGrid(e.input) && isIntGrid(e.output)) as Array<{ input: number[][]; output: number[][] }>;
+  if (pairs.length < 2 || !isIntGrid(testInput) || !isIntGrid(candidate)) return [];
+  const issues: string[] = [];
+  const dims = (g: number[][]) => [g.length, g[0]!.length] as const;
+  const [tH, tW] = dims(testInput);
+  const [cH, cW] = dims(candidate);
+  // Shape: same-as-input, constant, transposed, or a constant integer ratio.
+  const same = pairs.every((p) => dims(p.output)[0] === dims(p.input)[0] && dims(p.output)[1] === dims(p.input)[1]);
+  const constant = pairs.every((p) => dims(p.output)[0] === dims(pairs[0]!.output)[0] && dims(p.output)[1] === dims(pairs[0]!.output)[1]);
+  const transposed = pairs.every((p) => dims(p.output)[0] === dims(p.input)[1] && dims(p.output)[1] === dims(p.input)[0]);
+  const ratio = pairs.every((p) => dims(p.output)[0] % dims(p.input)[0] === 0 && dims(p.output)[1] % dims(p.input)[1] === 0 && dims(p.output)[0] / dims(p.input)[0] === dims(pairs[0]!.output)[0] / dims(pairs[0]!.input)[0] && dims(p.output)[1] / dims(p.input)[1] === dims(pairs[0]!.output)[1] / dims(pairs[0]!.input)[1]);
+  if (same && !(cH === tH && cW === tW)) issues.push(`every training output has its input's dimensions; the candidate is ${cH}x${cW} for a ${tH}x${tW} input`);
+  else if (constant && !same && !(cH === dims(pairs[0]!.output)[0] && cW === dims(pairs[0]!.output)[1])) issues.push(`every training output is ${dims(pairs[0]!.output)[0]}x${dims(pairs[0]!.output)[1]}; the candidate is ${cH}x${cW}`);
+  else if (transposed && !same && !(cH === tW && cW === tH)) issues.push(`every training output is its input transposed in shape; the candidate is ${cH}x${cW} for a ${tH}x${tW} input`);
+  else if (ratio && !same && !constant) {
+    const rh = dims(pairs[0]!.output)[0] / dims(pairs[0]!.input)[0], rw = dims(pairs[0]!.output)[1] / dims(pairs[0]!.input)[1];
+    if (!(cH === tH * rh && cW === tW * rw)) issues.push(`every training output is ${rh}x${rw} times its input; the candidate is ${cH}x${cW} for a ${tH}x${tW} input`);
+  }
+  // Palette: colours in every training output come from its input plus colours common to all outputs.
+  const commonOut = pairs.map((p) => gridColors(p.output)).reduce((acc, s) => new Set([...acc].filter((c) => s.has(c))));
+  const paletteRule = pairs.every((p) => [...gridColors(p.output)].every((c) => gridColors(p.input).has(c) || commonOut.has(c)));
+  if (paletteRule) {
+    const allowed = new Set([...gridColors(testInput), ...commonOut]);
+    const foreign = [...gridColors(candidate)].filter((c) => !allowed.has(c));
+    if (foreign.length > 0) issues.push(`training outputs only use colours from their input (plus ${[...commonOut].join(",") || "none"}); the candidate introduces ${foreign.join(",")}`);
+  }
+  // Degenerate: a single-colour output when no training output is single-colour.
+  const constantGrid = (g: number[][]) => gridColors(g).size === 1 && g.length * g[0]!.length >= 4;
+  if (constantGrid(candidate) && !pairs.some((p) => constantGrid(p.output))) issues.push("the candidate is a single-colour grid while no training output is");
+  return issues;
+}
