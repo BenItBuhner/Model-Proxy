@@ -591,10 +591,14 @@ describe("grid consistency gate", () => {
   it("accepts a consistent candidate and stays silent without two grid pairs", () => {
     expect(gridConsistencyIssues(sameShape, [[1, 2], [3, 4]], [[4, 3], [2, 1]])).toEqual([]);
     expect(gridConsistencyIssues(sameShape.slice(0, 1), [[1, 2], [3, 4]], [[9, 9], [9, 9]])).toEqual([]);
-    // constant-size outputs: the rule is the constant, not the input's size
+    // constant-size training outputs are not a rule (3/120 ARC-AGI-2 ground truths break it)
     const constantOut = [{ input: [[1, 2, 3], [4, 5, 6]], output: [[1]] }, { input: [[7, 8], [9, 0], [1, 2]], output: [[7]] }];
     expect(gridConsistencyIssues(constantOut, [[3, 3], [3, 3]], [[3]])).toEqual([]);
-    expect(gridConsistencyIssues(constantOut, [[3, 3], [3, 3]], [[3, 3], [3, 3]]).length).toBeGreaterThan(0);
+    expect(gridConsistencyIssues(constantOut, [[3, 4], [4, 3]], [[3, 4], [4, 3]])).toEqual([]);
+    // integer-ratio outputs: a 2x scale on every pair must hold on the test input
+    const scaled = [{ input: [[1, 2], [3, 4]], output: [[1, 1, 2, 2], [1, 1, 2, 2], [3, 3, 4, 4], [3, 3, 4, 4]] }, { input: [[5]], output: [[5, 5], [5, 5]] }];
+    expect(gridConsistencyIssues(scaled, [[6, 7]], [[6, 6, 7, 7], [6, 6, 7, 7]])).toEqual([]);
+    expect(gridConsistencyIssues(scaled, [[6, 7]], [[6, 7]]).length).toBeGreaterThan(0);
   });
 });
 
