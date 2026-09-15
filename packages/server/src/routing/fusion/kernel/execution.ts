@@ -68,6 +68,35 @@ export function extractSolveProgram(text: string): string | undefined {
   return pick.replace(/^\s*if\s+__name__\s*==\s*["']__main__["']\s*:[\s\S]*$/m, "").trimEnd() + "\n";
 }
 
+/**
+ * A `def solve` drafted in a reasoning trace (fenced or loose). Thinking models
+ * write their program in the trace long before the answer; a worker cut off by
+ * a slow upstream has that draft and nothing else, and execution verification
+ * is exactly the check that tells a good draft from a bad one. Loose code is
+ * bounded by prose on both sides: contiguous lines that look like Python
+ * (imports, defs, indented bodies, comments, assignments) around the last
+ * `def solve(`.
+ */
+export function extractDraftSolveProgram(trace: string): string | undefined {
+  const fenced = extractSolveProgram(trace);
+  if (fenced !== undefined) return fenced;
+  const lines = trace.split("\n");
+  let at = -1;
+  for (let i = lines.length - 1; i >= 0; i--) if (/^def\s+solve\s*\(/.test(lines[i]!)) { at = i; break; }
+  if (at < 0) return undefined;
+  const codeLike = (l: string) => l.trim() === "" || /^(\s+\S|def\s|class\s|import\s|from\s+\S+\s+import|#|@|[A-Za-z_][A-Za-z0-9_]*\s*=)/.test(l);
+  let start = at;
+  while (start > 0 && codeLike(lines[start - 1]!)) start--;
+  let end = at + 1;
+  while (end < lines.length && codeLike(lines[end]!)) end++;
+  while (start < at && lines[start]!.trim() === "") start++;
+  while (end > at + 1 && lines[end - 1]!.trim() === "") end--;
+  const body = lines.slice(start, end).join("\n");
+  // A solve() body needs at least one indented statement.
+  if (!/^def\s+solve\s*\([^)]*\)\s*:\s*\n\s+\S/m.test(body)) return undefined;
+  return body.trimEnd() + "\n";
+}
+
 export async function runSolveProgram(code: string, inputs: unknown[], timeoutMs = 10_000): Promise<{ results: Array<{ ok: boolean; out?: unknown; error?: string }>; error?: string }> {
   const dir = mkdtempSync(join(tmpdir(), "kernel-exec-"));
   try {

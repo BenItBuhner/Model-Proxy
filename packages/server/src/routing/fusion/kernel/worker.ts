@@ -1,4 +1,5 @@
 import { createLogger } from "../../../observability/logger.ts";
+import { extractDraftSolveProgram, extractSolveProgram } from "./execution.ts";
 import type { FallbackRouter } from "../../fallback.ts";
 import type { FusionRequestContext } from "../types.ts";
 import {
@@ -261,7 +262,10 @@ export async function runWorker(
           streamedChars += parsed.content.length;
         }
         if (parsed.reasoning.length > 0) {
-          if (reasoning.length < 60_000) reasoning += parsed.reasoning;
+          // Rolling tail: the program a thinking model drafts lives late in
+          // a long trace, so the buffer keeps the most recent 90k chars.
+          reasoning += parsed.reasoning;
+          if (reasoning.length > 120_000) reasoning = reasoning.slice(-90_000);
           unsummarized += parsed.reasoning;
           streamedChars += parsed.reasoning.length;
         }
@@ -327,12 +331,19 @@ export async function runWorker(
     const cleanReasoning = cutOff && cleanContent.length < MIN_PARTIAL_CHARS
       ? stripSubagentActionClaims(stripToolCallArtifacts(reasoning)).trim()
       : "";
-    const partial = cleanContent.length >= MIN_PARTIAL_CHARS
+    let partial = cleanContent.length >= MIN_PARTIAL_CHARS
       ? cleanContent
       : cleanReasoning.length >= MIN_PARTIAL_CHARS * 2
         ? `[worker was cut off while still reasoning; no final answer was produced. Partial reasoning trace (tail) follows — treat as unverified working notes]\n${cleanReasoning.slice(-8_000)}`
         : "";
-    if (partial.length >= MIN_PARTIAL_CHARS) {
+    // A program drafted in the cut-off trace is still executable evidence:
+    // carry it into the partial output so execution verification gets to judge it.
+    const draft = cutOff && extractSolveProgram(cleanContent) === undefined ? extractDraftSolveProgram(reasoning) : undefined;
+    if (draft !== undefined) {
+      partial = `${partial}\n\n[program drafted in the cut-off reasoning trace; unverified until executed]\n\`\`\`python\n${draft}\`\`\``.trim();
+      log.info("kernel worker cut off; salvaged a drafted solve() program", { id: req.id, routing: req.routing, programChars: draft.length });
+    }
+    if (partial.length >= MIN_PARTIAL_CHARS || draft !== undefined) {
       flush(true, ctx.fusionConfig.summarizer.segment_chars);
       log.info("kernel worker cut off; keeping partial output", { id: req.id, routing: req.routing, chars: partial.length, durationMs, reason: error });
       if (emitEvents) {

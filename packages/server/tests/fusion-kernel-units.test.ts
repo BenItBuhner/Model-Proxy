@@ -17,7 +17,7 @@ import {
 } from "../src/routing/fusion/kernel/waves.ts";
 import { decideEscalation, effortBandFor, escalationStrategyNote, parseRequestedKernelEffort, widthsFor, shouldExtendForDisagreement } from "../src/routing/fusion/kernel/scheduler.ts";
 import { extractIoExamples, gridConsistencyIssues } from "../src/routing/fusion/kernel/examples.ts";
-import { checkCandidateProgram, describeFailures, extractSolveProgram } from "../src/routing/fusion/kernel/execution.ts";
+import { checkCandidateProgram, describeFailures, extractDraftSolveProgram, extractSolveProgram } from "../src/routing/fusion/kernel/execution.ts";
 import { ARC_UTILS_SOURCE } from "../src/routing/fusion/kernel/arc-utils-source.ts";
 import { readFileSync } from "node:fs";
 import { ModelPool } from "../src/routing/fusion/kernel/model-pool.ts";
@@ -570,6 +570,40 @@ describe("kernel scheduler", () => {
     for (let i = 0; i < 12; i++) pool.recordOutcome("glm-5.3", true, 100);
     expect(pool.reliability("glm-5.3")).toBe(1);
     expect(first()).toBe("glm-5.3");
+  });
+});
+
+describe("drafted solve() salvage from reasoning traces", () => {
+  it("recovers a loose (unfenced) def solve with its imports and helpers, bounded by prose", async () => {
+    const trace = [
+      "Let me think about the rule. Each row is reversed, I believe.",
+      "Let me draft the code:",
+      "",
+      "from arc_utils import *",
+      "def helper(r):",
+      "    return list(reversed(r))",
+      "def solve(grid):",
+      "    return [helper(r) for r in grid]",
+      "",
+      "Now let me check pair 1: input [[1,2]] -> [[2,1]]. Yes that matches.",
+      "Pair 2 also matches, so the rule holds.",
+    ].join("\n");
+    const program = extractDraftSolveProgram(trace);
+    expect(program).toBeDefined();
+    expect(program).toContain("def helper");
+    expect(program).not.toContain("Let me");
+    expect(program).not.toContain("Now let me check");
+    const check = await checkCandidateProgram(program!, [{ input: [[1, 2]], output: [[2, 1]] }], [[[3, 4, 5]]]);
+    expect(check.passed).toBe(1);
+    expect(check.testOutputs[0]).toEqual([[5, 4, 3]]);
+  });
+  it("prefers a fenced block, takes the LAST loose draft, and rejects a bodiless def", () => {
+    expect(extractDraftSolveProgram("draft one\ndef solve(g):\n    return g\nno wait\n```python\ndef solve(g):\n    return g[::-1]\n```")).toContain("g[::-1]");
+    const last = extractDraftSolveProgram("def solve(g):\n    return g\nhmm, actually:\ndef solve(g):\n    return [r[::-1] for r in g]\nthat is it");
+    expect(last).toContain("r[::-1]");
+    expect(last).not.toContain("return g\n");
+    expect(extractDraftSolveProgram("maybe def solve(g): ... no")).toBeUndefined();
+    expect(extractDraftSolveProgram("def solve(g):\nsomething else entirely")).toBeUndefined();
   });
 });
 

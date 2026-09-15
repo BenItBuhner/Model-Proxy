@@ -852,6 +852,59 @@ describe("Fusion kernel engine", () => {
     expect(result.content ?? "").not.toContain("[[1]]");
   });
 
+  it("salvages a solve() drafted in a cut-off reasoning trace and lets execution verify it", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-salvage-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[2,1],[4,3]]\n\nTraining pair 2\nInput (2x2):\n[[5,0],[0,5]]\nOutput (2x2):\n[[0,5],[5,0]]\n\nTest input (2x3):\n[[1,2,3],[4,5,6]]";
+    // A thinking model drafts the program unfenced inside its trace, then keeps thinking until the worker timeout cuts it.
+    const stalledThinking = (model: string) => {
+      const chunk = (delta: Record<string, unknown>) => `data: ${JSON.stringify({ id: "chatcmpl-r", object: "chat.completion.chunk", created: 1, model, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`;
+      const trace = ["Each row is reversed. Draft:\n", "def solve(grid):\n", "    return [list(reversed(r)) for r in grid]\n", "\nLet me double-check pair 2 carefully... "];
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const enc = new TextEncoder();
+          for (const t of trace) controller.enqueue(enc.encode(chunk({ reasoning_content: t })));
+          // Keep the stream alive (no idle timeout) without ever finishing.
+          const tick = setInterval(() => { try { controller.enqueue(enc.encode(chunk({ reasoning_content: "hmm " }))); } catch { clearInterval(tick); } }, 500);
+          setTimeout(() => clearInterval(tick), 60_000);
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      const text = allText(messages);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        return stalledThinking(model);
+      }
+      if (!system.includes("final model of a multi-model fusion kernel") && !system.includes("adversarial") && text.includes("Test input")) {
+        return streamResponse(model, ["Not sure.\n```json\n[[0,0,0],[0,0,0]]\n```"]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-salvage-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, worker_timeout_seconds: 4, worker_idle_timeout_seconds: 20, search_deadline_seconds: { F2: 60, F3: 60, max: 60 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "F3" };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    const execution = trace["execution"] as Record<string, unknown>;
+    expect(execution["programs"] as number).toBeGreaterThan(0);
+    expect(execution["verified"] as number).toBeGreaterThan(0);
+    expect(execution["artifact"]).toBe(true);
+    expect(result.content ?? "").toContain("[[3,2,1],[6,5,4]]");
+  }, 90_000);
+
   it("repairs from the best failing PROGRAM even when an unverified leave-one-out direct answer scored higher", async () => {
     closeOperationalDbForTests();
     setStorageRootForTests(path.join(tmpRoot, `storage-repair-loo-${Date.now()}`));
