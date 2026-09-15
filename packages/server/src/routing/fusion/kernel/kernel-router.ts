@@ -159,6 +159,9 @@ interface KernelRun {
   verifiedPool: Proposal[];
   /** Independent backing of the current artifact: verified proposals and distinct families behind the winning output. */
   artifactBacking?: { proposals: number; families: number };
+  /** Training-pair regularities the current artifact's test grid violates (consistency gate). */
+  artifactIssues?: string[];
+  suspectAttempted?: boolean;
   /** Scratchpad executions this run. */
   computeRuns: number;
   /** Verified program output on the test input(s), appended after synthesis as the final artifact. */
@@ -1265,9 +1268,15 @@ export class FusionKernel {
         // independent second attempt: a program can fit few examples for the
         // wrong reason, and a second wave's verified programs join the majority.
         const weak = (run.artifactBacking?.families ?? 1) < 2;
-        const secondAttempt = run.band === "max" && weak && run.examples !== undefined && wave < 2 && this.remainingSearchMs(run) >= 600_000;
+        const suspect = (run.artifactIssues?.length ?? 0) > 0;
+        // A suspect artifact (consistency gate) earns the attempt whatever wave
+        // found it, once: it is the one signal that says the settled rule is
+        // wrong for the test input, and a later wave's consistent rule outranks it.
+        const attemptAllowed = wave < 2 || (suspect && !run.suspectAttempted);
+        const secondAttempt = run.band === "max" && weak && run.examples !== undefined && attemptAllowed && this.remainingSearchMs(run) >= 600_000;
+        if (secondAttempt && suspect) run.suspectAttempted = true;
         decision = secondAttempt
-          ? { escalate: true, reason: `execution-verified artifact backed by a single family (${run.artifactBacking?.proposals ?? 1} program(s)); independent second attempt` }
+          ? { escalate: true, reason: suspect ? `execution-verified artifact breaks the training pairs' regularities (${run.artifactIssues!.join("; ")}); independent second attempt` : `execution-verified artifact backed by a single family (${run.artifactBacking?.proposals ?? 1} program(s)); independent second attempt` }
           : { escalate: false, reason: "execution-verified artifact settles the task" };
       }
       if (decision.escalate) {
@@ -1350,7 +1359,9 @@ export class FusionKernel {
       await run.narrator.say(`Kernel: ${decision.reason}. Escalating to wave ${wave + 1} with a different strategy.`);
       strategyNote = run.verifiedArtifact !== undefined && run.examples !== undefined
         ? [
-            "INDEPENDENT SECOND ATTEMPT: a previous attempt found ONE rule that reproduces every training pair, but only a single model family backs it and few training pairs can be fit for the wrong reason.",
+            run.artifactIssues !== undefined && run.artifactIssues.length > 0
+              ? `INDEPENDENT SECOND ATTEMPT: a previous attempt found a rule that reproduces every training pair, but its output on the TEST input breaks a regularity every training pair shares, so the rule is almost certainly wrong for the test input: ${run.artifactIssues.join("; ")}.`
+              : "INDEPENDENT SECOND ATTEMPT: a previous attempt found ONE rule that reproduces every training pair, but only a single model family backs it and few training pairs can be fit for the wrong reason.",
             `Its rule statement: ${truncateMiddle(run.verifiedExplanation ?? "(none)", 1_000, "rule trimmed")}`,
             "Re-derive the rule from the training pairs from scratch, paying attention to WHY each output looks the way it does (object roles, counts, relative positions, symmetry). If you arrive at a different rule that also reproduces every pair, implement THAT; if you arrive at the same rule, implement it in your own way. Do not copy the previous program.",
           ].join("\n")
@@ -1637,6 +1648,7 @@ export class FusionKernel {
       // decides if that attempt finds a consistent rule.
       const suspect = winner[1].shortest.gridIssues !== undefined;
       run.artifactBacking = { proposals: winner[1].n, families: suspect ? 1 : backingFamilies.size };
+      run.artifactIssues = winner[1].shortest.gridIssues;
       if (suspect) log.info("kernel execution artifact suspect", { conversationId: run.ledger.conversationId, wave, issues: winner[1].shortest.gridIssues });
       log.info("kernel execution artifact", { conversationId: run.ledger.conversationId, wave, verifiedPrograms: verified.length, distinctOutputs: counts.size, backing: winner[1].n, backingFamilies: backingFamilies.size });
     }

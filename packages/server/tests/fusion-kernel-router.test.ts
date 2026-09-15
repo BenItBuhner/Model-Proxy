@@ -800,6 +800,58 @@ describe("Fusion kernel engine", () => {
     expect(programSlotEfforts.has("medium")).toBe(true);
   });
 
+  it("never settles on a verified program whose test grid breaks the training pairs' regularities: the consistency gate forces the second attempt and a consistent rule outranks it", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-gate-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    // Every training output keeps its input's dimensions; the test input is 3x3.
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[2,1]]\nOutput (2x2):\n[[1,2],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,0],[0,5]]\nOutput (2x2):\n[[5,0],[0,5]]\n\nTest input (3x3):\n[[1,2,3],[4,5,6],[7,8,9]]";
+    const withProgram = (family: string, rule: string, program: string) =>
+      [`Rule: ${rule}`, "```python", program, "```", "```json", JSON.stringify({ answer_summary: `${family}: ${rule}`, final_answer: null, key_claims: ["Grid rule", "Applies to test", "Consistent"], assumptions: [], risks: [], confidence: 0.6 }), "```"].join("\n");
+    // Reproduces both 2x2 pairs, collapses anything else to a 1x1 grid: fits the examples for the wrong reason.
+    const collapsing = "def solve(grid):\n    return [list(r) for r in grid] if len(grid) == 2 else [[1]]";
+    const identity = "def solve(grid):\n    return [list(r) for r in grid]";
+    let gatePrompts = 0;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      const text = allText(messages);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        if (text.includes("breaks a regularity every training pair shares")) {
+          gatePrompts += 1;
+          return streamResponse(model, [withProgram(model, "the grid is unchanged", identity)]);
+        }
+        if (text.includes("EXECUTION FEEDBACK (discrimination)")) return streamResponse(model, [withProgram(model, "the grid is unchanged", identity)]);
+        return streamResponse(model, [withProgram(model, "collapse to the top-left colour unless 2x2", collapsing)]);
+      }
+      if (!system.includes("final model of a multi-model fusion kernel") && !system.includes("adversarial") && text.includes("Test input")) {
+        // Every direct reader agrees with the collapsing program: a three-family
+        // agreement on a suspect grid must not count as backing.
+        return streamResponse(model, ["Collapsed.\n```json\n[[1]]\n```"]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-gate-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, search_deadline_seconds: { F2: 1200, F3: 1200, max: 1200 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "max" };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(gatePrompts).toBeGreaterThan(0);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    expect(trace["waves"] as number).toBeGreaterThanOrEqual(2);
+    expect((trace["execution"] as Record<string, unknown>)["artifact"]).toBe(true);
+    expect(result.content ?? "").toContain("[[1,2,3],[4,5,6],[7,8,9]]");
+    expect(result.content ?? "").not.toContain("[[1]]");
+  });
+
   it("repairs from the best failing PROGRAM even when an unverified leave-one-out direct answer scored higher", async () => {
     closeOperationalDbForTests();
     setStorageRootForTests(path.join(tmpRoot, `storage-repair-loo-${Date.now()}`));
