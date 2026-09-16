@@ -218,20 +218,70 @@ interface ChatMessage { role: "system" | "user" | "assistant" | "tool"; content:
 
 interface AgentOutcome { steps: number; submitted: boolean; toolCalls: number; assistantChars: number; error?: string; lastAssistant: string; latencyMs: number; modelCallMs: number }
 
-async function chat(model: string, messages: ChatMessage[], extra: Record<string, unknown>, signal: AbortSignal): Promise<{ message: ChatMessage; ms: number }> {
+export async function chat(model: string, messages: ChatMessage[], extra: Record<string, unknown>, signal: AbortSignal): Promise<{ message: ChatMessage; ms: number }> {
   const started = performance.now();
+  // Always stream: a non-streaming response that takes longer than the edge's
+  // origin timeout (Cloudflare, 100 s) comes back as a 524, and a thinking
+  // model's agent step at 8-20 tok/s regularly does. Tool calls are assembled
+  // from the deltas by index.
   const res = await fetch(`${BASE}/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${API_KEY}` },
-    body: JSON.stringify({ model, messages, tools: TOOLS, tool_choice: "auto", stream: false, max_tokens: 16_000, reasoning_effort: "high", ...extra }),
+    body: JSON.stringify({ model, messages, tools: TOOLS, tool_choice: "auto", stream: true, max_tokens: 16_000, reasoning_effort: "high", ...extra }),
     signal,
-    // Bun's fetch defaults to a 5-minute timeout; a fusion search turn can legitimately run longer.
+    // Bun's fetch defaults to a 5-minute idle timeout; a fusion search turn can legitimately run longer.
     ...({ timeout: false } as Record<string, unknown>),
   });
   if (!res.ok) throw new Error(`chat ${res.status}: ${(await res.text()).slice(0, 400)}`);
-  const body = (await res.json()) as { choices: Array<{ message: ChatMessage }> };
-  const message = body.choices[0]?.message;
-  if (message === undefined) throw new Error("no choices");
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("text/event-stream")) {
+    const body = (await res.json()) as { choices: Array<{ message: ChatMessage }> };
+    const message = body.choices[0]?.message;
+    if (message === undefined) throw new Error("no choices");
+    return { message, ms: Math.round(performance.now() - started) };
+  }
+  if (res.body === null) throw new Error("empty body");
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  let sawData = false;
+  let errorPayload: string | undefined;
+  const calls = new Map<number, { id: string; name: string; arguments: string }>();
+  const handle = (event: string) => {
+    const line = event.split("\n").find((l) => l.startsWith("data:"));
+    if (line === undefined) return;
+    const data = line.slice(5).trim();
+    if (data === "[DONE]" || data.length === 0) return;
+    let json: any;
+    try { json = JSON.parse(data); } catch { return; }
+    if (json.error !== undefined) { errorPayload = JSON.stringify(json.error).slice(0, 400); return; }
+    const delta = json.choices?.[0]?.delta;
+    if (delta === undefined) return;
+    sawData = true;
+    if (typeof delta.content === "string") content += delta.content;
+    for (const tc of delta.tool_calls ?? []) {
+      const index = typeof tc.index === "number" ? tc.index : calls.size;
+      const cur = calls.get(index) ?? { id: "", name: "", arguments: "" };
+      if (typeof tc.id === "string" && tc.id.length > 0) cur.id = tc.id;
+      if (typeof tc.function?.name === "string") cur.name += tc.function.name;
+      if (typeof tc.function?.arguments === "string") cur.arguments += tc.function.arguments;
+      calls.set(index, cur);
+    }
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+    for (const part of parts) handle(part);
+  }
+  if (buffer.trim().length > 0) handle(buffer);
+  if (errorPayload !== undefined && !sawData) throw new Error(`chat stream error: ${errorPayload}`);
+  if (!sawData) throw new Error("empty stream");
+  const toolCalls = [...calls.entries()].sort((a, b) => a[0] - b[0]).map(([i, c]) => ({ id: c.id.length > 0 ? c.id : `call_${i}`, type: "function" as const, function: { name: c.name, arguments: c.arguments } }));
+  const message: ChatMessage = { role: "assistant", content, ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}) };
   return { message, ms: Math.round(performance.now() - started) };
 }
 
@@ -444,4 +494,4 @@ async function main(): Promise<void> {
   await Promise.all(Array.from({ length: Math.max(1, args.concurrency) }, () => worker()));
 }
 
-await main();
+if (import.meta.main) await main();
