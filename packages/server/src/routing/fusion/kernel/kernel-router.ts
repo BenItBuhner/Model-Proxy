@@ -864,6 +864,8 @@ export class FusionKernel {
     // Code tasks graded by hidden tests reward careful spec reading instead: keep high effort.
     if (role === "proposer" && run.examples !== undefined && run.kcfg.execution_verification) {
       if (run.band !== "max") return "medium";
+      const policy = run.kcfg.examples_program_effort;
+      if (policy === "medium" || policy === "high") return policy;
       return slot !== undefined && slot % 2 === 1 ? "medium" : "high";
     }
     if (role === "proposer" && run.band !== "F2") return "high";
@@ -890,7 +892,9 @@ export class FusionKernel {
 
   private poolFor(kcfg: FusionKernelConfig, fingerprint: string, kinds?: Set<string>): ModelPool {
     // Families scoped with only_for join only runs whose task kinds intersect.
-    const scoped = kinds === undefined ? kcfg.families : kcfg.families.filter((f) => f.only_for === undefined || f.only_for.some((k) => kinds.has(k)));
+    const scoped = kinds === undefined
+      ? kcfg.families
+      : kcfg.families.filter((f) => (f.only_for === undefined || f.only_for.some((k) => kinds.has(k))) && !(f.not_for !== undefined && f.not_for.some((k) => kinds.has(k))));
     const active = scoped.length > 0 ? scoped : kcfg.families.filter((f) => f.only_for === undefined);
     const key = `${fingerprint}|${active.map((f) => f.name).join(",")}`;
     const existing = this.pools.get(key);

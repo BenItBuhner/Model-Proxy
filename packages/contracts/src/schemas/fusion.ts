@@ -178,6 +178,8 @@ export const FusionKernelFamilySchema = z
      * Lets a model that helps on grid puzzles stay out of olympiad math votes.
      */
     only_for: z.array(z.string().min(1)).optional(),
+    /** Task kinds this family never joins (same vocabulary as only_for); checked after only_for. */
+    not_for: z.array(z.string().min(1)).optional(),
   })
   .strict();
 
@@ -228,6 +230,13 @@ export const FusionKernelConfigSchema = z
      * productive without slowing the fast families down.
      */
     worker_max_tokens_by_routing: z.record(z.string(), z.number().int().min(256).max(65_536)).default({}),
+    /**
+     * Effort of the PROGRAM slots on example-grounded max waves. "mixed" runs odd
+     * slots at medium and even slots at high; "medium" runs every program slot at
+     * medium — on an upstream that drops long streams, short attempts that
+     * execution verifies beat long ones that never land.
+     */
+    examples_program_effort: z.enum(["mixed", "medium", "high"]).default("mixed"),
     reasoning_effort_cap_by_routing: z.record(z.string(), z.enum(["low", "medium", "high"])).default({}),
     /** Start verifying each candidate as soon as it lands instead of after the whole proposal wave settles. */
     pipeline_verification: z.boolean().default(true),

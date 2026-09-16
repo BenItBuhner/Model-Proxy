@@ -85,6 +85,7 @@ const kernelConfig: FusionConfig = {
     worker_idle_timeout_seconds: 20,
     worker_first_token_timeout_seconds: 0,
     worker_max_tokens_by_routing: {},
+    examples_program_effort: "mixed",
     reasoning_effort_cap_by_routing: {},
     worker_fast_failure_retries: 0,
     worker_fast_failure_backoff_seconds: 1,
@@ -531,6 +532,29 @@ describe("Fusion kernel engine", () => {
     delete (ctx2.requestData as Record<string, unknown>)["tools"];
     await router.route(ctx2);
     expect(grid.proposer.some((b) => String(b["model"]) === "up-mimo")).toBe(true);
+  });
+
+  it("keeps a family with not_for out of the listed task kinds and runs every program slot at medium under examples_program_effort=medium", async () => {
+    const families = kernelConfig.kernel!.families.map((f) => (f.name === "glm" ? { ...f, not_for: ["examples"] } : f));
+    const grid = emptyCaptured();
+    installFetch(grid, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[4,3],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,6],[7,8]]\nOutput (2x2):\n[[8,7],[6,5]]\n\nTest input (2x2):\n[[2,3],[4,5]]";
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-notfor-grid-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, families, control_proposer: false, execution_verification: true, execution_repair_rounds: 0, examples_program_effort: "medium", proposal_width: { F2: 4, F3: 4, max: 6 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "max" };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    await router.route(ctx);
+    expect(grid.proposer.some((b) => String(b["model"]) === "up-glm")).toBe(false);
+    expect(grid.proposer.length).toBeGreaterThan(0);
+    for (const b of grid.proposer) expect(b["reasoning_effort"]).toBe("medium");
+    // The same family still joins a plain question.
+    const plain = emptyCaptured();
+    installFetch(plain, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const ctx2 = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-notfor-plain-${Date.now()}`);
+    ctx2.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, families, control_proposer: false } };
+    delete (ctx2.requestData as Record<string, unknown>)["tools"];
+    await router.route(ctx2);
+    expect(plain.proposer.some((b) => String(b["model"]) === "up-glm")).toBe(true);
   });
 
   it("with repair_after_sightings=2 the first failure is left to the executor and the repeat triggers the repair wave", async () => {
