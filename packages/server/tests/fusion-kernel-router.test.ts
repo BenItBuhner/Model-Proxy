@@ -83,6 +83,8 @@ const kernelConfig: FusionConfig = {
     worker_reasoning_effort: { verifier: "low" },
     worker_timeout_seconds: 30,
     worker_idle_timeout_seconds: 20,
+    worker_fast_failure_retries: 0,
+    worker_fast_failure_backoff_seconds: 1,
     proposal_width: { F2: 3, F3: 3, max: 6 },
     verifiers_per_candidate: { F2: 1, F3: 1, max: 2 },
     max_waves: { F2: 2, F3: 2, max: 3 },
@@ -1484,6 +1486,38 @@ describe("Fusion kernel engine", () => {
     expect(new Set(verifierModels).size).toBe(2);
     expect(result.fusionTrace?.kernel?.["settledAnswer"]).toBe("750");
     expect(result.fusionTrace?.kernel?.["waves"]).toBe(1);
+  });
+
+  it("re-dispatches a proposer whose upstream call fails instantly (router cooldown answer) instead of losing that family for the wave", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-fast-fail-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const baseFetch = globalThis.fetch;
+    let deepseekProposerCalls = 0;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      if (String(body["model"]) === "up-deepseek" && system.includes("independent expert reasoners")) {
+        deepseekProposerCalls += 1;
+        // First attempt: the upstream router's instant "all routes failed"; second attempt succeeds.
+        if (deepseekProposerCalls === 1) return new Response(JSON.stringify({ error: { message: "All routes failed for model 'deepseek-v4-flash': All 0 routes failed" } }), { status: 503, headers: { "content-type": "application/json" } });
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-fast-fail-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true, control_proposer: false, worker_fast_failure_retries: 1, worker_fast_failure_backoff_seconds: 1, early_settle_min_families_by_domain: { math: 3 }, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(deepseekProposerCalls).toBe(2);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    expect(trace["settledAnswer"]).toBe("750");
+    // The retried call reached the (mocked) upstream and its proposal landed: three families in the wave.
+    expect(captured.proposer.filter((p) => String(p["model"]) === "up-deepseek").length).toBe(1);
+    expect(new Set(captured.proposer.map((p) => String(p["model"]))).size).toBe(3);
   });
 
   it("runs one control proposer on the verbatim task and lets its dissent block a decisive vote", async () => {

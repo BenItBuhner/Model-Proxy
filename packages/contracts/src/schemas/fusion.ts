@@ -339,6 +339,13 @@ export const FusionKernelConfigSchema = z
       .optional(),
     /** Abort a worker whose upstream stream has produced no bytes (content or reasoning) for this long. */
     worker_idle_timeout_seconds: z.number().int().positive().default(60),
+    /**
+     * A proposer that fails within a minute without streaming anything hit an
+     * upstream router's cooldown answer rather than a model failure; the slot is
+     * re-dispatched after a backoff this many times while the search has budget.
+     */
+    worker_fast_failure_retries: z.number().int().min(0).max(5).default(2),
+    worker_fast_failure_backoff_seconds: z.number().int().min(1).max(600).default(30),
     /** Parallel proposals per wave, by effort band. */
     proposal_width: EffortWidthSchema.default({ F2: 3, F3: 6, max: 9 }),
     /** Cross-family verifiers per surviving candidate, by effort band. */

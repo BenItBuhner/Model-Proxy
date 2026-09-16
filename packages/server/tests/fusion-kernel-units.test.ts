@@ -457,6 +457,8 @@ describe("kernel scheduler", () => {
     worker_reasoning_effort: {},
     worker_timeout_seconds: 300,
     worker_idle_timeout_seconds: 60,
+    worker_fast_failure_retries: 0,
+    worker_fast_failure_backoff_seconds: 1,
     proposal_width: { F2: 3, F3: 6, max: 9 },
     verifiers_per_candidate: { F2: 1, F3: 2, max: 3 },
     max_waves: { F2: 2, F3: 3, max: 4 },

@@ -860,6 +860,12 @@ export class FusionKernel {
   }
 
   /** Worker hard cap for this band, bounded by the remaining search budget (never below 15s). */
+  /** Failed within a minute, streamed nothing, and not because the kernel itself stopped it. */
+  private isFastTransientFailure(result: { success: boolean; durationMs: number; error?: string; content: string }): boolean {
+    if (result.success || result.durationMs >= 60_000 || result.content.length > 0) return false;
+    return !/budget exhausted|cancelled|quorum|client abort|aborted by client/i.test(result.error ?? "");
+  }
+
   private workerTimeoutMs(run: KernelRun): number {
     const seconds = run.kcfg.worker_timeout_seconds_by_band?.[run.band] ?? run.kcfg.worker_timeout_seconds;
     return Math.max(15_000, Math.min(seconds * 1000, this.remainingSearchMs(run)));
@@ -2019,7 +2025,7 @@ export class FusionKernel {
             const parsed = parseProposal(cached.result.content);
             return settle({ id, family: pick.family, routing: pick.routing, wave, ...parsed, raw: cached.result.content, workKey, cached: true, durationMs: 0, success: true, ...(isControl ? { direct: true } : {}), ...(loo ? { directCheck: { holdOut } } : {}) });
           }
-          let result = await runWorker(ctx, this.fallbackRouter, {
+          const launch = () => runWorker(ctx, this.fallbackRouter, {
             id,
             role,
             focus: `${role} · ${pick.family}`,
@@ -2034,6 +2040,20 @@ export class FusionKernel {
             semaphore: run.semaphore,
             signal,
           });
+          let result = await launch();
+          // A worker that dies within a minute without streaming anything hit
+          // an upstream router's cooldown answer, not a model failure. Losing a
+          // family's voice for the whole wave over that is worse than waiting
+          // out the cooldown: re-dispatch the slot after a backoff while the
+          // search still has budget (twice at most).
+          for (let retry = 0; retry < kcfg.worker_fast_failure_retries && this.isFastTransientFailure(result) && this.remainingSearchMs(run) > 180_000 && !(signal?.aborted ?? false); retry++) {
+            const backoffMs = kcfg.worker_fast_failure_backoff_seconds * 1000 * (retry + 1);
+            log.info("kernel worker fast failure; re-dispatching after backoff", { conversationId: run.ledger.conversationId, id, routing: pick.routing, error: (result.error ?? "").slice(0, 160), backoffMs, retry: retry + 1 });
+            run.pool.recordOutcome(pick.routing, false, result.durationMs);
+            await new Promise((resolve) => setTimeout(resolve, backoffMs));
+            if (signal?.aborted ?? false) break;
+            result = await launch();
+          }
           run.pool.recordOutcome(pick.routing, result.success, result.durationMs);
           this.accountWorker(run, pick.routing, capsule, result.content);
           this.noteWork(ctx, run, workKey, false, id, pick, role);
