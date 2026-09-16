@@ -8,7 +8,7 @@
  * requires the same preference in both orders; otherwise it is a tie.
  *
  *   bun run benchmarks/kernel-bench/judge.ts --n 6 --fusion fusion-max \
- *     --bases glm-5.3,kimi-k3,deepseek-v4-pro-0813 --out /tmp/kernel-bench/creative.jsonl
+ *     --bases glm-5.3,kimi-k3,deepseek-v4-flash --out /tmp/kernel-bench/creative.jsonl
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -18,7 +18,7 @@ import { loadCreativity } from "./datasets.ts";
 interface Args { n: number; fusion: string; bases: string[]; out: string; concurrency: number; report?: string }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { n: 6, fusion: "fusion-max", bases: ["glm-5.3", "kimi-k3", "deepseek-v4-pro-0813"], out: "/tmp/kernel-bench/creative.jsonl", concurrency: 2 };
+  const args: Args = { n: 6, fusion: "fusion-max", bases: ["glm-5.3", "kimi-k3", "deepseek-v4-flash"], out: "/tmp/kernel-bench/creative.jsonl", concurrency: 2 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     const next = () => argv[++i] ?? "";

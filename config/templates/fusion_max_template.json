@@ -15,8 +15,8 @@
     "task_divider": { "model_routing": "glm-5.3", "timeout_seconds": 90, "max_subtasks": 8 },
     "effort_levels": {
       "1": { "model_routing": "glm-5.3" },
-      "2": { "subagent_count": { "min": 2, "max": 4 }, "model_routings": ["glm-5.3", "kimi-k3", "deepseek-v4-pro-0813"] },
-      "3": { "subagent_count": { "min": 3, "max": 8 }, "model_routings": ["glm-5.3", "kimi-k3", "deepseek-v4-pro-0813"] }
+      "2": { "subagent_count": { "min": 2, "max": 4 }, "model_routings": ["glm-5.3", "kimi-k3", "deepseek-v4-flash"] },
+      "3": { "subagent_count": { "min": 3, "max": 8 }, "model_routings": ["glm-5.3", "kimi-k3", "deepseek-v4-flash"] }
     },
     "fusion": { "model_routing": "glm-5.3", "strategy": "sequential_append", "wire_protocol": "openai" },
     "summarizer": { "enabled": true, "model_routing": "turbo", "segment_chars": 1400, "max_summary_tokens": 256 },
@@ -24,14 +24,14 @@
     "scheduler": { "allow_nested_fusion": false, "max_depth": 0, "max_leaf_calls": 64, "max_wall_ms": 1800000 },
     "kernel": {
       "families": [
-        { "name": "glm", "routing": "glm-5.3", "alt_routings": ["glm-5.2", "glm-5.3-alt"], "weight": 1 },
-        { "name": "kimi", "routing": "kimi-k3", "alt_routings": ["kimi-k2.7-code", "kimi-k3-alt"], "weight": 1 },
-        { "name": "deepseek", "routing": "deepseek-v4-pro-0813", "alt_routings": ["deepseek-v4-flash-0731", "deepseek-v4-pro"], "weight": 1 },
-        { "name": "mimo", "routing": "mimo-v2.5-pro", "alt_routings": [], "weight": 1, "only_for": ["examples"] }
+        { "name": "glm", "routing": "glm-5.3", "alt_routings": ["glm-5.3-flash"], "weight": 1 },
+        { "name": "kimi", "routing": "kimi-k3", "alt_routings": [], "weight": 1 },
+        { "name": "deepseek", "routing": "deepseek-v4-flash", "alt_routings": [], "weight": 1 },
+        { "name": "nemotron", "routing": "nemotron-3-ultra", "alt_routings": [], "weight": 1 }
       ],
       "synthesis_routing": "glm-5.3",
-      "executor_routing_by_domain": { "swe": "deepseek-v4-pro-0813" },
-      "executor_rotation_by_domain": { "swe": ["deepseek-v4-pro-0813", "glm-5.3", "kimi-k3"] },
+      "executor_routing_by_domain": { "swe": "deepseek-v4-flash" },
+      "executor_rotation_by_domain": { "swe": ["deepseek-v4-flash", "glm-5.3", "kimi-k3", "nemotron-3-ultra"] },
       "fast_routing": "glm-5.3-flash",
       "capsule_tokens": 24000,
       "worker_max_tokens": 16000,

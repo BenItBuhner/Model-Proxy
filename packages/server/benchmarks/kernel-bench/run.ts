@@ -7,7 +7,7 @@
  * Usage:
  *   bun run benchmarks/kernel-bench/run.ts \
  *     --suites math500,aime24,mmlu-law,humaneval --n 6 \
- *     --models glm-5.3,kimi-k3,deepseek-v4-pro-0813,fusion-max \
+ *     --models glm-5.3,kimi-k3,deepseek-v4-flash,fusion-max \
  *     --concurrency 2 --out /tmp/kernel-bench/results.jsonl
  *
  * Env: KERNEL_BENCH_BASE (default http://127.0.0.1:9876/v1), KERNEL_BENCH_KEY (default local-fusion-key)
@@ -40,7 +40,7 @@ function parseArgs(argv: string[]): Args {
   const args: Args = {
     suites: ["math500", "mmlu-law", "humaneval"],
     n: 4,
-    models: ["glm-5.3", "kimi-k3", "deepseek-v4-pro-0813", "fusion-max"],
+    models: ["glm-5.3", "kimi-k3", "deepseek-v4-flash", "fusion-max"],
     concurrency: 2,
     out: "/tmp/kernel-bench/results.jsonl",
     effort: "high",

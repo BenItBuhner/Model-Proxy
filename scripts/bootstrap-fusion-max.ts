@@ -6,13 +6,14 @@
  *
  * Writes:
  *   <data-dir>/config/providers/<provider>.json          OpenAI-compatible provider
- *   <data-dir>/config/models/{glm-5.3,glm-5.3-alt,glm-5.3-flash,kimi-k3,kimi-k3-alt,
- *                             deepseek-v4-pro-0813,deepseek-v4-pro,turbo}.json
+ *   <data-dir>/config/models/{glm-5.3,glm-5.3-flash,kimi-k3,deepseek-v4-flash,
+ *                             nemotron-3-ultra,gemini-3.8-flash,complete}.json
  *   <data-dir>/config/models/fusion-max.json             from config/templates/fusion_max_template.json
  *
- * Primary logical models (glm-5.3, kimi-k3, deepseek-v4-pro-0813) fall back to
- * their `-alt` upstream sequentially. Pass --hedge to race primary and alt in
- * parallel instead (lower tail latency, double upstream load per worker).
+ * A logical model with an `alt` upstream falls back to it sequentially; pass
+ * --hedge to race primary and alt in parallel instead (lower tail latency,
+ * double upstream load per worker). The NIM-backed proxy exposes one route per
+ * model, so no alternates are registered by default.
  *
  * Usage:
  *   bun run scripts/bootstrap-fusion-max.ts --data-dir /tmp/mp-fusion \
@@ -81,22 +82,19 @@ interface UpstreamModel {
 }
 
 const UPSTREAMS: UpstreamModel[] = [
-  { logical: "glm-5.3", upstream: "glm-5.3", alt: "glm-5.3-alt", contextWindow: 1_000_000 },
-  { logical: "glm-5.3-alt", upstream: "glm-5.3-alt", contextWindow: 1_000_000 },
+  // The inference proxy is backed by NVIDIA NIM since 2026-09-16 (census in
+  // results/2026-09-16/nim-endpoint-census.txt). Models the old backend exposed
+  // (deepseek-v4-pro-0813, mimo-v2.5-pro, glm-5.2, kimi-k2.7-code, the *-alt
+  // routes) no longer exist and are not registered.
+  { logical: "glm-5.3", upstream: "glm-5.3", contextWindow: 1_000_000 },
   { logical: "glm-5.3-flash", upstream: "glm-5.3-flash", contextWindow: 1_000_000 },
-  { logical: "kimi-k3", upstream: "kimi-k3", alt: "kimi-k3-alt", contextWindow: 1_000_000 },
-  { logical: "kimi-k3-alt", upstream: "kimi-k3-alt", contextWindow: 1_000_000 },
-  { logical: "deepseek-v4-pro-0813", upstream: "deepseek-v4-pro-0813", alt: "deepseek-v4-pro", contextWindow: 1_000_000 },
-  { logical: "deepseek-v4-pro", upstream: "deepseek-v4-pro", contextWindow: 1_000_000 },
-  // Pool v2 members and alternates (measured 2026-09-08: each solves ARC-AGI-2
-  // tasks the original trio does not; see results/2026-09-08).
-  { logical: "deepseek-v4-flash-0731", upstream: "deepseek-v4-flash-0731", contextWindow: 1_000_000 },
-  { logical: "glm-5.2", upstream: "glm-5.2", contextWindow: 1_000_000 },
-  { logical: "kimi-k2.7-code", upstream: "kimi-k2.7-code", contextWindow: 262_144 },
-  { logical: "mimo-v2.5-pro", upstream: "mimo-v2.5-pro", contextWindow: 1_000_000 },
-  // Not open-weight; exposed by the inference proxy. Opt-in family (see template).
+  { logical: "kimi-k3", upstream: "kimi-k3", contextWindow: 1_000_000 },
+  { logical: "deepseek-v4-flash", upstream: "deepseek-v4-flash", contextWindow: 1_000_000 },
+  { logical: "nemotron-3-ultra", upstream: "nemotron-3-ultra", contextWindow: 1_000_000 },
+  // Not open-weight; exposed by the inference proxy. Opt-in (see template).
   { logical: "gemini-3.8-flash", upstream: "gemini-3.8-flash", contextWindow: 1_000_000 },
-  { logical: "turbo", upstream: "turbo", contextWindow: 128_000 },
+  // "complete" self-identifies as an OpenAI model behind the proxy; opt-in candidate.
+  { logical: "complete", upstream: "complete", contextWindow: 131_072 },
 ];
 
 function providerJson(args: Args): Record<string, unknown> {
