@@ -344,6 +344,8 @@ export const FusionKernelConfigSchema = z
      * upstream router's cooldown answer rather than a model failure; the slot is
      * re-dispatched after a backoff this many times while the search has budget.
      */
+    /** Idle budget before the FIRST data event (upstream queueing); 0 = same as the idle timeout. */
+    worker_first_token_timeout_seconds: z.number().int().min(0).max(3600).default(0),
     worker_fast_failure_retries: z.number().int().min(0).max(5).default(2),
     worker_fast_failure_backoff_seconds: z.number().int().min(1).max(600).default(30),
     /** Parallel proposals per wave, by effort band. */

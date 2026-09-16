@@ -83,6 +83,7 @@ const kernelConfig: FusionConfig = {
     worker_reasoning_effort: { verifier: "low" },
     worker_timeout_seconds: 30,
     worker_idle_timeout_seconds: 20,
+    worker_first_token_timeout_seconds: 0,
     worker_fast_failure_retries: 0,
     worker_fast_failure_backoff_seconds: 1,
     proposal_width: { F2: 3, F3: 3, max: 6 },
@@ -1519,6 +1520,43 @@ describe("Fusion kernel engine", () => {
     expect(captured.proposer.filter((p) => String(p["model"]) === "up-deepseek").length).toBe(1);
     expect(new Set(captured.proposer.map((p) => String(p["model"]))).size).toBe(3);
   });
+
+  it("waits the first-token budget for a queued upstream but keeps the short idle timeout once data flows", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-first-token-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const baseFetch = globalThis.fetch;
+    // Every proposer stream sits silent for 3 s (upstream queue) before its first byte.
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      const res = await baseFetch(input as string, init);
+      if (!system.includes("independent expert reasoners")) return res;
+      const text = await res.text();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          setTimeout(() => { controller.enqueue(new TextEncoder().encode(text)); controller.close(); }, 3_000);
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as unknown as typeof fetch;
+
+    const prompt = [{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }];
+    // Idle timeout 1 s alone kills every proposer during the queue wait...
+    const ctxA = makeCtx(prompt, `conv-first-token-a-${Date.now()}`);
+    ctxA.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true, control_proposer: false, worker_idle_timeout_seconds: 1, worker_first_token_timeout_seconds: 0, search_deadline_seconds: { F2: 120, F3: 120, max: 120 } } };
+    delete (ctxA.requestData as Record<string, unknown>)["tools"];
+    const a = await router.route(ctxA);
+    expect(a.fusionTrace?.kernel?.["settledAnswer"]).toBeUndefined();
+    // ...while a 10 s first-token budget rides out the queue and the wave settles.
+    const ctxB = makeCtx(prompt, `conv-first-token-b-${Date.now()}`);
+    ctxB.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true, control_proposer: false, worker_idle_timeout_seconds: 1, worker_first_token_timeout_seconds: 10, search_deadline_seconds: { F2: 120, F3: 120, max: 120 } } };
+    delete (ctxB.requestData as Record<string, unknown>)["tools"];
+    const b = await router.route(ctxB);
+    expect(b.fusionTrace?.kernel?.["settledAnswer"]).toBe("750");
+  }, 60_000);
 
   it("runs one control proposer on the verbatim task and lets its dissent block a decisive vote", async () => {
     const mathPrompt = [{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }];

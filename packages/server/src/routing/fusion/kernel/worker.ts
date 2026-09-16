@@ -64,6 +64,8 @@ export interface WorkerRequest {
   deadlineRef?: WorkerDeadlineRef;
   /** Abort when no upstream bytes arrive for this long (stalled socket / dead upstream). */
   idleTimeoutMs?: number;
+  /** Idle budget that applies until the first data event (upstream queueing); defaults to idleTimeoutMs. */
+  firstTokenTimeoutMs?: number;
   temperature?: number;
   /** Forwarded to upstream thinking models when set. */
   reasoningEffort?: "low" | "medium" | "high";
@@ -152,9 +154,15 @@ export async function runWorker(
     timer = setTimeout(() => { if (capAt() - performance.now() > 250) arm(); else controller.abort(); }, wait);
   };
   arm();
+  // Before the first data event the upstream may simply be queueing the
+  // request (NIM-backed routes wait minutes under load), which is not the
+  // stalled-mid-generation case the idle timeout exists for; a separate,
+  // longer first-token budget applies until something arrives.
+  let receivedData = false;
   const idleTimer = req.idleTimeoutMs !== undefined && req.idleTimeoutMs > 0
     ? setInterval(() => {
-        if (performance.now() - lastActivity > req.idleTimeoutMs!) {
+        const limit = receivedData ? req.idleTimeoutMs! : Math.max(req.idleTimeoutMs!, req.firstTokenTimeoutMs ?? 0);
+        if (performance.now() - lastActivity > limit) {
           idleAborted = true;
           controller.abort();
         }
@@ -254,6 +262,7 @@ export async function runWorker(
         // Only real data events count as activity: proxies keep emitting
         // `: keep-alive` comments after the generation behind them has died.
         lastActivity = performance.now();
+        receivedData = true;
         if (parsed.hasToolCalls) attemptedToolCalls = true;
         if (parsed.finishReason !== undefined) finishReason = parsed.finishReason;
         if (parsed.content.length > 0) {
