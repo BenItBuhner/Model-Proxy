@@ -29,7 +29,12 @@ Defects the slow upstream exposed in the measurement stack, each fixed before an
 6. glm-5.3-flash queues 120 s before its first token on NIM, so it is no longer the fast routing
    (nemotron-3-ultra is; glm-5.3-flash stays as the glm alternate only).
 
-Budgets sized to NIM (template): worker caps 600/1800/3600 s by band, search deadlines 900/2700/5400 s,
+7. The upstream enforces a 60-minute request ceiling: every glm-5.3 / deepseek-v4-flash high-effort failure
+   on ARC and Apex landed at 3606-3641 s as "empty stream" (still reasoning when cut). Template: per-routing
+   output caps (glm 24k tokens at medium effort, deepseek 40k, kimi 48k) so each member's stream can finish
+   inside the ceiling, and the max-band worker cap is 3300 s so the kernel's own salvage fires first.
+
+Budgets sized to NIM (template): worker caps 600/1800/3300 s by band, search deadlines 900/2700/5400 s,
 max-band extension 1800 s, contested extension 1200 s, synthesis 900 s, agentic planning 480 s.
 
 Measurement protocol: members and candidates through the 9877 proxy (passthrough), reasoning_effort high,
