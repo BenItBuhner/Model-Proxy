@@ -84,6 +84,8 @@ const kernelConfig: FusionConfig = {
     worker_timeout_seconds: 30,
     worker_idle_timeout_seconds: 20,
     worker_first_token_timeout_seconds: 0,
+    worker_max_tokens_by_routing: {},
+    reasoning_effort_cap_by_routing: {},
     worker_fast_failure_retries: 0,
     worker_fast_failure_backoff_seconds: 1,
     proposal_width: { F2: 3, F3: 3, max: 6 },
@@ -1557,6 +1559,23 @@ describe("Fusion kernel engine", () => {
     const b = await router.route(ctxB);
     expect(b.fusionTrace?.kernel?.["settledAnswer"]).toBe("750");
   }, 60_000);
+
+  it("caps one routing's output budget and reasoning effort without touching the other families", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-caps-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-caps-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true, control_proposer: false, worker_max_tokens: 30000, worker_max_tokens_by_band: { F2: 8000, F3: 30000, max: 30000 }, worker_max_tokens_by_routing: { "glm-5.3": 9000 }, reasoning_effort_cap_by_routing: { "glm-5.3": "medium" } } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    await router.route(ctx);
+    const glm = captured.proposer.filter((p) => String(p["model"]) === "up-glm");
+    const others = captured.proposer.filter((p) => String(p["model"]) !== "up-glm");
+    expect(glm.length).toBeGreaterThan(0);
+    for (const p of glm) { expect(p["max_tokens"]).toBe(9000); expect(p["reasoning_effort"]).toBe("medium"); }
+    for (const p of others) { expect(p["max_tokens"]).toBe(30000); expect(p["reasoning_effort"]).toBe("high"); }
+  });
 
   it("runs one control proposer on the verbatim task and lets its dissent block a decisive vote", async () => {
     const mathPrompt = [{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }];

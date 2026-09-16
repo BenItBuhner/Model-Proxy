@@ -458,6 +458,8 @@ describe("kernel scheduler", () => {
     worker_timeout_seconds: 300,
     worker_idle_timeout_seconds: 60,
     worker_first_token_timeout_seconds: 0,
+    worker_max_tokens_by_routing: {},
+    reasoning_effort_cap_by_routing: {},
     worker_fast_failure_retries: 0,
     worker_fast_failure_backoff_seconds: 1,
     proposal_width: { F2: 3, F3: 6, max: 9 },

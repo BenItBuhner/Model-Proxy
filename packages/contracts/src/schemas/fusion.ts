@@ -221,6 +221,14 @@ export const FusionKernelConfigSchema = z
       .optional(),
     /** Max output tokens for verifiers (they are terse by contract). */
     verifier_max_tokens: z.number().int().min(256).max(32_768).default(2_500),
+    /**
+     * Per-routing ceilings for proposer-class workers. A member that streams at
+     * 6-9 tok/s cannot finish a 60k-token high-effort trace inside the
+     * upstream's request ceiling; capping ITS output/effort keeps its slot
+     * productive without slowing the fast families down.
+     */
+    worker_max_tokens_by_routing: z.record(z.string(), z.number().int().min(256).max(65_536)).default({}),
+    reasoning_effort_cap_by_routing: z.record(z.string(), z.enum(["low", "medium", "high"])).default({}),
     /** Start verifying each candidate as soon as it lands instead of after the whole proposal wave settles. */
     pipeline_verification: z.boolean().default(true),
     /**

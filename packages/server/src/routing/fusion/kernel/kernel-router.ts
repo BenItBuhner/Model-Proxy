@@ -833,9 +833,20 @@ export class FusionKernel {
     return results;
   }
 
-  private proposalMaxTokens(run: KernelRun): number {
+  private proposalMaxTokens(run: KernelRun, routing?: string): number {
     const byBand = run.kcfg.worker_max_tokens_by_band?.[run.band];
-    return Math.min(run.kcfg.worker_max_tokens, byBand ?? run.kcfg.worker_max_tokens);
+    const base = Math.min(run.kcfg.worker_max_tokens, byBand ?? run.kcfg.worker_max_tokens);
+    const byRouting = routing !== undefined ? run.kcfg.worker_max_tokens_by_routing[routing] : undefined;
+    return byRouting !== undefined ? Math.min(base, byRouting) : base;
+  }
+
+  /** Apply the routing's effort ceiling (low < medium < high) to a chosen effort. */
+  private capEffort(run: KernelRun, routing: string | undefined, effort: "low" | "medium" | "high" | undefined): "low" | "medium" | "high" | undefined {
+    const cap = routing !== undefined ? run.kcfg.reasoning_effort_cap_by_routing[routing] : undefined;
+    if (cap === undefined) return effort;
+    const rank = { low: 0, medium: 1, high: 2 } as const;
+    if (effort === undefined) return cap;
+    return rank[effort] > rank[cap] ? cap : effort;
   }
 
   /**
@@ -1935,7 +1946,6 @@ export class FusionKernel {
       if (onProposal !== undefined) hooks.push(onProposal(proposal).catch((err) => log.warn("proposal hook failed", { id: proposal.id, error: String(err) })));
       return proposal;
     };
-    const maxTokens = this.proposalMaxTokens(run);
     const objective = this.proposerObjective(intent, role, run.agentic) + (role === "proposer" ? this.executionContract(run) : "");
     const phase = role === "repair" ? "repair" : role === "checkpoint" ? "checkpoint" : "proposal";
     emitFusion(ctx, { type: "fusion.phase", at: nowIso(), phase, status: "started", detail: { wave, count: picks.length, routings: picks.map((p) => p.routing) } });
@@ -2034,12 +2044,12 @@ export class FusionKernel {
             focus: `${role} · ${pick.family}`,
             routing: pick.routing,
             messages: capsule.messages,
-            maxTokens,
+            maxTokens: this.proposalMaxTokens(run, pick.routing),
             timeoutMs,
             deadlineRef: run.deadlineRef,
             idleTimeoutMs: kcfg.worker_idle_timeout_seconds * 1000,
             firstTokenTimeoutMs: kcfg.worker_first_token_timeout_seconds * 1000,
-            reasoningEffort: this.proposerReasoningEffort(run, role, isControl ? undefined : i),
+            reasoningEffort: this.capEffort(run, pick.routing, this.proposerReasoningEffort(run, role, isControl ? undefined : i)),
             onSegment: run.narrator.segment,
             semaphore: run.semaphore,
             signal,
@@ -2095,11 +2105,11 @@ export class FusionKernel {
                 focus: `${role} · ${pick.family} · compute round ${rounds}`,
                 routing: pick.routing,
                 messages: history,
-                maxTokens,
+                maxTokens: this.proposalMaxTokens(run, pick.routing),
                 timeoutMs: Math.min(timeoutMs, Math.max(15_000, this.remainingSearchMs(run) - 30_000)),
                 idleTimeoutMs: kcfg.worker_idle_timeout_seconds * 1000,
-            firstTokenTimeoutMs: kcfg.worker_first_token_timeout_seconds * 1000,
-                reasoningEffort: this.proposerReasoningEffort(run, role),
+                firstTokenTimeoutMs: kcfg.worker_first_token_timeout_seconds * 1000,
+                reasoningEffort: this.capEffort(run, pick.routing, this.proposerReasoningEffort(run, role)),
                 onSegment: run.narrator.segment,
                 semaphore: run.semaphore,
                 signal,
