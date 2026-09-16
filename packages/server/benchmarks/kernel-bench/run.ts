@@ -98,7 +98,7 @@ function loadDone(out: string, retryFailed: boolean): Set<string> {
 /** Transient upstream/proxy failures worth retrying inside the run (never a hit of the item's own timeout). */
 export function isTransientBenchError(error: string | undefined): boolean {
   if (error === undefined) return false;
-  return /No routes were available|All routes failed|empty stream|empty content|empty body|HTTP 5\d\d|status[:=]\s*5\d\d|524|ECONNRESET|socket hang up|fetch failed/i.test(error);
+  return /No routes were available|All routes failed|empty stream|empty content|empty body|HTTP 5\d\d|status[:=]\s*5\d\d|524|ECONNRESET|ECONNREFUSED|Unable to connect|connection refused|socket hang up|fetch failed|operation timed out/i.test(error);
 }
 
 const RETRY_BACKOFF_MS = [20_000, 45_000, 90_000];

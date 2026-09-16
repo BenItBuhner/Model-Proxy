@@ -325,7 +325,7 @@ async function runAgent(model: string, inst: Instance, ws: Workspace, args: Args
         error = undefined;
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);
-        const transient = /No routes were available|All routes failed|empty|HTTP 5\d\d|status[:=]?\s*5\d\d|524|ECONNRESET|socket hang up|fetch failed/i.test(error);
+        const transient = /No routes were available|All routes failed|empty|HTTP 5\d\d|status[:=]?\s*5\d\d|524|ECONNRESET|ECONNREFUSED|Unable to connect|connection refused|socket hang up|fetch failed|operation timed out/i.test(error);
         const backoff = [15_000, 40_000, 90_000][attempt] ?? 0;
         log(`step ${steps} model error (attempt ${attempt + 1}${transient && backoff > 0 ? `, retrying in ${backoff / 1000}s` : ""}): ${error.slice(0, 200)}`);
         if (!transient || backoff === 0 || performance.now() + backoff > deadline) break;
