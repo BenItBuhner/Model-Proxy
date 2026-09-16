@@ -151,7 +151,10 @@ function modelJson(args: Args, model: UpstreamModel): Record<string, unknown> {
     wire_protocol: "openai",
     context_window: model.contextWindow,
     timeout_seconds: 300,
-    cooldown_seconds: 10,
+    // A single route per model: any cooldown is a blackhole for every caller
+    // (an upstream socket close or 5xx classifies as a key failure). One
+    // second keeps the router's bookkeeping happy without denying service.
+    cooldown_seconds: 1,
   });
   // The alt upstream is always a sequential fallback; it only runs in parallel
   // (hedged) when --hedge is set. Hedging doubles upstream load per worker,
@@ -163,7 +166,7 @@ function modelJson(args: Args, model: UpstreamModel): Record<string, unknown> {
   return {
     logical_name: model.logical,
     timeout_seconds: 300,
-    default_cooldown_seconds: 10,
+    default_cooldown_seconds: 1,
     context_window: model.contextWindow,
     model_routings: routes,
     fallback_model_routings: [],
