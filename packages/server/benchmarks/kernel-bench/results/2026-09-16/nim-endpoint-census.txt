@@ -13,9 +13,9 @@ glm-5.3                          ok      GLM / Z.ai                     2-4 s   
 glm-5.3-flash                    ok      GLM / Z.ai                     120-126 s 13                                glm alternate only (queue before first token)
 kimi-k3                          ok      (reasoning-only at 700 tok)    30-70 s   14-21                             member (kimi family)
 deepseek-v4-flash                ok      (reasoning-only at 700 tok)    2-12 s    14-30                             member (deepseek family; deepseek-v4-pro-0813 no longer exists)
-nemotron-3-ultra                 ok      (thinking leaks into content)  1-2 s     34-118                            candidate family (0/19 on ARC under the old backend — re-baselined here)
+nemotron-3-ultra                 ok      (thinking leaks into content)  1-2 s     34-118                            NOT NIM: the proxy's route chain is opencode free → openrouter free → NIM (404); measured 1/32 ARC, 0/12 Apex, 16/46 BBEH, 5/16 SWE → not a family
 gemini-3.8-flash                 ok      Gemini / Google                17-67 s   n/a (non-streaming burst)         closed-weight candidate, opt-in
-complete                         ok      "ChatGPT / OpenAI"             0.4 s     224                               closed-weight, identity unknown; opt-in candidate
+complete                         ok      openai/gpt-oss-120b via Groq   0.4 s     224                               open-weight; Groq rejects requests above ~16k total tokens (413), so unusable for ARC prompts; fast_routing for intent extraction / fast path
 turbo                            ok      garbage ("(2) one (3) of ...") 11 s      -                                 unusable
 qwen3.6-plus-free                ok      "I am Gemini" (misrouted)      144 s     -                                 unusable (free tier answers as a different model)
 muse-spark-1.3-contributor-free  ok      "I am Gemini" (misrouted)      145 s     -                                 unusable
