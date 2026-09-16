@@ -1,0 +1,38 @@
+NIM re-measurement campaign — infrastructure findings (2026-09-16)
+
+Why everything is re-measured: the inference proxy's previous backend (Nahcrof) proxied traffic to cheaper
+models than requested, so every member baseline, candidate table and fusion number dated before 2026-09-16
+was measured against downgraded upstreams. The backend is NVIDIA NIM from 2026-09-16 (census:
+nim-endpoint-census.txt). Per-stream throughput on NIM: glm-5.3 6-9 tok/s, kimi-k3 14-21 (30-90 s queue
+before the first token under load), deepseek-v4-flash 14-30, nemotron-3-ultra 35-118; a high-effort
+reasoning trace of 30-60k tokens therefore takes 30-90 minutes on the reasoning members.
+
+Defects the slow upstream exposed in the measurement stack, each fixed before any number below was kept:
+
+1. Bun's fetch aborts a request after 300 s without socket activity ("The operation timed out."); the
+   proxy's upstream fetch did not disable it. A NIM-queued stream with no bytes yet died at exactly 300 s,
+   the error classified as a key failure, and the single key's cooldown then failed every other worker of
+   the wave instantly. Fixed: `timeout: false` on every upstream fetch, TimeoutError classified as
+   fallback-without-cooldown (tests in provider-stream-hygiene.test.ts).
+2. Route cooldowns on a single-route provider are blackholes: one upstream 524/5xx/socket close put the
+   key into a 10 s cooldown and 44 queued BBEH items failed in 5 ms each. Fixed: provider error handling
+   500/502/503/504/524 → fallback_no_cooldown, route cooldown 1 s (bootstrap-fusion-max.ts).
+3. The upstream proxy has its own cooldown answer ("All 0 routes failed for model X") under load. Kernel:
+   a proposer that fails within a minute without streaming is re-dispatched after 30/60 s
+   (worker_fast_failure_retries); kernel-bench and the SWE harness retry transient failures in-run.
+4. Cloudflare returns 524 for a non-streaming origin response slower than 100 s; the SWE harness's agent
+   steps were non-streaming and every slow model's step died. Fixed: steps stream and assemble tool calls
+   from deltas.
+5. Worker idle timeout vs queueing: a 300 s idle cap killed kimi-k3 workers still waiting in NIM's queue;
+   a separate first-token budget (worker_first_token_timeout_seconds, 900 s) now applies until the first
+   data event. Intent extraction on the fast routing got 120 s / 60 s idle (20 s killed every parse).
+6. glm-5.3-flash queues 120 s before its first token on NIM, so it is no longer the fast routing
+   (nemotron-3-ultra is; glm-5.3-flash stays as the glm alternate only).
+
+Budgets sized to NIM (template): worker caps 600/1800/3600 s by band, search deadlines 900/2700/5400 s,
+max-band extension 1800 s, contested extension 1200 s, synthesis 900 s, agentic planning 480 s.
+
+Measurement protocol: members and candidates through the 9877 proxy (passthrough), reasoning_effort high,
+64k output budget, 90-minute per-call cap, strict scoring (a failed or timed-out call is wrong); fusion
+through the 9878 proxy on the template. Per-item tables: arcagi2-members-nim.txt, apex25-members-nim.txt,
+bbeh-members-nim.txt, swebench-members-nim.txt (written as suites complete).
