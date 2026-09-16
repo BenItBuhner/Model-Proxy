@@ -90,6 +90,8 @@ export interface WorkerResult {
   attemptedToolCalls: boolean;
   /** True when the worker was cut off (timeout / quorum cancel) but enough output was kept. */
   truncated?: boolean;
+  /** The upstream ended the stream with an error after generation had started; `content` is what arrived. */
+  upstreamDied?: boolean;
 }
 
 /** Partial output at least this long is kept when a worker is cut off. */
@@ -335,9 +337,13 @@ export async function runWorker(
     // evidence: keep it as a truncated result instead of discarding it. A
     // thinking model cut off before its answer leaves only its reasoning
     // trace; the tail of that trace is kept, clearly labelled, so the
-    // synthesizer can weigh it rather than losing the work entirely.
-    const cleanContent = cutOff ? stripSubagentActionClaims(stripToolCallArtifacts(content)).trim() : "";
-    const cleanReasoning = cutOff && cleanContent.length < MIN_PARTIAL_CHARS
+    // synthesizer can weigh it rather than losing the work entirely. The same
+    // holds when the UPSTREAM ends the stream mid-generation (socket closed,
+    // stream error after minutes of output): what arrived is kept.
+    const upstreamDied = !cutOff && ctx.signal?.aborted !== true && (content.length > 0 || reasoning.length > 0);
+    const salvageable = cutOff || upstreamDied;
+    const cleanContent = salvageable ? stripSubagentActionClaims(stripToolCallArtifacts(content)).trim() : "";
+    const cleanReasoning = salvageable && cleanContent.length < MIN_PARTIAL_CHARS
       ? stripSubagentActionClaims(stripToolCallArtifacts(reasoning)).trim()
       : "";
     let partial = cleanContent.length >= MIN_PARTIAL_CHARS
@@ -347,7 +353,7 @@ export async function runWorker(
         : "";
     // A program drafted in the cut-off trace is still executable evidence:
     // carry it into the partial output so execution verification gets to judge it.
-    const draft = cutOff && extractSolveProgram(cleanContent) === undefined ? extractDraftSolveProgram(reasoning) : undefined;
+    const draft = salvageable && extractSolveProgram(cleanContent) === undefined ? extractDraftSolveProgram(reasoning) : undefined;
     if (draft !== undefined) {
       partial = `${partial}\n\n[program drafted in the cut-off reasoning trace; unverified until executed]\n\`\`\`python\n${draft}\`\`\``.trim();
       log.info("kernel worker cut off; salvaged a drafted solve() program", { id: req.id, routing: req.routing, programChars: draft.length });
@@ -369,7 +375,7 @@ export async function runWorker(
           detail: { truncated: true, reason: error },
         });
       }
-      return { content: partial, success: true, durationMs, finishReason: "length", attemptedToolCalls, truncated: true };
+      return { content: partial, success: true, durationMs, finishReason: "length", attemptedToolCalls, truncated: true, ...(upstreamDied ? { upstreamDied: true, error } : {}) };
     }
     log.warn("kernel worker failed", { id: req.id, routing: req.routing, error, durationMs });
     if (emitEvents) {

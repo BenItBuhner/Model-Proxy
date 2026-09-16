@@ -871,6 +871,12 @@ export class FusionKernel {
   }
 
   /** Worker hard cap for this band, bounded by the remaining search budget (never below 15s). */
+  /** The upstream ended the stream with a network/stream error after generation had started (not a kernel deadline or cancel). */
+  private isMidStreamUpstreamFailure(result: { success: boolean; durationMs: number; error?: string; truncated?: boolean }): boolean {
+    if (result.success) return false;
+    return /socket connection was closed|Stream error|stream ended|ECONNRESET|socket hang up|SSE stream stalled|All routes failed/i.test(result.error ?? "") && !/budget exhausted|cancelled|quorum|client abort|timed out after|worker idle/i.test(result.error ?? "");
+  }
+
   /** Failed within a minute, streamed nothing, and not because the kernel itself stopped it. */
   private isFastTransientFailure(result: { success: boolean; durationMs: number; error?: string; content: string }): boolean {
     if (result.success || result.durationMs >= 60_000 || result.content.length > 0) return false;
@@ -2059,15 +2065,29 @@ export class FusionKernel {
           // an upstream router's cooldown answer, not a model failure. Losing a
           // family's voice for the whole wave over that is worse than waiting
           // out the cooldown: re-dispatch the slot after a backoff while the
-          // search still has budget (twice at most).
-          for (let retry = 0; retry < kcfg.worker_fast_failure_retries && this.isFastTransientFailure(result) && this.remainingSearchMs(run) > 180_000 && !(signal?.aborted ?? false); retry++) {
-            const backoffMs = kcfg.worker_fast_failure_backoff_seconds * 1000 * (retry + 1);
-            log.info("kernel worker fast failure; re-dispatching after backoff", { conversationId: run.ledger.conversationId, id, routing: pick.routing, error: (result.error ?? "").slice(0, 160), backoffMs, retry: retry + 1 });
+          // search still has budget (twice at most). A stream the upstream
+          // closes MID-generation (socket closed after 10-40 minutes, seen on
+          // every NIM route) gets one fresh attempt too when at least fifteen
+          // minutes remain — the slot is otherwise simply lost for the wave.
+          let midStreamRetried = false;
+          let salvaged: typeof result | undefined;
+          for (let retry = 0; retry < kcfg.worker_fast_failure_retries && !(signal?.aborted ?? false); retry++) {
+            const fast = this.isFastTransientFailure(result);
+            // A salvaged partial without a usable deliverable (no program on an
+            // example-grounded task, or only a reasoning tail) is kept as the
+            // fallback while a fresh attempt is made.
+            const weakPartial = result.success && result.upstreamDied === true && (run.examples !== undefined ? extractSolveProgram(result.content) === undefined : result.content.length < 2_000);
+            const mid = !fast && !midStreamRetried && (weakPartial || this.isMidStreamUpstreamFailure(result)) && this.remainingSearchMs(run) > 900_000;
+            if (!(fast && this.remainingSearchMs(run) > 180_000) && !mid) break;
+            if (mid) { midStreamRetried = true; if (weakPartial) salvaged = result; }
+            const backoffMs = mid ? 5_000 : kcfg.worker_fast_failure_backoff_seconds * 1000 * (retry + 1);
+            log.info(mid ? "kernel worker stream died mid-generation; re-dispatching" : "kernel worker fast failure; re-dispatching after backoff", { conversationId: run.ledger.conversationId, id, routing: pick.routing, error: (result.error ?? "").slice(0, 160), durationMs: result.durationMs, salvagedChars: salvaged?.content.length ?? 0, backoffMs, retry: retry + 1 });
             run.pool.recordOutcome(pick.routing, false, result.durationMs);
             await new Promise((resolve) => setTimeout(resolve, backoffMs));
             if (signal?.aborted ?? false) break;
             result = await launch();
           }
+          if (!result.success && salvaged !== undefined) result = salvaged;
           run.pool.recordOutcome(pick.routing, result.success, result.durationMs);
           this.accountWorker(run, pick.routing, capsule, result.content);
           this.noteWork(ctx, run, workKey, false, id, pick, role);

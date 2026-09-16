@@ -1577,6 +1577,59 @@ describe("Fusion kernel engine", () => {
     for (const p of others) { expect(p["max_tokens"]).toBe(30000); expect(p["reasoning_effort"]).toBe("high"); }
   });
 
+  it("re-dispatches a proposer whose upstream stream dies mid-generation and verifies the fresh attempt's program", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-midstream-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[2,1],[4,3]]\n\nTraining pair 2\nInput (2x2):\n[[5,0],[0,5]]\nOutput (2x2):\n[[0,5],[5,0]]\n\nTest input (2x3):\n[[1,2,3],[4,5,6]]";
+    const withProgram = (family: string, program: string) =>
+      [`Rule: each row is reversed`, "```python", program, "```", "```json", JSON.stringify({ answer_summary: `${family}: reverse rows`, final_answer: null, key_claims: ["Grid rule", "Applies to test", "Consistent"], assumptions: [], risks: [], confidence: 0.6 }), "```"].join("\n");
+    const program = "def solve(grid):\n    return [list(reversed(r)) for r in grid]";
+    const attempts = new Map<string, number>();
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      const text = allText(messages);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        const n = (attempts.get(model) ?? 0) + 1; attempts.set(model, n);
+        if (n === 1) {
+          // First attempt: some reasoning arrives, then the upstream drops the socket.
+          const chunk = (delta: Record<string, unknown>) => `data: ${JSON.stringify({ id: "chatcmpl-d", object: "chat.completion.chunk", created: 1, model, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`;
+          const stream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(chunk({ reasoning_content: "Let me look at the pairs carefully. Row reversal seems plausible but let me verify with pair two before I commit to anything at all here. " })));
+              setTimeout(() => controller.error(new Error("The socket connection was closed unexpectedly.")), 300);
+            },
+          });
+          return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+        }
+        return streamResponse(model, [withProgram(model, program)]);
+      }
+      if (!system.includes("final model of a multi-model fusion kernel") && !system.includes("adversarial") && text.includes("Test input")) {
+        return streamResponse(model, ["Not sure.\n```json\n[[0,0,0],[0,0,0]]\n```"]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-midstream-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: false, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, worker_fast_failure_retries: 1, worker_fast_failure_backoff_seconds: 1, search_deadline_seconds: { F2: 1200, F3: 1200, max: 1200 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "F3" };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect([...attempts.values()].some((n) => n >= 2)).toBe(true);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    const execution = trace["execution"] as Record<string, unknown>;
+    expect(execution["verified"] as number).toBeGreaterThan(0);
+    expect(result.content ?? "").toContain("[[3,2,1],[6,5,4]]");
+  }, 60_000);
+
   it("runs one control proposer on the verbatim task and lets its dissent block a decisive vote", async () => {
     const mathPrompt = [{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }];
     const controlCfg: FusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true, control_proposer: true } };
