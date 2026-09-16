@@ -24,9 +24,9 @@
     "scheduler": { "allow_nested_fusion": false, "max_depth": 0, "max_leaf_calls": 64, "max_wall_ms": 1800000 },
     "kernel": {
       "families": [
+        { "name": "kimi", "routing": "kimi-k3", "alt_routings": [], "weight": 3 },
+        { "name": "deepseek", "routing": "deepseek-v4-flash", "alt_routings": [], "weight": 2 },
         { "name": "glm", "routing": "glm-5.3", "alt_routings": ["glm-5.3-flash"], "weight": 1 },
-        { "name": "kimi", "routing": "kimi-k3", "alt_routings": [], "weight": 1 },
-        { "name": "deepseek", "routing": "deepseek-v4-flash", "alt_routings": [], "weight": 1 },
         { "name": "nemotron", "routing": "nemotron-3-ultra", "alt_routings": [], "weight": 1 }
       ],
       "synthesis_routing": "glm-5.3",
