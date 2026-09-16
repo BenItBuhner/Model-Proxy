@@ -1436,8 +1436,11 @@ export class FusionKernel {
         routing,
         messages: capsule.messages,
         maxTokens: 1_200,
-        timeoutMs: Math.min(45_000, kcfg.worker_timeout_seconds * 1000),
-        idleTimeoutMs: Math.min(20_000, kcfg.worker_idle_timeout_seconds * 1000),
+        // The fast routing still queues behind a loaded upstream: 45 s / 20 s
+        // killed every intent parse on NIM (first token at 20-60 s under load).
+        timeoutMs: Math.min(120_000, kcfg.worker_timeout_seconds * 1000),
+        idleTimeoutMs: Math.min(60_000, kcfg.worker_idle_timeout_seconds * 1000),
+        firstTokenTimeoutMs: Math.min(90_000, Math.max(kcfg.worker_idle_timeout_seconds, kcfg.worker_first_token_timeout_seconds) * 1000),
         reasoningEffort: kcfg.worker_reasoning_effort.intent,
         temperature: 0,
         semaphore: run.semaphore,
