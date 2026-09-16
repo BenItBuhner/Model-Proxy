@@ -95,26 +95,23 @@ function loadDone(out: string, retryFailed: boolean): Set<string> {
   return done;
 }
 
+/** Transient upstream/proxy failures worth retrying inside the run (never a hit of the item's own timeout). */
+export function isTransientBenchError(error: string | undefined): boolean {
+  if (error === undefined) return false;
+  return /No routes were available|All routes failed|empty stream|empty content|empty body|HTTP 5\d\d|status[:=]\s*5\d\d|524|ECONNRESET|socket hang up|fetch failed/i.test(error);
+}
+
+const RETRY_BACKOFF_MS = [20_000, 45_000, 90_000];
+
 async function runOne(item: BenchItem, model: string, args: Args): Promise<ModelRun> {
   const base = process.env.KERNEL_BENCH_BASE ?? "http://127.0.0.1:9876/v1";
   const key = process.env.KERNEL_BENCH_KEY ?? "local-fusion-key";
-  const result = await chatCall(
-    {
-      baseUrl: base,
-      apiKey: key,
-      sessionPrefix: "kbench",
-      timeoutMs: args.timeoutMs,
-      reasoningEffort: args.effort,
-      maxTokens: args.maxTokens,
-      // Always stream: base models for origin timeouts, fusion for client idle
-      // timeouts (the kernel appends its trace summary as a trailing SSE comment).
-      stream: true,
-      extraBody: args.extraBody,
-    },
-    model,
-    item.messages,
-    `${item.id}-${model}`.replace(/[^a-zA-Z0-9_.:-]/g, "_"),
-  );
+  let result = await callOnce(item, model, args, base, key);
+  for (let attempt = 0; !result.ok && attempt < RETRY_BACKOFF_MS.length && isTransientBenchError(result.error); attempt++) {
+    console.log(`  retry ${attempt + 1}/${RETRY_BACKOFF_MS.length} for ${item.id} (${model}) after ${RETRY_BACKOFF_MS[attempt]! / 1000}s: ${(result.error ?? "").slice(0, 120).replace(/\s+/g, " ")}`);
+    await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS[attempt]));
+    result = await callOnce(item, model, args, base, key);
+  }
   const graded = result.ok ? await gradeItem(item, result.content) : {};
   return {
     itemId: item.id,
@@ -136,6 +133,26 @@ async function runOne(item: BenchItem, model: string, args: Args): Promise<Model
     at: new Date().toISOString(),
     version: RUN_VERSION,
   };
+}
+
+async function callOnce(item: BenchItem, model: string, args: Args, base: string, key: string) {
+  return chatCall(
+    {
+      baseUrl: base,
+      apiKey: key,
+      sessionPrefix: "kbench",
+      timeoutMs: args.timeoutMs,
+      reasoningEffort: args.effort,
+      maxTokens: args.maxTokens,
+      // Always stream: base models for origin timeouts, fusion for client idle
+      // timeouts (the kernel appends its trace summary as a trailing SSE comment).
+      stream: true,
+      extraBody: args.extraBody,
+    },
+    model,
+    item.messages,
+    `${item.id}-${model}`.replace(/[^a-zA-Z0-9_.:-]/g, "_"),
+  );
 }
 
 async function main(): Promise<void> {

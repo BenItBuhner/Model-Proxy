@@ -263,17 +263,26 @@ async function runAgent(model: string, inst: Instance, ws: Workspace, args: Args
   let error: string | undefined;
   while (steps < args.maxSteps && performance.now() < deadline) {
     steps += 1;
-    const remaining = Math.max(30_000, deadline - performance.now());
-    let reply: ChatMessage;
-    try {
-      const r = await chat(model, messages, extra, AbortSignal.timeout(Math.min(remaining, 40 * 60_000)));
-      reply = r.message;
-      modelCallMs += r.ms;
-    } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
-      log(`step ${steps} model error: ${error.slice(0, 200)}`);
-      break;
+    let reply: ChatMessage | undefined;
+    // A transient proxy/upstream failure (route cooldown, 5xx, empty stream)
+    // must not end the agent: retry the step with backoff, and only give up
+    // when the failure persists or the wall clock is spent.
+    for (let attempt = 0; attempt < 4 && reply === undefined; attempt++) {
+      try {
+        const r = await chat(model, messages, extra, AbortSignal.timeout(Math.min(Math.max(30_000, deadline - performance.now()), 40 * 60_000)));
+        reply = r.message;
+        modelCallMs += r.ms;
+        error = undefined;
+      } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+        const transient = /No routes were available|All routes failed|empty|HTTP 5\d\d|status[:=]?\s*5\d\d|524|ECONNRESET|socket hang up|fetch failed/i.test(error);
+        const backoff = [15_000, 40_000, 90_000][attempt] ?? 0;
+        log(`step ${steps} model error (attempt ${attempt + 1}${transient && backoff > 0 ? `, retrying in ${backoff / 1000}s` : ""}): ${error.slice(0, 200)}`);
+        if (!transient || backoff === 0 || performance.now() + backoff > deadline) break;
+        await new Promise((r) => setTimeout(r, backoff));
+      }
     }
+    if (reply === undefined) break;
     assistantChars += (reply.content ?? "").length;
     lastAssistant = reply.content ?? lastAssistant;
     const calls = reply.tool_calls ?? [];

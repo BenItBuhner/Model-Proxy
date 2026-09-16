@@ -124,15 +124,21 @@ function providerJson(args: Args): Record<string, unknown> {
     },
     rate_limiting: { enabled: false, cooldown_seconds: 30 },
     models: {},
+    // One route per model and one key: a cooldown has nothing to fail over to,
+    // it only blackholes the model for every caller (observed: a single
+    // upstream 524 under load turned the next 44 benchmark items into instant
+    // "No routes were available" failures). Transient 5xx/524 fail the request;
+    // only auth failures and explicit rate limits cool the key down.
     error_handling: {
       "400": { action: "fallback_no_cooldown" },
       "401": { action: "global_key_failure" },
       "403": { action: "global_key_failure" },
       "429": { action: "model_key_failure" },
       "500": { action: "fallback_no_cooldown" },
-      "502": { action: "model_key_failure" },
-      "503": { action: "model_key_failure" },
-      "504": { action: "model_key_failure" },
+      "502": { action: "fallback_no_cooldown" },
+      "503": { action: "fallback_no_cooldown" },
+      "504": { action: "fallback_no_cooldown" },
+      "524": { action: "fallback_no_cooldown" },
     },
     model_mapping: {},
   };
