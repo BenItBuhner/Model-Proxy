@@ -31,7 +31,7 @@
       "synthesis_routing": "glm-5.3",
       "executor_routing_by_domain": { "swe": "deepseek-v4-flash" },
       "executor_rotation_by_domain": { "swe": ["deepseek-v4-flash", "kimi-k3", "glm-5.3"] },
-      "fast_routing": "nemotron-3-ultra",
+      "fast_routing": "complete",
       "capsule_tokens": 24000,
       "worker_max_tokens": 65536,
       "worker_max_tokens_by_band": { "F2": 8000, "F3": 32000, "max": 65536 },
