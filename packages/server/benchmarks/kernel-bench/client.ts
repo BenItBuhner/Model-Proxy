@@ -131,6 +131,8 @@ export async function chatCall(
         ...(opts.extraBody ?? {}),
       }),
       signal: controller.signal,
+      // Bun aborts a fetch after 300 s without socket activity by default; our own timer is the bound.
+      ...({ timeout: false } as Record<string, unknown>),
     });
     if (opts.stream === true && res.ok && (res.headers.get("content-type") ?? "").includes("text/event-stream")) {
       const assembled = await assembleSse(res, controller);
