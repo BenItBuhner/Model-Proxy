@@ -134,17 +134,29 @@ async function helper(command: "spec" | "grade", instancePath: string, logPath?:
 
 interface Workspace { dir: string; venv: string; python: string; env: Record<string, string>; spec: Spec; instancePath: string }
 
+/** One bare clone/fetch per repo at a time: concurrent instances of the same repo share it. */
+const repoLocks = new Map<string, Promise<void>>();
+async function ensureBareRepo(repo: string, bare: string, log: (s: string) => void): Promise<void> {
+  const pending = repoLocks.get(bare) ?? Promise.resolve();
+  const next = pending.then(async () => {
+    if (!existsSync(join(bare, "HEAD"))) {
+      rmSync(bare, { recursive: true, force: true });
+      log(`cloning ${repo}`);
+      const r = await sh(`git clone --bare --quiet https://github.com/${repo}.git ${bare}`, { cwd: ROOT, timeoutMs: 15 * 60_000 });
+      if (r.code !== 0) throw new Error(`clone failed: ${r.out.slice(-500)}`);
+    } else {
+      await sh(`git --git-dir=${bare} fetch --quiet origin '+refs/heads/*:refs/heads/*' || true`, { cwd: ROOT, timeoutMs: 10 * 60_000 });
+    }
+  });
+  repoLocks.set(bare, next.catch(() => undefined));
+  await next;
+}
+
 async function prepareWorkspace(inst: Instance, modelSlug: string, log: (s: string) => void): Promise<Workspace> {
   const repoSlug = inst.repo.replace("/", "__");
   const bare = join(ROOT, "repos", `${repoSlug}.git`);
   mkdirSync(join(ROOT, "repos"), { recursive: true });
-  if (!existsSync(bare)) {
-    log(`cloning ${inst.repo}`);
-    const r = await sh(`git clone --bare --quiet https://github.com/${inst.repo}.git ${bare}`, { cwd: ROOT, timeoutMs: 15 * 60_000 });
-    if (r.code !== 0) throw new Error(`clone failed: ${r.out.slice(-500)}`);
-  } else {
-    await sh(`git --git-dir=${bare} fetch --quiet origin '+refs/heads/*:refs/heads/*' || true`, { cwd: ROOT, timeoutMs: 10 * 60_000 });
-  }
+  await ensureBareRepo(inst.repo, bare, log);
   const dir = join(ROOT, "work", inst.instance_id, modelSlug);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
