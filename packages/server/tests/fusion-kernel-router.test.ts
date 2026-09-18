@@ -91,6 +91,7 @@ const kernelConfig: FusionConfig = {
     examples_program_effort: "mixed",
     reasoning_effort_cap_by_routing: {},
     reasoning_effort_by_routing: {},
+    reasoning_effort_substitutions_by_routing: {},
     worker_fast_failure_retries: 0,
     worker_fast_failure_backoff_seconds: 1,
     proposal_width: { F2: 3, F3: 3, max: 6 },
@@ -1717,6 +1718,22 @@ describe("Fusion kernel engine", () => {
     await router.route(ctx2);
     for (const p of captured2.proposer.filter((p) => String(p["model"]) === "up-kimi")) expect(p["reasoning_effort"]).toBe("high");
     for (const p of captured2.proposer.filter((p) => String(p["model"]) === "up-glm")) expect(p["reasoning_effort"]).toBe("low");
+    // Substitutions rewrite one level for one routing (mixed example-grounded max slots: kimi's medium becomes low, deepseek's stays medium).
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-caps3-${Date.now()}`));
+    router = new FusionRouter();
+    const captured3 = emptyCaptured();
+    installFetch(captured3, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[4,3],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,6],[7,8]]\nOutput (2x2):\n[[8,7],[6,5]]\n\nTest input (2x2):\n[[2,3],[4,5]]";
+    const families = kernelConfig.kernel!.families.map((f) => ({ ...f, weight: f.name === "kimi" ? 4 : f.name === "deepseek" ? 4 : 1, alt_routings: [] }));
+    const ctx3 = makeCtx([{ role: "user", content: task }], `conv-caps3-${Date.now()}`);
+    ctx3.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, families, control_proposer: false, execution_verification: true, execution_repair_rounds: 0, examples_program_effort: "mixed", proposal_width: { F2: 6, F3: 6, max: 6 }, reasoning_effort_substitutions_by_routing: { "kimi-k3": { medium: "low" } } } };
+    (ctx3.requestData as Record<string, unknown>)["fusion"] = { effort: "max" };
+    delete (ctx3.requestData as Record<string, unknown>)["tools"];
+    await router.route(ctx3);
+    const kimiEfforts = new Set(captured3.proposer.filter((p) => String(p["model"]) === "up-kimi").map((p) => p["reasoning_effort"]));
+    expect(kimiEfforts.has("medium")).toBe(false);
+    expect(kimiEfforts.has("low") || kimiEfforts.has("high")).toBe(true);
   });
 
   it("re-dispatches a proposer whose upstream stream dies mid-generation and verifies the fresh attempt's program", async () => {

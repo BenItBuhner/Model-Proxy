@@ -853,6 +853,8 @@ export class FusionKernel {
   private capEffort(run: KernelRun, routing: string | undefined, effort: "low" | "medium" | "high" | undefined): "low" | "medium" | "high" | undefined {
     const override = routing !== undefined ? run.kcfg.reasoning_effort_by_routing[routing] : undefined;
     if (override !== undefined) return override;
+    const substitutions = routing !== undefined ? run.kcfg.reasoning_effort_substitutions_by_routing[routing] : undefined;
+    if (substitutions !== undefined && effort !== undefined && substitutions[effort] !== undefined) effort = substitutions[effort];
     const cap = routing !== undefined ? run.kcfg.reasoning_effort_cap_by_routing[routing] : undefined;
     if (cap === undefined) return effort;
     const rank = { low: 0, medium: 1, high: 2 } as const;

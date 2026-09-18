@@ -245,6 +245,8 @@ export const FusionKernelConfigSchema = z
      * token (often past the proxy's admission timeout), "high" waits ~60 s.
      */
     reasoning_effort_by_routing: z.record(z.string(), z.enum(["low", "medium", "high"])).default({}),
+    /** Per-routing effort substitutions ({ routing: { from: to } }): keeps a slot policy's diversity while avoiding a level a route penalizes. */
+    reasoning_effort_substitutions_by_routing: z.record(z.string(), z.record(z.enum(["low", "medium", "high"]), z.enum(["low", "medium", "high"]))).default({}),
     /** Start verifying each candidate as soon as it lands instead of after the whole proposal wave settles. */
     pipeline_verification: z.boolean().default(true),
     /**

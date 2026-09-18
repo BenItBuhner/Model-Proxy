@@ -465,6 +465,7 @@ describe("kernel scheduler", () => {
     examples_program_effort: "mixed",
     reasoning_effort_cap_by_routing: {},
     reasoning_effort_by_routing: {},
+    reasoning_effort_substitutions_by_routing: {},
     worker_fast_failure_retries: 0,
     worker_fast_failure_backoff_seconds: 1,
     proposal_width: { F2: 3, F3: 6, max: 9 },
