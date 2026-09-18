@@ -2,48 +2,48 @@ arcagi2 on the NIM-backed proxy (2026-09-16): ✓ correct, ✗ wrong, ! failed/t
 
 item                          deepseek-v4-flash       glm-5.3                 kimi-k3                 nemotron-3-ultra        
 136b0064                      -                       -                       ✓  829s                 !  140s                 
-13e47133                      -                       -                       ✗  960s                 ✗ 3020s                 
-142ca369                      -                       -                       ✓ 1688s                 ✗ 1908s                 
-195c6913                      -                       -                       ✗  838s                 !  270s                 
+13e47133                      ✗  564s                 -                       ✗  960s                 ✗ 3020s                 
+142ca369                      ✓  208s                 -                       ✓ 1688s                 ✗ 1908s                 
+195c6913                      ✗  294s                 -                       ✗  838s                 !  270s                 
 20270e3b                      ✓ 3469s                 ! 3606s                 ✓  806s                 ✗  574s                 
-20a9e565                      -                       -                       ✗ 1751s                 ! 1598s                 
-247ef758                      -                       -                       !   30s                 ✗ 1400s                 
-271d71e2                      ✗  688s                 -                       ✗ 1512s                 ✗ 2569s                 
+20a9e565                      ✓  192s                 -                       ✗ 1751s                 ! 1598s                 
+247ef758                      ✓  163s                 -                       ✓ 1032s                 ✗ 1400s                 
+271d71e2                      ✗  688s                 !   90s                 ✗ 1512s                 ✗ 2569s                 
 28a6681f                      ✗ 3556s                 !    0s                 ✗  739s                 ✗  902s                 
-31f7f899                      -                       -                       ✓  966s                 -                       
-36a08778                      ✓  668s                 -                       ✗ 1109s                 ! 1168s                 
+31f7f899                      -                       -                       ✓  966s                 !  301s                 
+36a08778                      ✓  668s                 !   30s                 ✗ 1109s                 ! 1168s                 
 38007db0                      -                       -                       ✓  730s                 -                       
 409aa875                      ✗ 2671s                 !  574s                 ✗  674s                 ✗  727s                 
 4c416de3                      !  597s                 ! 3606s                 ✗ 1333s                 ✗ 1885s                 
 53fb4810                      ! 1316s                 ✗ 1192s                 ✓  564s                 ✗  692s                 
 58f5dbd5                      -                       -                       ✓  837s                 !  300s                 
 62593bfd                      -                       -                       ✗ 1507s                 !  301s                 
-64efde09                      -                       -                       ✗  781s                 ✗ 2148s                 
-65b59efc                      ✓ 1017s                 ✓ 2786s                 !  427s                 ✗ 2488s                 
-67e490f4                      -                       -                       !  769s                 !  300s                 
+64efde09                      ✗ 1395s                 !  705s                 ✗  781s                 ✗ 2148s                 
+65b59efc                      ✓ 1017s                 ✓ 2786s                 ✓  954s                 ✗ 2488s                 
+67e490f4                      ✓  347s                 -                       ✗  763s                 !  300s                 
 6ffbe589                      -                       -                       ✗  450s                 !  300s                 
-71e489b6                      -                       -                       ✗ 1857s                 !  769s                 
+71e489b6                      ✗  239s                 -                       ✗ 1857s                 !  769s                 
 7491f3cf                      -                       -                       ✓  976s                 -                       
 7b0280bc                      -                       -                       !  769s                 !  300s                 
-7b3084d4                      -                       -                       ✗ 1069s                 ✗ 2181s                 
+7b3084d4                      ✗ 1670s                 ! 2996s                 ✗ 1069s                 ✗ 2181s                 
 7b5033c1                      ✗  465s                 !  769s                 ✓  381s                 ✗  242s                 
 7ed72f31                      ✓ 1078s                 ✗ 2798s                 ✓  437s                 ✓  662s                 
-80a900e0                      -                       -                       ✗ 1629s                 !  769s                 
+80a900e0                      ✗ 1630s                 -                       ✗ 1629s                 !  769s                 
 89565ca0                      -                       -                       ✗ 1707s                 -                       
 898e7135                      !  597s                 !  602s                 ✗  625s                 ✗  876s                 
 a47bf94d                      -                       -                       ✓ 1604s                 -                       
 aa4ec2a5                      -                       -                       ✗ 1201s                 -                       
 b10624e5                      !  769s                 !  768s                 ✗ 1716s                 ✗ 1510s                 
-b5ca7ac4                      -                       -                       ✓ 1224s                 -                       
-b99e7126                      -                       -                       ✓  718s                 !   97s                 
-b9e38dc0                      -                       -                       ✗  587s                 -                       
+b5ca7ac4                      -                       -                       ✓ 1224s                 !  300s                 
+b99e7126                      ✗  543s                 -                       ✓  718s                 !   97s                 
+b9e38dc0                      -                       -                       ✗  587s                 !  301s                 
 d8e07eb2                      ✓ 3089s                 ✗ 2776s                 ✓  804s                 ✗ 1893s                 
-db0c5428                      -                       -                       ✓ 1329s                 !  578s                 
-db695cfb                      -                       -                       ✓ 1045s                 ✗ 1640s                 
+db0c5428                      ✓ 3173s                 -                       ✓ 1329s                 !  578s                 
+db695cfb                      ✓  100s                 -                       ✓ 1045s                 ✗ 1640s                 
 eee78d87                      !  769s                 !  768s                 ✗ 1846s                 ✗ 2625s                 
 
-deepseek-v4-flash@nim: 5/14 correct (5 failed calls), p50 1017 s
-glm-5.3@nim: 1/12 correct (8 failed calls), p50 1192 s
-kimi-k3@nim: 16/40 correct (4 failed calls), p50 960 s
-nemotron-3-ultra@nim: 1/32 correct (13 failed calls), p50 876 s
-union of members: 18/40
+deepseek-v4-flash@nim: 11/27 correct (5 failed calls), p50 688 s
+glm-5.3@nim: 1/16 correct (12 failed calls), p50 769 s
+kimi-k3@nim: 18/40 correct (1 failed calls), p50 966 s
+nemotron-3-ultra@nim: 1/35 correct (16 failed calls), p50 769 s
+union of members: 21/40

@@ -31,19 +31,25 @@ object_properties-117         ✓  631s                 ! 1800s                 
 object_properties-149         ✓  483s                 ✓  380s                 ✓  304s                 ✓  720s                 
 sarc_triples-11               ✓  148s                 ✓   49s                 ✓  132s                 ✓   23s                 
 sarc_triples-146              ✓   74s                 ✓   36s                 ✓   94s                 ✓   74s                 
-shuffled_objects-164          ✓  214s                 -                       ✓  918s                 ✗  674s                 
-shuffled_objects-98           ✓  990s                 -                       ✗  450s                 ✗  943s                 
-spatial_reasoning-120         ✓  226s                 -                       ✓  454s                 ✓  510s                 
-spatial_reasoning-32          ✓   54s                 -                       ✓  400s                 ✗  851s                 
-sportqa-130                   ✓   13s                 -                       ✓  182s                 ✓  182s                 
-sportqa-25                    ✗  207s                 -                       -                       ✗  664s                 
-temporal_sequence-193         -                       -                       -                       !  300s                 
-temporal_sequence-47          ✗ 1109s                 -                       -                       !  301s                 
-time_arithmetic-145           -                       -                       -                       !  301s                 
-time_arithmetic-37            -                       -                       -                       !  300s                 
+shuffled_objects-164          ✓  214s                 ! 1800s                 ✓  918s                 ✗  674s                 
+shuffled_objects-98           ✓  990s                 ! 1800s                 ✗  450s                 ✗  943s                 
+spatial_reasoning-120         ✓  226s                 ! 1800s                 ✓  454s                 ✓  510s                 
+spatial_reasoning-32          ✓   54s                 ! 1800s                 ✓  400s                 ✗  851s                 
+sportqa-130                   ✓   13s                 ✓  116s                 ✓  182s                 ✓  182s                 
+sportqa-25                    ✗  207s                 ✗  155s                 ✗  219s                 ✗  664s                 
+temporal_sequence-193         ! 1800s                 ! 1800s                 ✓  913s                 !  300s                 
+temporal_sequence-47          ✗ 1109s                 ! 1800s                 ✓  632s                 !  301s                 
+time_arithmetic-145           ✓  369s                 ✓  101s                 ✓  172s                 !  301s                 
+time_arithmetic-37            ✓  132s                 ✓   53s                 ✓  152s                 !  300s                 
+web_of_lies-149               ✓  517s                 ! 1800s                 ✓  467s                 !  300s                 
+web_of_lies-75                ✓  584s                 ! 1800s                 ✓  326s                 !  301s                 
+word_sorting-126              ✗  195s                 ✗   77s                 ✗  140s                 !  301s                 
+word_sorting-145              ✗  900s                 ✗   66s                 ✗  193s                 !  300s                 
+zebra_puzzles-165             ✓  144s                 -                       ✓  329s                 !  301s                 
+zebra_puzzles-6               ✓  761s                 -                       ✓  531s                 !  300s                 
 
-deepseek-v4-flash@nim: 27/37 correct (6 failed calls), p50 631 s
-glm-5.3@nim: 10/30 correct (14 failed calls), p50 731 s
-kimi-k3@nim: 27/35 correct (2 failed calls), p50 400 s
-nemotron-3-ultra@nim: 16/40 correct (6 failed calls), p50 510 s
-union of members: 32/40
+deepseek-v4-flash@nim: 33/46 correct (7 failed calls), p50 584 s
+glm-5.3@nim: 13/44 correct (22 failed calls), p50 768 s
+kimi-k3@nim: 35/46 correct (2 failed calls), p50 329 s
+nemotron-3-ultra@nim: 16/46 correct (12 failed calls), p50 437 s
+union of members: 40/46

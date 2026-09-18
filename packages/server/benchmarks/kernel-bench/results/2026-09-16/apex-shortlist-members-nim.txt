@@ -1,13 +1,24 @@
 apex-shortlist on the NIM-backed proxy (2026-09-16): ✓ correct, ✗ wrong, ! failed/timed out (strict: counts as wrong); latency in seconds. One run per cell.
 
 item                          deepseek-v4-flash       kimi-k3                 
+14                            ✓  170s                 ✓  992s                 
 16                            ✓ 2747s                 ✓ 1581s                 
+17                            ✗ 2134s                 -                       
+19                            ✓  401s                 ✓ 3191s                 
 20                            ✓ 2475s                 ✗  218s                 
-32                            -                       ✓  894s                 
+23                            ✗  135s                 -                       
+25                            -                       ✓ 1018s                 
+32                            ✗ 2941s                 ✓  894s                 
 33                            ✓  235s                 ✓  574s                 
+34                            ✗  286s                 ✓ 2880s                 
+37                            ✗ 2105s                 ✗  870s                 
+38                            ✓  157s                 ✓  279s                 
 4                             ✓  595s                 ✓ 1803s                 
 40                            ✓  424s                 ✓  481s                 
+42                            ✓ 1081s                 ✓ 2454s                 
+5                             ✓  179s                 ✓  619s                 
+6                             ✗  462s                 ✓ 1207s                 
 
-deepseek-v4-flash@nim: 5/5 correct (0 failed calls), p50 595 s
-kimi-k3@nim: 5/6 correct (0 failed calls), p50 894 s
-union of members: 6/6
+deepseek-v4-flash@nim: 10/16 correct (0 failed calls), p50 462 s
+kimi-k3@nim: 13/15 correct (0 failed calls), p50 992 s
+union of members: 14/17
