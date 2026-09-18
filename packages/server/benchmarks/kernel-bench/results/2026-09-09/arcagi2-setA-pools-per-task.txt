@@ -1,0 +1,41 @@
+ARC-AGI-2 public eval, max effort, single run per cell. ✓/✗ with latency; - not run.
+
+Pools: v47 = trio (glm-5.3, kimi-k3, deepseek-v4-pro-0813), width 6 / 1200s workers / 2400s search (2026-09-06, fast upstream).
+       lean v66 = trio + mimo-v2.5-pro(examples) + gemini-3.8-flash(examples) + fast alternates, width 6 / 1800s workers / 3000s search (2026-09-08/09).
+       template v69 = shipped template: trio + mimo-v2.5-pro(examples) + fast alternates (deepseek-v4-flash-0731, glm-5.2, kimi-k2.7-code), width 6 / 1200s / 2400s (2026-09-09, slower upstream).
+
+task               v47          lean v66     template v69
+7ed72f31           ✓  180s      ✓  211s      ✓  255s
+53fb4810           ✓  431s      ✓  394s      ✗  510s
+20270e3b           ✓  676s      ✓  664s      ✓  294s
+28a6681f           ✓ 2400s      ✗ 2367s      ✗ 2400s
+898e7135           ✓ 2400s      ✗ 2384s      ✗ 2400s
+409aa875           ✓  919s      ✓  856s      ✓ 2049s
+4c416de3           ✗ 2400s      ✗ 3214s      ✗ 2400s
+b10624e5           ✓ 2129s      ✓ 1410s      ✓ 1547s
+7b5033c1           ✗  162s      ✗  101s      ✗  320s
+eee78d87           ✓  486s      ✓  477s      ✓  782s
+d8e07eb2           ✓  975s      ✓  393s      ✓ 1021s
+7b3084d4           ✗ 3000s      ✗ 2370s      ✓ 1200s
+64efde09           ✗ 3000s      ✓ 3487s      ✗ 2125s
+65b59efc           ✓  512s      ✓  246s      ✓  692s
+36a08778           ✓  831s      ✓  189s      ✓ 1556s
+271d71e2           ✓ 2400s      ✓ 2297s      ✗ 2306s
+db0c5428           ✓  624s      ✓ 1107s      ✓  645s
+20a9e565           ✗ 3000s      ✗ 2532s      ✗ 3000s
+db695cfb           ✓  900s      ✓  147s      ✓  862s
+80a900e0           ✓  622s      ✗ 3000s      ✓  838s
+b99e7126           ✓  590s      ✓  212s      -   
+71e489b6           ✗  782s      ✗ 2865s      -   
+142ca369           ✓ 2882s      ✓ 3000s      -   
+247ef758           ✓  843s      ✓  358s      -   
+13e47133           ✓ 2009s      ✗ 2834s      -   
+195c6913           ✓  918s      ✗ 2314s      -   
+67e490f4           ✓  492s      ✗ 2387s      -   
+
+set A (20 tasks): v47 15/20 · lean v66 13/20 · template v69 12/20
+set B partial (7 tasks, lean run stopped): v47 6/7 · lean v66 3/7
+
+Never-before fusion solves today: 7b3084d4 (template v69; alternates kimi-k2.7-code / deepseek-v4-flash-0731 are the only single models that solve it), 64efde09 (lean v66).
+Budget-edge tasks lost today on the slower upstream (v47 solved them at 2000–2400s with 5–8 dead workers): 28a6681f, 898e7135 (both pools); 13e47133, 195c6913, 67e490f4 (lean, set B).
+Max-band in-place extension probe (max_band_extension_seconds=1200, v70/v71): 28a6681f ✗ (3300s / 4200s, no grid), 898e7135 ✗ (2700s; old fixed watchdog aborted the discrimination judges — fixed in v71) — the extension did not rescue either; kept opt-in (default 0).

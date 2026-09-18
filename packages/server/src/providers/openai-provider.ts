@@ -158,7 +158,7 @@ export class OpenAIProvider extends AbstractProvider {
         );
       }
       let eventLines: string[] = [];
-      for await (const line of readSSELines(response.body)) {
+      for await (const line of readSSELines(response.body, sseInactivityTimeoutMs(ctx.timeoutSeconds))) {
         if (line.length === 0) {
           if (eventLines.length > 0) {
             yield `${eventLines.join("\n")}\n\n`;
@@ -303,7 +303,7 @@ export class OpenAIProvider extends AbstractProvider {
         yield `data: ${JSON.stringify(withDeltaContent(lastContentChunk, rest))}\n\n`;
       }
     };
-    for await (const line of readSSELines(response.body)) {
+    for await (const line of readSSELines(response.body, sseInactivityTimeoutMs(ctx.timeoutSeconds))) {
       const trimmed = line.trim();
       if (trimmed === "" || trimmed === "data:") continue;
       if (trimmed === "data: [DONE]") {
@@ -558,6 +558,17 @@ async function* synthesizeSingleChunkStream(
  * otherwise hang its consumer forever.
  */
 const SSE_INACTIVITY_TIMEOUT_MS = 120_000;
+const SSE_INACTIVITY_TIMEOUT_CAP_MS = 20 * 60_000;
+
+/**
+ * Inactivity bound for a route: never below the 120s floor, and up to the
+ * route's own timeout (capped at 20 min). Thinking models behind proxies that
+ * do not stream reasoning can legitimately stay silent for minutes, and an
+ * operator who configured a long route timeout has said so explicitly.
+ */
+export function sseInactivityTimeoutMs(routeTimeoutSeconds: number): number {
+  return Math.max(SSE_INACTIVITY_TIMEOUT_MS, Math.min(SSE_INACTIVITY_TIMEOUT_CAP_MS, Math.round(routeTimeoutSeconds * 1000)));
+}
 
 async function* readSSELines(
   stream: ReadableStream<Uint8Array>,

@@ -1,0 +1,56 @@
+kernel-bench report — 457 graded rows, 91 items attempted by all 4 models (2026-09-04T06:00:52.027Z)
+
+suite                     deepseek-v4-pro-0813           glm-5.3           kimi-k3        fusion-max
+----------------------------------------------------------------------------------------------------
+aime24                            100%  8/8         100%  8/8          75%  6/8         100%  8/8 
+aime25                            100%  8/8         100%  7/7         100%  7/7         100%  8/8 
+aime26                            100%  8/8         100%  8/8         100%  8/8         100%  8/8 
+hmmt26                             67%  4/6         100%  4/4         100%  5/5         100%  5/5 
+humaneval                         100%  3/3         100%  3/3         100%  3/3         100%  3/3 
+legalbench-contract_qa            100%  3/3         100%  3/3         100%  3/3         100%  3/3 
+legalbench-hearsay                100%  3/3         100%  3/3         100%  3/3         100%  3/3 
+math500                            88%  7/8         100%  8/8          88%  7/8         100%  8/8 
+mmlu-biology                      100%  3/3         100%  3/3         100%  3/3         100%  3/3 
+mmlu-business                     100%  3/3         100%  3/3         100%  3/3         100%  3/3 
+mmlu-chemistry                    100%  6/6         100%  6/6          83%  5/6         100%  6/6 
+mmlu-computer_science             100%  3/3         100%  3/3         100%  3/3         100%  3/3 
+mmlu-economics                    100%  2/2         100%  2/2         100%  2/2         100%  2/2 
+mmlu-law                          100%  3/3         100%  3/3         100%  3/3         100%  3/3 
+mmlu-physics                       67%  4/6          83%  5/6          80%  4/5          83%  5/6 
+supergpqa-biology                  67%  4/6          67%  4/6          50%  3/6          67%  4/6 
+supergpqa-chemistry               100%  6/6          83%  5/6          83%  5/6         100%  6/6 
+supergpqa-physics                  83%  5/6          83%  5/6         100%  6/6         100%  6/6 
+
+domain                    deepseek-v4-pro-0813           glm-5.3           kimi-k3        fusion-max
+----------------------------------------------------------------------------------------------------
+finance                           100%  5/5         100%  5/5         100%  5/5         100%  5/5 
+legal                             100%  9/9         100%  9/9         100%  9/9         100%  9/9 
+math                               92% 35/38        100% 35/35         92% 33/36        100% 37/37
+science                            85% 28/33         85% 28/33         81% 26/32         91% 30/33
+swe                               100%  6/6         100%  6/6         100%  6/6         100%  6/6 
+ALL                                91% 83/91         94% 83/88         90% 79/88         97% 87/90
+
+strict (fail = wrong)     deepseek-v4-pro-0813           glm-5.3           kimi-k3        fusion-max
+----------------------------------------------------------------------------------------------------
+finance                           100%  5/5         100%  5/5         100%  5/5         100%  5/5 
+legal                             100%  9/9         100%  9/9         100%  9/9         100%  9/9 
+math                               92% 35/38         92% 35/38         87% 33/38         97% 37/38
+science                            85% 28/33         85% 28/33         79% 26/33         91% 30/33
+swe                               100%  6/6         100%  6/6         100%  6/6         100%  6/6 
+ALL                                91% 83/91         91% 83/91         87% 79/91         96% 87/91
+
+latency p50 / p90 (s)               18 / 175          37 / 456          42 / 412         137 / 890
+failed calls                               0                 3                 3                 1
+
+fusion vs best single base model (same items):
+  finance      fusion 100%  best base deepseek-v4-pro-0813   100%  Δ    0 pts
+  legal        fusion 100%  best base deepseek-v4-pro-0813   100%  Δ    0 pts
+  math         fusion 100%  best base glm-5.3                100%  Δ    0 pts
+  science      fusion  91%  best base deepseek-v4-pro-0813    85%  Δ    6 pts
+  swe          fusion 100%  best base deepseek-v4-pro-0813   100%  Δ    0 pts
+  ALL          fusion  97%  best base glm-5.3                 94%  Δ    2 pts
+
+fusion misses (3):
+  mmlu-physics:9071                  pred=C                    exp=D                    deepseek=✗ glm=✗ kimi=✗  agr=0.8
+  supergpqa-biology:2a9dd54b4711     pred=H                    exp=J                    deepseek=✗ glm=✗ kimi=✗  agr=0.8
+  supergpqa-biology:81072bae4f17     pred=J                    exp=F                    deepseek=✗ glm=✗ kimi=✗  agr=0.8

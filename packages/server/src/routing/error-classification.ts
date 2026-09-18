@@ -40,7 +40,8 @@ export function isAbortLikeError(error: unknown): boolean {
   ) {
     return true;
   }
-  return /operation was aborted|request was aborted|aborterror/i.test(error.message);
+  if (error.name === "TimeoutError") return true;
+  return /operation was aborted|request was aborted|aborterror|operation timed out/i.test(error.message);
 }
 
 export function isProviderTimeout(err: unknown): boolean {

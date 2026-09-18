@@ -87,6 +87,10 @@ export function resolveFusionIdentity(input: FusionIdentityInput): FusionIdentit
       principalId: input.principalId ?? "anonymous",
       logicalModel: input.logicalModel,
       firstSystemPrompt: extractSystemPrompt(input.messages),
+      // The opening user message distinguishes conversations from clients that
+      // send no session header and a fixed system prompt (agent harnesses,
+      // SDKs): without it every task would share one kernel ledger.
+      firstUserMessage: extractFirstUserText(input.messages),
     });
   const turnSeed = headers["x-opencode-request"] ?? input.requestId;
   const inputFingerprint = stableHash({
@@ -279,6 +283,25 @@ export function recordFusionUpstreamAttempt(input: FusionUpstreamAttemptRecord):
     $metadata_json: stringifyMetadata(input.metadata),
   });
   return id;
+}
+
+/** Text of the first user message (bounded), for conversation identity. */
+function extractFirstUserText(messages: unknown[]): string | undefined {
+  for (const message of messages) {
+    if (typeof message !== "object" || message === null || Array.isArray(message)) continue;
+    const obj = message as Record<string, unknown>;
+    if (obj["role"] !== "user") continue;
+    const content = obj["content"];
+    if (typeof content === "string") return content.slice(0, 4_000);
+    if (Array.isArray(content)) {
+      const text = content
+        .map((part) => (typeof part === "object" && part !== null && typeof (part as Record<string, unknown>)["text"] === "string" ? String((part as Record<string, unknown>)["text"]) : ""))
+        .join("\n");
+      return text.slice(0, 4_000);
+    }
+    return undefined;
+  }
+  return undefined;
 }
 
 function extractSystemPrompt(messages: unknown[]): unknown {

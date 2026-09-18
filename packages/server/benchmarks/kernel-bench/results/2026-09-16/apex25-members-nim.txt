@@ -1,0 +1,21 @@
+apex25 on the NIM-backed proxy (2026-09-16): ✓ correct, ✗ wrong, ! failed/timed out (strict: counts as wrong); latency in seconds. One run per cell.
+
+item                          deepseek-v4-flash       glm-5.3                 kimi-k3                 nemotron-3-ultra        
+1                             ! 3642s                 ! 2687s                 ✗ 3030s                 ✗  770s                 
+10                            -                       -                       ✗ 2749s                 !  769s                 
+11                            !  769s                 !  768s                 ✓ 1957s                 ✗  698s                 
+12                            ! 1061s                 -                       !  769s                 ✗ 3306s                 
+2                             !  769s                 ! 3606s                 ✗  269s                 ✗ 3526s                 
+3                             ✗ 1093s                 ! 1307s                 ✓ 1722s                 ✗ 3102s                 
+4                             !  569s                 !   30s                 ✗ 2620s                 ✗  919s                 
+5                             ! 3197s                 ! 3606s                 ✓ 2241s                 ✗ 1212s                 
+6                             ✓ 2842s                 -                       ✓  660s                 ✗  342s                 
+7                             ✓ 1186s                 ! 2262s                 ✗  191s                 ✗ 3290s                 
+8                             ✓ 3034s                 -                       ✓ 1328s                 ✗ 3398s                 
+9                             ✗  114s                 ✗  192s                 ✗  170s                 ✗   85s                 
+
+deepseek-v4-flash@nim: 3/11 correct (6 failed calls), p50 1093 s
+glm-5.3@nim: 0/8 correct (7 failed calls), p50 2262 s
+kimi-k3@nim: 5/12 correct (1 failed calls), p50 1722 s
+nemotron-3-ultra@nim: 0/12 correct (1 failed calls), p50 1212 s
+union of members: 6/12

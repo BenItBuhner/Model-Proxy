@@ -37,6 +37,7 @@ const testFusionConfig: FusionConfig = {
   cache: { enabled: true, scope: "permanent" },
   summarizer: { enabled: false, model_routing: "turbo", segment_chars: 1400, max_summary_tokens: 256 },
   scheduler: { allow_nested_fusion: false, max_depth: 0, max_leaf_calls: 8, max_wall_ms: 120_000 },
+  engine: "legacy",
 };
 
 describe("FusionRouter", () => {

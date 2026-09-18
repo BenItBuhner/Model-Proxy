@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import {
   derivePipelineState,
+  isKernelPipeline,
+  normalizeStepType,
+  PHASE_LABEL,
   stateFromTrace,
   type FusionTraceLike,
 } from "../components/observability/fusion-pipeline-state.ts";
@@ -355,5 +358,55 @@ describe("fusion pipeline state derivation", () => {
     expect(state.phases[0]?.detail?.["hit"]).toBe(true);
     expect(state.phases[0]?.detail?.["reason"]).toBe("assistant-only continuation");
     expect(state.caches[0]?.hit).toBe(true);
+  });
+
+  it("derives kernel phases, worker roles, and work/ledger cache kinds from live events", () => {
+    const events: RequestEvent[] = [
+      { type: "fusion.pipeline.started", at: "2026-09-03T00:00:00.000Z", effort: 2, fusionEffort: "F2", complexityScore: 0.33, complexityReason: "code", logicalModel: "fusion-max", stream: true },
+      { type: "fusion.cache", at: "2026-09-03T00:00:00.001Z", kind: "ledger", hit: true, detail: "ledger resumed" },
+      { type: "fusion.phase", at: "2026-09-03T00:00:00.002Z", phase: "turn_classification", status: "completed", durationMs: 1, detail: { kind: "tool_continuation", reason: "only tool calls/results appended", mode: "continue", band: "F2" } },
+      { type: "fusion.phase", at: "2026-09-03T00:00:00.003Z", phase: "continuation", status: "started", modelRouting: "glm-5.3", detail: { step: 3 } },
+      { type: "fusion.subagent", at: "2026-09-03T00:00:00.004Z", id: "repair-w1-1", focus: "repair · glm", model: "glm-5.3", status: "completed", role: "repair", chars: 900, durationMs: 4000 },
+      { type: "fusion.cache", at: "2026-09-03T00:00:00.005Z", kind: "work", hit: true, detail: "repair-w1-1 glm-5.3 abcdef" },
+      { type: "fusion.phase", at: "2026-09-03T00:00:00.006Z", phase: "continuation", status: "completed", durationMs: 4200, modelRouting: "glm-5.3", detail: { step: 3, repair: { attempts: 1, exhausted: false } } },
+    ];
+    const state = derivePipelineState(events);
+    expect(isKernelPipeline(state)).toBe(true);
+    expect(state.phases.map((p) => p.key)).toEqual(["turn_classification", "continuation"]);
+    expect(state.phases[1]?.status).toBe("completed");
+    expect(state.phases[1]?.detail?.["step"]).toBe(3);
+    expect(state.subagents[0]?.role).toBe("repair");
+    expect(state.caches.map((c) => c.kind)).toEqual(["ledger", "work"]);
+    expect(PHASE_LABEL.escalation).toBe("consensus");
+    const kernelTypes = ["turn_classification", "intent", "proposal", "verification", "escalation", "continuation", "repair", "checkpoint"] as const;
+    for (const type of kernelTypes) {
+      expect(normalizeStepType(type)).toBe(type);
+    }
+  });
+
+  it("reconstructs kernel traces and exposes the kernel summary for historical views", () => {
+    const trace: FusionTraceLike = {
+      effort: 2,
+      fusionEffort: "F2",
+      complexityScore: 0.5,
+      complexityReason: "swe task",
+      subTaskCount: 4,
+      cacheHit: false,
+      totalTokens: 16_000,
+      fusedByModelRouting: "glm-5.3",
+      steps: [
+        { type: "turn_classification", label: "Turn Classification", durationMs: 1, details: { kind: "fresh_task", mode: "search" } },
+        { type: "proposal", label: "Proposal Wave 1", durationMs: 90_000, details: { total: 3, succeeded: 3 } },
+        { type: "verification", label: "Verification Wave 1", durationMs: 60_000, details: { total: 3, accept: 3 } },
+        { type: "escalation", label: "Search Settled (wave 1)", durationMs: 0, details: { agreement: 0.87 } },
+        { type: "synthesis", label: "Response Synthesis", durationMs: 30_000, modelRouting: "glm-5.3" },
+      ],
+      kernel: { engine: "kernel", turn: "fresh_task", mode: "search", band: "F2", waves: 1, agreement: 0.87, workItems: 7, cachedWorkItems: 0 },
+    };
+    const state = stateFromTrace(trace);
+    expect(isKernelPipeline(state)).toBe(true);
+    expect(state.phases.map((p) => p.key)).toEqual(["turn_classification", "proposal", "verification", "escalation", "synthesis"]);
+    expect(state.completed?.trace?.kernel?.agreement).toBe(0.87);
+    expect(state.completed?.trace?.kernel?.workItems).toBe(7);
   });
 });
