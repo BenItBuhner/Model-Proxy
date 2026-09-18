@@ -72,6 +72,8 @@ export interface WorkerRequest {
   onSegment?: (segment: SummarySegment) => void;
   signal?: AbortSignal;
   semaphore?: Semaphore;
+  /** Process-wide cap for this routing (all runs share it): queue locally instead of tripping the upstream's per-model limit. */
+  routingSemaphore?: Semaphore;
   /** Emit start/progress/completed subagent events for the admin UI. */
   emitEvents?: boolean;
 }
@@ -108,7 +110,9 @@ export async function runWorker(
   req: WorkerRequest,
 ): Promise<WorkerResult> {
   const started = performance.now();
-  const release = req.semaphore !== undefined ? await req.semaphore.acquire() : () => undefined;
+  const releaseRun = req.semaphore !== undefined ? await req.semaphore.acquire() : () => undefined;
+  const releaseRouting = req.routingSemaphore !== undefined ? await req.routingSemaphore.acquire() : () => undefined;
+  const release = () => { releaseRouting(); releaseRun(); };
   const emitEvents = req.emitEvents !== false;
   const label = `${req.id} · ${req.focus}`;
 
@@ -398,4 +402,13 @@ export async function runWorker(
     for (const source of sources) source.removeEventListener("abort", onAbort);
     release();
   }
+}
+
+/** Process-wide per-routing semaphores (upstream per-model concurrency limits are global to this proxy, not per run). */
+const routingSemaphores = new Map<string, Semaphore>();
+export function routingSemaphore(routing: string, limit: number): Semaphore {
+  const key = `${routing}|${limit}`;
+  let sem = routingSemaphores.get(key);
+  if (sem === undefined) { sem = new Semaphore(limit); routingSemaphores.set(key, sem); }
+  return sem;
 }

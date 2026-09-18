@@ -84,7 +84,7 @@ import type {
 } from "./types.ts";
 import { buildAnswerVote, buildConsensus, isDecisiveVote, normalizeFinalAnswer, novelClaimCount, parseProposal, parseVerdict } from "./waves.ts";
 import { WorkCache, computeWorkKey, type WorkSpec } from "./work-cache.ts";
-import { type WorkerDeadlineRef, Semaphore, runWorker } from "./worker.ts";
+import { type WorkerDeadlineRef, Semaphore, runWorker, routingSemaphore } from "./worker.ts";
 
 const log = createLogger("routing.fusion.kernel");
 
@@ -873,6 +873,11 @@ export class FusionKernel {
   }
 
   /** Worker hard cap for this band, bounded by the remaining search budget (never below 15s). */
+  private routingSemaphoreFor(kcfg: FusionKernelConfig, routing: string): Semaphore | undefined {
+    const limit = kcfg.worker_max_concurrency_by_routing[routing];
+    return limit === undefined ? undefined : routingSemaphore(routing, limit);
+  }
+
   /** The upstream ended the stream with a network/stream error after generation had started (not a kernel deadline or cancel). */
   private isMidStreamUpstreamFailure(result: { success: boolean; durationMs: number; error?: string; truncated?: boolean }): boolean {
     if (result.success) return false;
@@ -2062,8 +2067,13 @@ export class FusionKernel {
             reasoningEffort: this.capEffort(run, pick.routing, this.proposerReasoningEffort(run, role, isControl ? undefined : i)),
             onSegment: run.narrator.segment,
             semaphore: run.semaphore,
+            routingSemaphore: this.routingSemaphoreFor(kcfg, pick.routing),
             signal,
           });
+          // Stagger the wave's launches: a burst of simultaneous requests on one
+          // model trips the upstream's cooldown and every slot fails at once.
+          if (kcfg.dispatch_stagger_ms > 0 && i > 0) await new Promise((resolve) => setTimeout(resolve, kcfg.dispatch_stagger_ms * i));
+          if (signal?.aborted ?? false) return settle({ id, family: pick.family, routing: pick.routing, wave, answer: "", claims: [], assumptions: [], risks: [], confidence: undefined, raw: "", workKey, cached: false, durationMs: 0, success: false, error: "cancelled before launch" });
           let result = await launch();
           // A worker that dies within a minute without streaming anything hit
           // an upstream router's cooldown answer, not a model failure. Losing a

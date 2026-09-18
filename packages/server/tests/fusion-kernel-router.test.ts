@@ -85,6 +85,8 @@ const kernelConfig: FusionConfig = {
     worker_idle_timeout_seconds: 20,
     worker_first_token_timeout_seconds: 0,
     worker_max_tokens_by_routing: {},
+    worker_max_concurrency_by_routing: {},
+    dispatch_stagger_ms: 0,
     examples_program_effort: "mixed",
     reasoning_effort_cap_by_routing: {},
     worker_fast_failure_retries: 0,
@@ -1653,6 +1655,42 @@ describe("Fusion kernel engine", () => {
     expect(execution["verified"] as number).toBeGreaterThan(0);
     expect(result.content ?? "").toContain("[[3,2,1],[6,5,4]]");
   }, 60_000);
+
+  it("caps concurrent streams per routing process-wide and staggers a wave's launches", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-routing-cap-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    // Disagreeing answers: no early settle, so every slot runs to completion.
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "500", deepseek: "600" } });
+    const baseFetch = globalThis.fetch;
+    let inFlightKimi = 0, peakKimi = 0; const launchTimes: number[] = [];
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      if (system.includes("independent expert reasoners")) launchTimes.push(performance.now());
+      if (String(body["model"]) === "up-kimi" && system.includes("independent expert reasoners")) {
+        inFlightKimi += 1; peakKimi = Math.max(peakKimi, inFlightKimi);
+        const res = await baseFetch(input as string, init);
+        const text = await res.text();
+        // Hold the stream open for 400 ms so concurrency is observable.
+        const stream = new ReadableStream<Uint8Array>({ start(controller) { setTimeout(() => { controller.enqueue(new TextEncoder().encode(text)); controller.close(); inFlightKimi -= 1; }, 400); } });
+        return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+    const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-routing-cap-${Date.now()}`);
+    // Four kimi slots (weight-heavy pool), cap 1 per routing, 50 ms stagger.
+    const families = kernelConfig.kernel!.families.map((f) => (f.name === "kimi" ? { ...f, weight: 10, alt_routings: [] } : f));
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, families, control_proposer: false, adaptive_verification: false, proposal_width: { F2: 6, F3: 6, max: 6 }, worker_max_concurrency_by_routing: { "kimi-k3": 1 }, dispatch_stagger_ms: 50, search_deadline_seconds: { F2: 120, F3: 120, max: 120 } } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    await router.route(ctx);
+    const kimiCalls = captured.proposer.filter((p) => String(p["model"]) === "up-kimi").length;
+    expect(kimiCalls).toBeGreaterThanOrEqual(2);
+    expect(peakKimi).toBe(1);
+    launchTimes.sort((a, b) => a - b);
+    expect(launchTimes[launchTimes.length - 1]! - launchTimes[0]!).toBeGreaterThanOrEqual(50);
+  }, 30_000);
 
   it("runs one control proposer on the verbatim task and lets its dissent block a decisive vote", async () => {
     const mathPrompt = [{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }];
