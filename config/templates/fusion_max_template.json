@@ -26,7 +26,7 @@
       "families": [
         { "name": "kimi", "routing": "kimi-k3", "alt_routings": [], "weight": 3 },
         { "name": "deepseek", "routing": "deepseek-v4-flash", "alt_routings": [], "weight": 2 },
-        { "name": "glm", "routing": "glm-5.3", "alt_routings": ["glm-5.3-flash"], "weight": 1 }
+        { "name": "glm", "routing": "glm-5.3", "alt_routings": ["glm-5.3-flash"], "weight": 1, "not_for": ["examples"] }
       ],
       "synthesis_routing": "glm-5.3",
       "executor_routing_by_domain": { "swe": "deepseek-v4-flash" },
@@ -59,6 +59,7 @@
       "worker_reasoning_effort": { "verifier": "low", "intent": "low", "repair": "medium", "checkpoint": "medium" },
       "worker_timeout_seconds": 300,
       "worker_timeout_seconds_by_band": { "F2": 600, "F3": 1800, "max": 3300 },
+      "examples_program_effort": "medium",
       "worker_max_tokens_by_routing": { "glm-5.3": 24000, "glm-5.3-flash": 24000, "deepseek-v4-flash": 40000, "kimi-k3": 48000 },
       "reasoning_effort_cap_by_routing": { "glm-5.3": "medium", "glm-5.3-flash": "medium" },
       "worker_idle_timeout_seconds": 300,
