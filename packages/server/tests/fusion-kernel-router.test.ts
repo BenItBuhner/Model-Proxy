@@ -674,6 +674,51 @@ describe("Fusion kernel engine", () => {
     expect(reasoning).toContain("reasoner(s) streaming");
   }, 30_000);
 
+  it("settles on a verified program after the grace window even while another family's slots have produced nothing", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-verified-gate-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[2,1],[4,3]]\n\nTraining pair 2\nInput (2x2):\n[[5,0],[0,5]]\nOutput (2x2):\n[[0,5],[5,0]]\n\nTest input (2x3):\n[[1,2,3],[4,5,6]]";
+    const withProgram = (family: string, program: string) =>
+      [`Rule: each row is reversed`, "```python", program, "```", "```json", JSON.stringify({ answer_summary: `${family}: reverse rows`, final_answer: null, key_claims: ["Grid rule", "Applies to test", "Consistent"], assumptions: [], risks: [], confidence: 0.6 }), "```"].join("\n");
+    const program = "def solve(grid):\n    return [list(reversed(r)) for r in grid]";
+    let hung = 0;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        // Every kimi and glm slot hangs (an upstream that queues forever); only deepseek answers.
+        if (model !== "up-deepseek") {
+          hung += 1;
+          const stream = new ReadableStream<Uint8Array>({ start() { /* never emits */ } });
+          return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+        }
+        return streamResponse(model, [withProgram(model, program)]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-verified-gate-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: false, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, worker_timeout_seconds: 60, worker_idle_timeout_seconds: 60, worker_first_token_timeout_seconds: 60, search_deadline_seconds: { F2: 120, F3: 120, max: 120 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "F3" };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const started = performance.now();
+    const result = await router.route(ctx);
+    const elapsed = performance.now() - started;
+    expect(hung).toBeGreaterThan(0);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    expect((trace["execution"] as Record<string, unknown>)["verified"] as number).toBeGreaterThan(0);
+    expect(result.content ?? "").toContain("[[3,2,1],[6,5,4]]");
+    // Settled on the verified program after the 1 s grace, not after the hung slots' 60 s timeout.
+    expect(elapsed).toBeLessThan(30_000);
+  }, 90_000);
+
   it("settles a wave on quorum, cancels the straggler after grace, and keeps its partial output as truncated evidence", async () => {
     const conversationId = `conv-quorum-${Date.now()}`;
     const captured = emptyCaptured();

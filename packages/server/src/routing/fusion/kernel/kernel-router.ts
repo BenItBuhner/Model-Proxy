@@ -798,12 +798,21 @@ export class FusionKernel {
       pending.clear();
     };
 
+    // An execution-verified program is ground-truth evidence, not a family's
+    // opinion: once one has landed, the early-settle rules are consulted even
+    // if the other families have not produced a result yet (their slots may
+    // be re-dispatching behind an upstream cooldown for the rest of the wave).
+    const verifiedLanded = () => settledValues.some((v) => (v as { execution?: { verified?: boolean } } | undefined)?.execution?.verified === true);
+    const mayConsult = () => settledFamilies.size >= familyTarget || verifiedLanded();
     while (pending.size > 0) {
       const racers: Array<Promise<{ index: number; value: T | undefined }>> = [...pending.values()];
       if (graceTimer !== undefined) racers.push(graceTimer);
-      // New evidence (an audit confirming an answer) can make the settled
-      // subset decisive without any new worker result, so wake on it too.
-      if (earlySettle !== undefined && settledFamilies.size >= familyTarget) {
+      // New evidence (an audit confirming an answer, a program verified by a
+      // pipelined hook) can make the settled subset decisive without any new
+      // worker result, so wake on it too — always: the hook that verifies a
+      // program mutates a proposal that landed BEFORE the check finished, and
+      // a wave whose other families are still queued must not miss that wake.
+      if (earlySettle !== undefined) {
         racers.push(waitForEvidence(run).then(() => ({ index: -2 as const, value: undefined })));
       }
       const outcome = await Promise.race(racers);
@@ -818,7 +827,7 @@ export class FusionKernel {
         settledFamilies.add(entries[outcome.index]!.family);
       }
       const quorumReached = settledValues.length >= quorumCount && settledFamilies.size >= familyTarget;
-      if (pending.size > 0 && settledFamilies.size >= familyTarget && earlySettle !== undefined && earlySettle(settledValues, quorumReached)) {
+      if (pending.size > 0 && mayConsult() && earlySettle !== undefined && earlySettle(settledValues, quorumReached)) {
         run.earlySettles += 1;
         await cancelStragglers();
         break;
