@@ -85,6 +85,7 @@ const kernelConfig: FusionConfig = {
     worker_idle_timeout_seconds: 20,
     worker_first_token_timeout_seconds: 0,
     worker_max_tokens_by_routing: {},
+    client_heartbeat_seconds: 0,
     worker_max_concurrency_by_routing: {},
     dispatch_stagger_ms: 0,
     examples_program_effort: "mixed",
@@ -648,6 +649,30 @@ describe("Fusion kernel engine", () => {
     const ledger = JSON.parse(session.ledger_json) as { lastAnswerSummary?: string };
     expect(ledger.lastAnswerSummary).toContain("Final synthesized answer");
   });
+
+  it("emits a client-visible progress line on the reasoning channel while a long wave streams", async () => {
+    const conversationId = `conv-beat-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const baseFetch = globalThis.fetch;
+    // Every proposer holds its stream open for 2.5 s before answering.
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      const res = await baseFetch(input as string, init);
+      if (!system.includes("independent expert reasoners")) return res;
+      const text = await res.text();
+      const stream = new ReadableStream<Uint8Array>({ start(controller) { setTimeout(() => { controller.enqueue(new TextEncoder().encode(text)); controller.close(); }, 2_500); } });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as unknown as typeof fetch;
+    const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], conversationId, { stream: true });
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, control_proposer: false, adaptive_verification: true, client_heartbeat_seconds: 1, search_deadline_seconds: { F2: 120, F3: 120, max: 120 } } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const out = await collectStream(router.stream(ctx));
+    expect(out).toContain("Kernel: still working");
+    const reasoning = [...out.matchAll(/"reasoning_content":"((?:[^"\\]|\\.)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`)).join("");
+    expect(reasoning).toContain("reasoner(s) streaming");
+  }, 30_000);
 
   it("settles a wave on quorum, cancels the straggler after grace, and keeps its partial output as truncated evidence", async () => {
     const conversationId = `conv-quorum-${Date.now()}`;

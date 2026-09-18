@@ -1053,9 +1053,19 @@ export class FusionKernel {
     // Heartbeat: where the run is and how many workers are in flight, so a
     // silent stall is diagnosable from the log. Watchdog: a search that
     // outlives its budget by five minutes aborts every worker and settles.
+    let beats = 0;
+    const beatMs = run.kcfg.client_heartbeat_seconds > 0 ? Math.min(60_000, run.kcfg.client_heartbeat_seconds * 1000) : 60_000;
+    const clientBeatEvery = Math.max(1, Math.round((run.kcfg.client_heartbeat_seconds * 1000) / beatMs));
     const heartbeat = setInterval(() => {
+      beats += 1;
       log.info("kernel heartbeat", { conversationId: run.ledger.conversationId, phase: run.phase, elapsedMs: Math.round(performance.now() - run.startedAt), remainingSearchMs: this.remainingSearchMs(run), inFlight: run.semaphore.inFlight, waves: run.waves, workItems: run.totalWork, programs: run.executionStats.programs, verified: run.executionStats.verified });
-    }, 60_000);
+      // A data-level progress line for the client: SSE keep-alive comments do
+      // not count as activity for most clients, and on a slow upstream a wave
+      // can stream reasoning for 20-40 minutes between narrator messages.
+      if (run.kcfg.client_heartbeat_seconds > 0 && beats % clientBeatEvery === 0) {
+        void run.narrator.say(`Kernel: still working — ${run.phase}, ${run.semaphore.inFlight} reasoner(s) streaming, ${Math.round((performance.now() - run.startedAt) / 60_000)} min elapsed${run.executionStats.programs > 0 ? `, ${run.executionStats.verified}/${run.executionStats.programs} programs verified` : ""}.`);
+      }
+    }, beatMs);
     // Polled rather than a fixed timer so it follows the live deadline when a
     // contested or in-place extension moves it.
     const watchdog = setInterval(() => {

@@ -459,6 +459,7 @@ describe("kernel scheduler", () => {
     worker_idle_timeout_seconds: 60,
     worker_first_token_timeout_seconds: 0,
     worker_max_tokens_by_routing: {},
+    client_heartbeat_seconds: 0,
     worker_max_concurrency_by_routing: {},
     dispatch_stagger_ms: 0,
     examples_program_effort: "mixed",

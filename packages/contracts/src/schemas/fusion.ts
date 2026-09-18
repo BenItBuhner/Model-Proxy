@@ -363,6 +363,8 @@ export const FusionKernelConfigSchema = z
      */
     /** Idle budget before the FIRST data event (upstream queueing); 0 = same as the idle timeout. */
     worker_first_token_timeout_seconds: z.number().int().min(0).max(3600).default(0),
+    /** Emit a one-line progress message on the reasoning channel this often while searching (0 = off); clients treat data silence as a dead stream. */
+    client_heartbeat_seconds: z.number().int().min(0).max(3600).default(240),
     /** Process-wide concurrent-stream cap per routing; slots beyond it queue locally instead of tripping the upstream's per-model limit. */
     worker_max_concurrency_by_routing: z.record(z.string(), z.number().int().min(1).max(64)).default({}),
     /** Delay between the launches of consecutive slots of one wave (bursts of simultaneous requests trip upstream cooldowns). */
