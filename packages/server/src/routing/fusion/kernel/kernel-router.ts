@@ -851,6 +851,8 @@ export class FusionKernel {
 
   /** Apply the routing's effort ceiling (low < medium < high) to a chosen effort. */
   private capEffort(run: KernelRun, routing: string | undefined, effort: "low" | "medium" | "high" | undefined): "low" | "medium" | "high" | undefined {
+    const override = routing !== undefined ? run.kcfg.reasoning_effort_by_routing[routing] : undefined;
+    if (override !== undefined) return override;
     const cap = routing !== undefined ? run.kcfg.reasoning_effort_cap_by_routing[routing] : undefined;
     if (cap === undefined) return effort;
     const rank = { low: 0, medium: 1, high: 2 } as const;

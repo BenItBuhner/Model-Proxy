@@ -238,6 +238,13 @@ export const FusionKernelConfigSchema = z
      */
     examples_program_effort: z.enum(["mixed", "medium", "high"]).default("mixed"),
     reasoning_effort_cap_by_routing: z.record(z.string(), z.enum(["low", "medium", "high"])).default({}),
+    /**
+     * Explicit effort per routing for proposer-class workers, overriding the
+     * band/slot policy and the cap. Measured on the NIM-backed proxy: kimi-k3
+     * at "medium" is routed differently and waits ~5 minutes for its first
+     * token (often past the proxy's admission timeout), "high" waits ~60 s.
+     */
+    reasoning_effort_by_routing: z.record(z.string(), z.enum(["low", "medium", "high"])).default({}),
     /** Start verifying each candidate as soon as it lands instead of after the whole proposal wave settles. */
     pipeline_verification: z.boolean().default(true),
     /**

@@ -90,6 +90,7 @@ const kernelConfig: FusionConfig = {
     dispatch_stagger_ms: 0,
     examples_program_effort: "mixed",
     reasoning_effort_cap_by_routing: {},
+    reasoning_effort_by_routing: {},
     worker_fast_failure_retries: 0,
     worker_fast_failure_backoff_seconds: 1,
     proposal_width: { F2: 3, F3: 3, max: 6 },
@@ -1704,6 +1705,18 @@ describe("Fusion kernel engine", () => {
     expect(glm.length).toBeGreaterThan(0);
     for (const p of glm) { expect(p["max_tokens"]).toBe(9000); expect(p["reasoning_effort"]).toBe("medium"); }
     for (const p of others) { expect(p["max_tokens"]).toBe(30000); expect(p["reasoning_effort"]).toBe("high"); }
+    // An explicit per-routing effort wins over the slot policy and the cap.
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-caps2-${Date.now()}`));
+    router = new FusionRouter();
+    const captured2 = emptyCaptured();
+    installFetch(captured2, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const ctx2 = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-caps2-${Date.now()}`);
+    ctx2.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true, control_proposer: false, reasoning_effort_cap_by_routing: { "kimi-k3": "low" }, reasoning_effort_by_routing: { "kimi-k3": "high", "glm-5.3": "low" } } };
+    delete (ctx2.requestData as Record<string, unknown>)["tools"];
+    await router.route(ctx2);
+    for (const p of captured2.proposer.filter((p) => String(p["model"]) === "up-kimi")) expect(p["reasoning_effort"]).toBe("high");
+    for (const p of captured2.proposer.filter((p) => String(p["model"]) === "up-glm")) expect(p["reasoning_effort"]).toBe("low");
   });
 
   it("re-dispatches a proposer whose upstream stream dies mid-generation and verifies the fresh attempt's program", async () => {
