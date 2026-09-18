@@ -1,0 +1,32 @@
+SWE-bench Verified (23-instance A∪B set, local harness, 50 steps / 90 min, streaming agent steps) on the NIM-backed proxy. ✓ RESOLVED_FULL, ✗ not resolved, ! harness/route failure; seconds and agent steps.
+
+instance                      deepseek-v4-flash           glm-5.3                     kimi-k3                     nemotron-3-ultra            
+django__django-14011          ✓  1640s  45 steps          ✓  1658s  50 steps          ✓  2063s  22 steps          ✗   813s  50 steps          
+django__django-14238          ✓   342s  11 steps          ✓   213s  13 steps          ✓   888s  11 steps          ✓   736s  50 steps          
+django__django-14631          ✓  2295s  50 steps          ✓  1276s  50 steps          ✓  3114s  33 steps          ✗   735s  50 steps          
+django__django-15503          ✓  2585s  45 steps          ✗  1264s  50 steps          ✓  2461s  21 steps          ✗  1340s  50 steps          
+django__django-15629          ✗  2888s  50 steps          ✗   945s  50 steps          ✓  3456s  30 steps          ✗  1465s  50 steps          
+django__django-15957          ✗  4939s  50 steps          ✗  1573s  50 steps          ✓  4333s  31 steps          ✗   905s  50 steps          
+django__django-16139          ✓   343s  12 steps          ✓   204s  13 steps          ✓  1683s  18 steps          ✗  1117s  50 steps          
+django__django-16263          ✗  2663s  45 steps          ✗  1394s  50 steps          ✓  4263s  46 steps          ✗   892s  50 steps          
+django__django-16560          ✓  1851s  50 steps          ✗  1034s  50 steps          ✓  5130s  50 steps          ✓  1242s  50 steps          
+django__django-16631          ✓   812s  50 steps          ✓  1867s  34 steps          -                           ✓  1178s  50 steps          
+pallets__flask-5014           ✓    33s   9 steps          ✓   219s  20 steps          -                           ✓   967s  50 steps          
+psf__requests-1142            ✓    69s  10 steps          ✓   224s   9 steps          -                           ✗  1421s  50 steps          
+pytest-dev__pytest-10356      ✗  3351s  50 steps          ✗   934s  33 steps          -                           ✗   835s  50 steps          
+pytest-dev__pytest-5262       ✓   515s  13 steps          ✓   408s  10 steps          -                           ✓   582s  50 steps          
+pytest-dev__pytest-5787       ✓  2847s  44 steps          ✓  1668s  50 steps          -                           ✗   528s  50 steps          
+pytest-dev__pytest-6197       ✓  2166s  50 steps          ✗  1365s  50 steps          -                           ✗   716s  50 steps          
+pytest-dev__pytest-7982       ✓   172s  10 steps          ✓   548s  16 steps          -                           ✓   566s  50 steps          
+sympy__sympy-13878            -                           ✓  1646s  50 steps          -                           -                           
+sympy__sympy-16792            -                           ✓   884s  25 steps          -                           -                           
+sympy__sympy-19346            -                           ✓   432s  17 steps          -                           -                           
+sympy__sympy-21379            -                           ✓   898s  30 steps          -                           -                           
+sympy__sympy-22914            -                           ✓   156s  12 steps          -                           -                           
+sympy__sympy-23824            -                           ✓   122s  10 steps          -                           -                           
+
+deepseek-v4-flash@nim: 13/17 resolved
+glm-5.3@nim: 16/23 resolved
+kimi-k3@nim: 9/9 resolved
+nemotron-3-ultra@nim: 6/17 resolved
+union of members: 22/23
