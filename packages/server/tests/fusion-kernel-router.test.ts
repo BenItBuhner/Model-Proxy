@@ -1006,6 +1006,39 @@ describe("Fusion kernel engine", () => {
     expect(result.content ?? "").toContain("[[3,2,1],[6,5,4]]");
   }, 90_000);
 
+  it("salvages a solve() drafted in the trace when a thinking model exhausts its output budget (finish_reason length, no content)", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-length-salvage-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[2,1],[4,3]]\n\nTraining pair 2\nInput (2x2):\n[[5,0],[0,5]]\nOutput (2x2):\n[[0,5],[5,0]]\n\nTest input (2x3):\n[[1,2,3],[4,5,6]]";
+    const lengthEnded = (model: string) => {
+      const chunk = (delta: Record<string, unknown>, finish: string | null = null) => `data: ${JSON.stringify({ id: "chatcmpl-l", object: "chat.completion.chunk", created: 1, model, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+      const body = chunk({ reasoning_content: "Rows look reversed. Draft:\n" }) + chunk({ reasoning_content: "def solve(grid):\n    return [list(reversed(r)) for r in grid]\n\nLet me verify pair two before writing the answer... " }) + chunk({}, "length") + "data: [DONE]\n\n";
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      const text = allText(messages);
+      if (system.includes("independent expert reasoners")) { captured.proposer.push(body); return lengthEnded(model); }
+      if (!system.includes("final model of a multi-model fusion kernel") && !system.includes("adversarial") && text.includes("Test input")) return streamResponse(model, ["Not sure.\n```json\n[[0,0,0],[0,0,0]]\n```"]);
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-length-salvage-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, search_deadline_seconds: { F2: 60, F3: 60, max: 60 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "F3" };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+    const execution = (result.fusionTrace?.kernel as Record<string, unknown>)["execution"] as Record<string, unknown>;
+    expect(execution["verified"] as number).toBeGreaterThan(0);
+    expect(result.content ?? "").toContain("[[3,2,1],[6,5,4]]");
+  }, 60_000);
+
   it("repairs from the best failing PROGRAM even when an unverified leave-one-out direct answer scored higher", async () => {
     closeOperationalDbForTests();
     setStorageRootForTests(path.join(tmpRoot, `storage-repair-loo-${Date.now()}`));

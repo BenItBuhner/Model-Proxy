@@ -289,8 +289,21 @@ export async function runWorker(
     }
     flush(true, segmentChars);
 
-    const cleaned = stripSubagentActionClaims(stripToolCallArtifacts(content)).trim();
+    let cleaned = stripSubagentActionClaims(stripToolCallArtifacts(content)).trim();
     const durationMs = Math.round(performance.now() - started);
+    // A thinking model that spends its whole output budget reasoning ends with
+    // finish_reason "length" and no content — the same shape as a cut-off
+    // stream, and the trace often holds the program it was about to emit.
+    if (cleaned.length === 0 && finishReason === "length" && reasoning.length > 0) {
+      const draft = extractDraftSolveProgram(reasoning);
+      const tail = stripSubagentActionClaims(stripToolCallArtifacts(reasoning)).trim();
+      if (draft !== undefined) {
+        cleaned = `[worker exhausted its output budget while still reasoning; program drafted in the trace, unverified until executed]\n\`\`\`python\n${draft}\`\`\``;
+        log.info("kernel worker hit its output budget; salvaged a drafted solve() program", { id: req.id, routing: req.routing, programChars: draft.length });
+      } else if (tail.length >= MIN_PARTIAL_CHARS * 2) {
+        cleaned = `[worker exhausted its output budget while still reasoning; no final answer was produced. Partial reasoning trace (tail) follows — treat as unverified working notes]\n${tail.slice(-8_000)}`;
+      }
+    }
     if (cleaned.length === 0) {
       const error = attemptedToolCalls
         ? "worker attempted tool calls and produced no text"
