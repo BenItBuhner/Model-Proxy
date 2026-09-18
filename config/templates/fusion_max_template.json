@@ -60,7 +60,7 @@
       "worker_timeout_seconds": 300,
       "worker_timeout_seconds_by_band": { "F2": 600, "F3": 1800, "max": 3300 },
       "examples_program_effort": "medium",
-      "worker_max_tokens_by_routing": { "glm-5.3": 24000, "glm-5.3-flash": 24000, "deepseek-v4-flash": 40000, "kimi-k3": 48000 },
+      "worker_max_tokens_by_routing": { "glm-5.3": 24000, "glm-5.3-flash": 24000, "deepseek-v4-flash": 28000, "kimi-k3": 28000 },
       "reasoning_effort_cap_by_routing": { "glm-5.3": "medium", "glm-5.3-flash": "medium" },
       "worker_idle_timeout_seconds": 300,
       "worker_first_token_timeout_seconds": 900,
