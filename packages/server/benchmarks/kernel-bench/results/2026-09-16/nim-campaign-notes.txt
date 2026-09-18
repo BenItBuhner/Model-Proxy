@@ -34,6 +34,20 @@ Defects the slow upstream exposed in the measurement stack, each fixed before an
    output caps (glm 24k tokens at medium effort, deepseek 40k, kimi 48k) so each member's stream can finish
    inside the ceiling, and the max-band worker cap is 3300 s so the kernel's own salvage fires first.
 
+8. The proxy routes kimi-k3 differently by reasoning_effort: at "medium" the first token arrives after
+   ~290-316 s (repeatedly measured against ~57-72 s for none/low/high), which is past the proxy's own
+   admission timeout often enough that program slots at medium died with "All routes failed" — the v83-v86
+   ARC runs had zero completed program slots for 70+ minutes. Template: reasoning_effort_by_routing kimi-k3
+   → high; program slots back to "mixed" (deepseek's queue is effort-independent, ~240 s under our load).
+9. The upstream admits ~4 concurrent requests per model and queues the rest, and its 60-minute ceiling
+   counts queue time; a wave's burst (6 slots at once, or a release cascade after a settle) tripped its
+   cooldown for every slot. Kernel: process-wide per-routing caps (kimi 2, deepseek 2 per server) with
+   paced acquisitions (4 s apart), fast-failure re-dispatch 4 × 45 s.
+10. A pipelined execution check verifies a proposal AFTER it landed, and the wave only consulted the early-
+   settle rules once every family had a result: with kimi's slots queued, a verified deepseek program sat
+   unused for 45 minutes. Kernel: verified programs consult the rules regardless, and the evidence wake
+   is always registered.
+
 Budgets sized to NIM (template): worker caps 600/1800/3300 s by band, search deadlines 900/2700/5400 s,
 max-band extension 1800 s, contested extension 1200 s, synthesis 900 s, agentic planning 480 s.
 
