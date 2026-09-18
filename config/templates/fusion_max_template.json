@@ -19,7 +19,7 @@
       "3": { "subagent_count": { "min": 3, "max": 8 }, "model_routings": ["glm-5.3", "kimi-k3", "deepseek-v4-flash"] }
     },
     "fusion": { "model_routing": "glm-5.3", "strategy": "sequential_append", "wire_protocol": "openai" },
-    "summarizer": { "enabled": true, "model_routing": "turbo", "segment_chars": 1400, "max_summary_tokens": 256 },
+    "summarizer": { "enabled": true, "model_routing": "complete", "segment_chars": 1400, "max_summary_tokens": 256 },
     "cache": { "enabled": true, "scope": "permanent" },
     "scheduler": { "allow_nested_fusion": false, "max_depth": 0, "max_leaf_calls": 64, "max_wall_ms": 1800000 },
     "kernel": {
