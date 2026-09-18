@@ -884,7 +884,7 @@ export class FusionKernel {
   /** Worker hard cap for this band, bounded by the remaining search budget (never below 15s). */
   private routingSemaphoreFor(kcfg: FusionKernelConfig, routing: string): Semaphore | undefined {
     const limit = kcfg.worker_max_concurrency_by_routing[routing];
-    return limit === undefined ? undefined : routingSemaphore(routing, limit);
+    return limit === undefined ? undefined : routingSemaphore(routing, limit, kcfg.dispatch_stagger_ms);
   }
 
   /** The upstream ended the stream with a network/stream error after generation had started (not a kernel deadline or cancel). */

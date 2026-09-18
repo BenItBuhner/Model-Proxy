@@ -417,11 +417,36 @@ export async function runWorker(
   }
 }
 
+/**
+ * A semaphore whose acquisitions are also spaced in time: consecutive starts on
+ * one routing are at least `spacingMs` apart, so a cascade of releases (a wave
+ * settling, retries firing together) cannot re-create the simultaneous burst
+ * that trips the upstream's per-model limit.
+ */
+export class PacedSemaphore extends Semaphore {
+  private lastStartAt = -Infinity;
+  private chain: Promise<void> = Promise.resolve();
+  constructor(limit: number, private readonly spacingMs: number) { super(limit); }
+  override async acquire(): Promise<() => void> {
+    const release = await super.acquire();
+    if (this.spacingMs <= 0) return release;
+    // Serialize the spacing decision so two acquirers cannot both see the same lastStartAt.
+    const turn = this.chain.then(async () => {
+      const wait = this.lastStartAt + this.spacingMs - performance.now();
+      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+      this.lastStartAt = performance.now();
+    });
+    this.chain = turn.catch(() => undefined);
+    await turn;
+    return release;
+  }
+}
+
 /** Process-wide per-routing semaphores (upstream per-model concurrency limits are global to this proxy, not per run). */
 const routingSemaphores = new Map<string, Semaphore>();
-export function routingSemaphore(routing: string, limit: number): Semaphore {
-  const key = `${routing}|${limit}`;
+export function routingSemaphore(routing: string, limit: number, spacingMs = 0): Semaphore {
+  const key = `${routing}|${limit}|${spacingMs}`;
   let sem = routingSemaphores.get(key);
-  if (sem === undefined) { sem = new Semaphore(limit); routingSemaphores.set(key, sem); }
+  if (sem === undefined) { sem = spacingMs > 0 ? new PacedSemaphore(limit, spacingMs) : new Semaphore(limit); routingSemaphores.set(key, sem); }
   return sem;
 }

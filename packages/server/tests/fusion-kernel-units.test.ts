@@ -775,3 +775,20 @@ describe("kernel intent + capsule + work keys", () => {
     expect(computeWorkKey({ ...spec, policyVersion: 2 })).not.toBe(key);
   });
 });
+
+describe("paced routing semaphore", () => {
+  it("spaces consecutive acquisitions by at least the configured gap and never exceeds the limit", async () => {
+    const { PacedSemaphore } = await import("../src/routing/fusion/kernel/worker.ts");
+    const sem = new PacedSemaphore(2, 60);
+    const starts: number[] = []; let active = 0, peak = 0;
+    await Promise.all([0, 1, 2, 3].map(async () => {
+      const release = await sem.acquire();
+      starts.push(performance.now()); active += 1; peak = Math.max(peak, active);
+      await new Promise((r) => setTimeout(r, 30));
+      active -= 1; release();
+    }));
+    expect(peak).toBeLessThanOrEqual(2);
+    starts.sort((a, b) => a - b);
+    for (let i = 1; i < starts.length; i++) expect(starts[i]! - starts[i - 1]!).toBeGreaterThanOrEqual(55);
+  });
+});
