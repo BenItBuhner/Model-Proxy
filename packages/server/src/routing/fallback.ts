@@ -2110,7 +2110,10 @@ export class FallbackRouter {
       const err = byAttempt.get(attempt.attemptNumber) ?? {};
       const msg = typeof err["error"] === "string" ? err["error"] : "Unknown error";
       const type = typeof err["error_type"] === "string" ? err["error_type"] : "Unknown";
-      const truncated = msg.length > 80 ? `${msg.slice(0, 80)}...` : msg;
+      // Upstream proxies nest their own route reports inside the message; 80
+      // chars cut them off before the reason ("All routes fai..."), which made
+      // the NIM cooldown/admission failures undiagnosable from our logs.
+      const truncated = msg.length > 400 ? `${msg.slice(0, 400)}...` : msg;
       const marker = attempt.isFallbackRoute ? " [FALLBACK]" : "";
       parts.push(
         `  ${attempt.attemptNumber}. ${attempt.route.provider}/${attempt.route.model} (${attempt.route.wireProtocol})${marker} - FAILED (${type}: ${truncated})`,
