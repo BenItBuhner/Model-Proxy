@@ -1,0 +1,21 @@
+MathArena Apex 2025 (12 problems), default effort (F3 via math effort_by_domain), single run. ✓ correct, ✗ wrong.
+
+Columns: v27 F3 (2026-09-06, trio, no math policies) · v67 F3 partial (2026-09-08, template pool, new math policies, in-place extension NOT firing: control proposer counted as a finished family) · v69 F3 (2026-09-09, template pool, math 3-family settle + in-place extension firing before the 900s worker cap).
+
+problem    v27   v67   v69   voters(v69)  vote(v69)
+apex25:1   ✗     ✗     ✗     3            [["15","kimi+glm"],["4049","deepseek"]]
+apex25:2   ✗     -     ✗     1            [["\\frac{3}{4}","deepseek"]]
+apex25:3   ✓     -     ✓     1            [["\\frac{1980}{16","deepseek"]]
+apex25:4   ✓     -     ✓     1            [["6266942768","deepseek"]]
+apex25:5   ✓     ✗     ✓     2            [["6","glm+deepseek"]]
+apex25:6   ✓     -     ✓     3            [["8","deepseek+glm"],["138","kimi"]]
+apex25:7   ✓     -     ✓     2            [["\\frac{248}{517","kimi+deepseek"]]
+apex25:8   ✓     -     ✓     3            [["1164","glm+kimi"],["2448","deepseek"]]
+apex25:9   ✗     -     ✗     3            [["4\\pi","kimi+glm"],["\\(4\\pi\\)","deepseek"]]
+apex25:10  ✗     -     ✗     0            []
+apex25:11  ✓     -     ✗     0            []
+apex25:12  ✗     -     ✗     0            []
+
+v27 F3 7/12 · v69 F3 6/12 (v69 misses P11 which v27 solved: zero answers landed in 2100s; same six otherwise). Every v69 item ran 1200s + 900s in-place extension (F3 math streams exceed the 900s worker cap on this upstream).
+Same-day evidence for the extension fix: P5 v67 ✗ (one voter, deepseek 21) → v69 ✓ (glm+deepseek 6). P1 (4049) is member-limited: kimi+glm outvote deepseek 15 vs 4049.
+Reference: MathArena Apex 2025 published top scores ~80% (Opus 4.8 / GPT-5.5 class); members single-model: deepseek 4/12, kimi 2/12, glm 1/12.

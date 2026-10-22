@@ -1,0 +1,18 @@
+MathArena Apex 2025 (12 problems), candidate members at reasoning_effort high with an 1800 s cap (strict: ! failed/timed out = wrong), vs trio members (09-06, 1800 s cap) and fusion-max F3 v69. 2026-09-10, slow upstream day.
+
+problem    mimo  dsflash glm5.2 | dspro glm53 kimi | fusion F3 v69
+apex25:1   !     !       ✗      | ✗     ✗     ✗    | ✗
+apex25:2   ✗     !       !      | ✗     ✗     ✗    | ✗
+apex25:3   !     !       !      | ✓     ✗     ✗    | ✓
+apex25:4   ✓     !       ✗      | ✗     ✗     ✗    | ✓
+apex25:5   !     !       !      | ✗     ✗     ✓    | ✓
+apex25:6   ✓     ✓       ✓      | ✗     ✓     ✓    | ✓
+apex25:7   !     !       !      | ✓     ✗     ✗    | ✓
+apex25:8   ✗     ✓       ✗      | ✓     ✗     ✗    | ✓
+apex25:9   ✗     ✗       ✗      | ✗     ✗     ✗    | ✗
+apex25:10  ✗     !       ✗      | ✗     ✗     ✗    | ✗
+apex25:11  ✗     !       !      | ✓     ✗     ✗    | ✗
+apex25:12  ✗     ✗       ✗      | ✗     ✗     ✗    | ✗
+
+totals: mimo-v2.5-pro 2/12 (4 failed/timed out) · deepseek-v4-flash-0731 2/12 (8 failed/timed out) · glm-5.2 1/12 (5 failed/timed out) · trio (09-06): deepseek-v4-pro 4/12, glm-5.3 1/12, kimi-k3 2/12 · fusion F3 v69 6/12.
+Reading: on this upstream the candidates finish few Apex problems inside 30 minutes at high effort (17 of 36 calls timed out or returned upstream 500); mimo-v2.5-pro solves P4 (6266942768) and P6, deepseek-v4-flash P6 and P8, glm-5.2 P6. Nothing here beats deepseek-v4-pro (4/12) or adds a problem fusion has not already solved (fusion has solved 10/12 across configurations). No Apex pool role for the candidates; the shipped only_for scoping (mimo on example tasks only) stands, and the fast alternates remain extra width on the trio families rather than math voters in their own right.

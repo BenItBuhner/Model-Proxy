@@ -1,0 +1,24 @@
+BigCodeBench-Hard (20 tasks, hidden unittest suites) — ✓ pass, ✗ fail
+item          deepseek glm kimi  fusion(no oracle) fusion(oracle)
+bcbhard:93    ✗        ✗   ✗     ✗                 ✗
+bcbhard:100   ✗        ✗   ✓     ✗                 ✗
+bcbhard:123   ✗        ✗   ✗     ✗                 ✗
+bcbhard:184   ✓        ✓   ✓     ✓                 ✓
+bcbhard:199   ✓        ✓   ✓     ✓                 ✓
+bcbhard:367   ✓        ✓   ✓     ✗                 ✓
+bcbhard:409   ✗        ✗   ✗     ✗                 ✗
+bcbhard:502   ✓        ✓   ✗     ✗                 ✗
+bcbhard:560   ✗        ✗   ✗     ✗                 ✗
+bcbhard:579   ✗        ✗   ✗     ✓                 ✓
+bcbhard:582   ✗        ✗   ✗     ✗                 ✗
+bcbhard:594   ✗        ✗   ✗     ✗                 ✗
+bcbhard:636   ✗        ✗   ✗     ✗                 ✗
+bcbhard:654   ✗        ✗   ✗     ✗                 ✗
+bcbhard:720   ✗        ✗   ✗     ✗                 ✗
+bcbhard:777   ✗        ✗   ✗     ✓                 ✓
+bcbhard:857   ✗        ✗   ✗     ✗                 ✗
+bcbhard:1053  ✓        ✗   ✗     ✗                 ✓
+bcbhard:1057  ✗        ✗   ✗     ✗                 ✗
+bcbhard:1077  ✗        ✗   ✗     ✗                 ✗
+deepseek 5/20 | glm 4/20 | kimi 4/20 | fusion no-oracle 4/20 (median 1165s) | fusion oracle 6/20 (median 292s)
+union of members: 6 | oracle-only solves (no member): bcbhard:777, bcbhard:579

@@ -1,0 +1,59 @@
+creative pairwise — blind, position-swapped, third-family judge (fusion vs base). Win = fusion preferred in BOTH orders; loss = base preferred in both; tie = position-inconsistent.
+
+  vs kimi-k3                win 2  tie 3  loss 1  incomplete 0
+  vs deepseek-v4-pro-0813   win 5  tie 0  loss 0  incomplete 1
+  vs glm-5.3                win 2  tie 2  loss 1  incomplete 0
+  TOTAL                     win 9  tie 5  loss 2
+
+creative:dialogue        vs deepseek-v4-pro-0813   fusion_first=B base_first=- → incomplete
+creative:dialogue        vs glm-5.3                fusion_first=A base_first=B → fusion win
+creative:dialogue        vs kimi-k3                fusion_first=A base_first=A → tie (position-inconsistent)
+creative:flash-fiction   vs deepseek-v4-pro-0813   fusion_first=A base_first=B → fusion win
+creative:flash-fiction   vs glm-5.3                fusion_first=B base_first=A → fusion loss
+creative:flash-fiction   vs kimi-k3                fusion_first=A base_first=A → tie (position-inconsistent)
+creative:product-copy    vs deepseek-v4-pro-0813   fusion_first=A base_first=B → fusion win
+creative:product-copy    vs glm-5.3                fusion_first=A base_first=B → fusion win
+creative:product-copy    vs kimi-k3                fusion_first=A base_first=B → fusion win
+creative:speech          vs deepseek-v4-pro-0813   fusion_first=A base_first=B → fusion win
+creative:speech          vs kimi-k3                fusion_first=B base_first=A → fusion loss
+creative:villanelle      vs deepseek-v4-pro-0813   fusion_first=A base_first=B → fusion win
+creative:villanelle      vs glm-5.3                fusion_first=A base_first=A → tie (position-inconsistent)
+creative:villanelle      vs kimi-k3                fusion_first=A base_first=B → fusion win
+creative:worldbuilding   vs deepseek-v4-pro-0813   fusion_first=A base_first=B → fusion win
+creative:worldbuilding   vs glm-5.3                fusion_first=A base_first=A → tie (position-inconsistent)
+creative:worldbuilding   vs kimi-k3                fusion_first=A base_first=A → tie (position-inconsistent)
+
+sample rationales:
+  [creative:flash-fiction vs kimi-k3 fusion_first → A] A obeys the central constraint more strictly: the death is never named, emerging only through the removed oxygen machine, casseroles, and funeral-music question, whereas B explicitly invokes a 'bereavement line' and 'sor
+  [creative:flash-fiction vs kimi-k3 base_first → A] A earns the win: each voicemail adds a strange, unforced particular—four hams, the utility company's bereavement line, scout popcorn from 2009, Ana answering their mother's phone—and the ending is pure image, with the go
+  [creative:flash-fiction vs deepseek-v4-pro-0813 fusion_first → A] Response A handles the brief's most delicate constraint—conveying the mother's death without stating it—with total rigor: the removed hospital bed and oxygen machine, hymns 'hummed sideways,' and the 'mausoleum of lasagn
+  [creative:flash-fiction vs deepseek-v4-pro-0813 base_first → B] Both satisfy the formal constraints—A at ~330 words, B at ~370, each told purely through unanswered voicemails across one week, each conveying the death only by implication (A's pine box and split will; B's removed oxyge
+  [creative:villanelle vs glm-5.3 fusion_first → A] Both villanelles are formally impeccable — 19 lines, correct refrain placement, consistent ABA rhyme, and steady pentameter — but A enacts its required refrain shift inside the poem itself: 'Somewhere inside my chest a w
+  [creative:villanelle vs glm-5.3 base_first → A] Response A meets the formal brief with flawless iambic pentameter and both refrains' shifts are crisply anchored in the text — 'Old keepers gutter too' retrofits the lamp-light as the keeper himself, and 'the lamp now ke
+  [creative:villanelle vs deepseek-v4-pro-0813 fusion_first → A] Both are structurally correct 19-line villanelles in near-iambic pentameter, but A alone fulfills the brief's hardest demand: the refrains genuinely transform in the final quatrain, as 'no one' shifts from mechanical suf
+  [creative:villanelle vs deepseek-v4-pro-0813 base_first → B] Both satisfy the formal requirements (19 lines, refrains at 1/6/12/18 and 3/9/15/19, near-iambic pentameter), but B's craft is markedly stronger: its six B-rhymes are all distinct ('me, decree, company, lee, free, see') 
+  [creative:product-copy vs glm-5.3 fusion_first → A] Response A reads as finished landing copy with a sharper, more specific voice — 'Start the task you've been avoiding since Tuesday,' the '2-minute door' frame, and the ADHD-aware closer 'No streak shaming. No guilt email
+  [creative:product-copy vs glm-5.3 base_first → B] Both responses satisfy every structural constraint (headline, subheadline, three headed benefit blocks, CTA, well under 220 words, no clichés or 'game-changing'), but B more precisely serves the brief's audience by expli
+  [creative:product-copy vs kimi-k3 fusion_first → A] A stays fully in landing-page mode and is sharper and more concrete: the headline names a specific Tuesday, benefits promise exact actions like 'open the tax folder' and 'No re-deciding. No app-wandering,' and the CTA la
+  [creative:product-copy vs kimi-k3 base_first → B] Response B is the sharper, more complete landing page: it stays tightly in voice with a concrete mechanism ('a running two-minute timer'), names the audience ('adult ADHD brains'), and lands on a vivid CTA ('One stuck ta
+  [creative:product-copy vs deepseek-v4-pro-0813 fusion_first → A] Response A demonstrates deeper ADHD-specific craft: the Tuesday-avoidance headline, the 'do taxes' → 'open the tax folder' mechanism demo, body-double rooms (a real, named ADHD strategy), and the closing 'No streak shami
+  [creative:product-copy vs deepseek-v4-pro-0813 base_first → B] Both responses satisfy the structural constraints (headline, subheadline, three headed benefit blocks, closing CTA, both ~140–160 words, neither using banned clichés), but B's language is fresher and more ADHD-specific: 
+  [creative:dialogue vs glm-5.3 fusion_first → A] Both satisfy the formal constraints — two voices, no 'lose,' lengths within range (~420 vs ~385 words) — though A's bolded title is its only non-dialogue text while B is strictly spoken lines. A shows superior craft and 
+  [creative:flash-fiction vs glm-5.3 fusion_first → B] Both pieces satisfy every explicit constraint (Monday–Sunday voicemails, ~300–400 words, death never stated, image endings), but B builds a stronger dramatic spine—the unanswered calls, the missed funeral, 'I'm sorry for
+  [creative:flash-fiction vs glm-5.3 base_first → A] Both satisfy the formal constraints — seven timed voicemails across one week, death implied only through detail (A's hospice nurse and burial dress; B's removed hospital bed and oxygen machine), in-range length, and clos
+  [creative:villanelle vs kimi-k3 fusion_first → A] Response A fulfills the formal brief: it maintains the villanelle's nineteen-line ABA structure (with only a minor slant at 'company/me') and places its refrains at the required lines, letting them pivot in the final qua
+  [creative:villanelle vs kimi-k3 base_first → B] B more completely fulfills the villanelle's formal constraints: the refrains land at the correct positions, the A-rhymes (light/sight/flight/right/white) are exact, and the final quatrain recontextualizes “no one” and “f
+  [creative:dialogue vs glm-5.3 base_first → B] Both meet the formal constraints (two speakers, ~375 and ~415 words, no 'lose', mutual mind-change), but B's craft is sharper and fresher — 'playing on is making someone climb stairs to prove the stairs exist,' the confe
+  [creative:dialogue vs kimi-k3 fusion_first → A] Both responses meet the formal constraints, but A is more exacting in craft: Ilya's 'Oslo, 1996' expensive-suit resignation and the fortress/drawn-position terminology ground the grandmaster's side in chess reality, whil
+  [creative:dialogue vs kimi-k3 base_first → A] A is the more precise fulfillment: it stays entirely in dialogue, anchors the child with 'I'm eight,' and makes both reversals concrete—Milo accepts 'telling the truth quickly,' while Vera concedes she 'should have' play
+  [creative:dialogue vs deepseek-v4-pro-0813 fusion_first → B] Response B satisfies every explicit constraint most precisely — it states the student's age outright ('You're eight'), uses bare dialogue with no title or narration, and dramatizes the resignation debate live over a forc
+  [creative:speech vs kimi-k3 fusion_first → B] B is more consistently fresh: its fainting anecdote yields two strong jokes ('doctors make the worst messes,' 'consider accounting') and the closing callback—'I get paid to make messes other people have to clean up'—land
+  [creative:speech vs kimi-k3 base_first → A] A wins on craft and tonal control: the 'consider accounting' motif is planted and paid off with 'I owe you an apology and a drink,' a genuinely funny, unsentimental climax, and the toast is packed with specific texture (
+  [creative:speech vs deepseek-v4-pro-0813 fusion_first → A] Response A lands at almost exactly 250 words (251) with a vivid, plausible anecdote — the fire-drill vomiting scene, the caution-sign perimeter, and the deadpan 'Third one this week, kid. You're not even in my top five' 
+  [creative:speech vs deepseek-v4-pro-0813 base_first → B] Response B delivers a more vivid, plausible anecdote (the eighth-grade fire drill, 'yellow caution signs set up like a perimeter, radio turned down a notch') and lands a genuinely funny line in 'Third one this week, kid.
+  [creative:worldbuilding vs glm-5.3 fusion_first → A] Response A builds a tighter emotional and logical arc: the Quiet Minute for those 'lost to the sky,' the First Step where the eldest 'teach[es] the ground to hold them again,' and the final stillcake bead given to the el
+  [creative:worldbuilding vs glm-5.3 base_first → A] Both responses meet every constraint (~350 words, rituals, one food, a 4-line lyric, a broken children's rule), but Response A builds a tighter internal machine: the single premise that 'whatever is untied belongs to the
+  [creative:worldbuilding vs kimi-k3 fusion_first → A] A meets the brief with tighter internal consistency: the brass anchor-bells, crumbless stillcake threaded into beads, and the Household Line rule all interlock, and the closing note that every adult once unclipped gives 
+  [creative:worldbuilding vs kimi-k3 base_first → A] Both satisfy the brief’s requirements, but A’s design is more tightly load-bearing: the burden-stones are introduced, released into the Sky Nets, and ground into ballast so the city literally floats on what its people le
+  [creative:worldbuilding vs deepseek-v4-pro-0813 fusion_first → A] Response A achieves tighter internal consistency: the unleavened stillcake exists because it 'never crumbles—a mercy in drifting air,' the anchor-bells that 'chime if they drift faster than a walk' pay off when children 
+  [creative:worldbuilding vs deepseek-v4-pro-0813 base_first → B] Response B's details are causally engineered: stillcake is unleavened so it never crumbles in drifting air and is threaded on a rod to be eaten, and the anchor-bells that chime on fast drift become the very thing childre

@@ -38,8 +38,14 @@ export async function upstreamFetch(
   );
 
   try {
-    const fetchInit: RequestInit & { proxy?: string } = {
+    // Bun's fetch aborts a request after 300 s without socket activity by
+    // default ("The operation timed out."). Upstreams that queue a request for
+    // minutes before the first byte (NIM-backed routes under load) trip it
+    // with nothing wrong; the header-phase timer above, the SSE inactivity
+    // guard and the callers' own deadlines are the intended bounds.
+    const fetchInit: RequestInit & { proxy?: string; timeout?: boolean } = {
       ...init,
+      timeout: false,
       ...(combinedSignal !== undefined ? { signal: combinedSignal } : {}),
     };
     if (proxy !== undefined && proxy.length > 0) {

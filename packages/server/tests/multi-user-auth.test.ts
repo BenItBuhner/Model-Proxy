@@ -5,6 +5,9 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
+import { mkdirSync, writeFileSync } from "node:fs";
+
+import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
 import { createApp } from "../src/server/app.ts";
 import { closeOperationalDbForTests } from "../src/storage/operational-db.ts";
 import {
@@ -442,9 +445,30 @@ describe("multi-user auth", () => {
       body: JSON.stringify({ entitlements: [] }),
     });
 
-    const models = await app.request("/v1/models", { headers: { cookie: userCookie } });
-    expect(models.status).toBe(200);
-    const modelsBody = await models.json() as { data: Array<{ id: string }> };
-    expect(modelsBody.data.length).toBeGreaterThan(0);
+    // Hermetic model catalog: the shipped repo config has no logical models
+    // (config/models/* is gitignored), so provide one for this listing.
+    const configRoot = join(tmpRoot, "config-root");
+    mkdirSync(join(configRoot, "models"), { recursive: true });
+    writeFileSync(
+      join(configRoot, "models", "entitlement-test-model.json"),
+      JSON.stringify({
+        logical_name: "entitlement-test-model",
+        timeout_seconds: 5,
+        default_cooldown_seconds: 0,
+        context_window: 32_000,
+        model_routings: [{ provider: "openai", model: "entitlement-test-upstream", context_window: 32_000 }],
+        fallback_model_routings: [],
+      }),
+    );
+    setPrimaryConfigDirForTests(configRoot);
+    try {
+      const models = await app.request("/v1/models", { headers: { cookie: userCookie } });
+      expect(models.status).toBe(200);
+      const modelsBody = await models.json() as { data: Array<{ id: string }> };
+      expect(modelsBody.data.length).toBeGreaterThan(0);
+      expect(modelsBody.data.some((model) => model.id === "entitlement-test-model")).toBe(true);
+    } finally {
+      setPrimaryConfigDirForTests(undefined);
+    }
   });
 });

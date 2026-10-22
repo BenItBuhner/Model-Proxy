@@ -1,0 +1,30 @@
+BBEH (BIG-Bench Extra Hard), 2 items per task (46), normalized exact match, reasoning_effort high, fusion F3
+task                     n  fusion  deepseek  glm  kimi  any-member
+boardgame_qa             2    2       2       2    2      2
+boolean_expressions      2    2       2       2    2      2
+buggy_tables             2    2       2       2    2      2
+causal_understanding     2    2       2       2    2      2
+disambiguation_qa        2    2       2       2    1      2
+dyck_languages           2    2       2       1    2      2
+geometric_shapes         2    2       2       1    2      2
+hyperbaton               2    0       1       0    0      1
+linguini                 2    1       1       1    1      1
+movie_recommendation     2    1       1       1    2      2
+multistep_arithmetic     2    2       2       2    1      2
+nycc                     2    0       0       1    1      1
+object_counting          2    2       2       1    2      2
+object_properties        2    2       1       2    2      2
+sarc_triples             2    2       2       2    2      2
+shuffled_objects         2    2       2       1    2      2
+spatial_reasoning        2    2       1       2    2      2
+sportqa                  2    1       1       1    1      1
+temporal_sequence        2    2       0       2    2      2
+time_arithmetic          2    2       2       2    2      2
+web_of_lies              2    2       2       2    2      2
+word_sorting             2    0       0       0    0      0
+zebra_puzzles            2    2       2       2    2      2
+TOTAL                    46   37      34      34   37     40
+
+fusion misses: hyperbaton-154 pred=EJ exp=E (1128s); hyperbaton-90 pred=CDHIJ exp=J (880s); linguini-34 pred=I hugged you_{pl} exp=I hugged you (474s); movie_recommendation-92 pred=(C) exp=(G) (109s); nycc-53 pred=(F) exp=(J) (485s); nycc-12 pred=(B) exp=(E) (340s); sportqa-25 pred=BD, ACD, ABC exp=ABCD, AC, ABC (545s); word_sorting-145 pred=14 exp=5 (298s); word_sorting-126 pred=15 exp=5 (74s)
+
+scratchpad variant (reasoning domain, F3) — partial, 12 items: variant 11/12 vs base fusion 12/12 on the same items; variant p50 716s

@@ -1,0 +1,64 @@
+kernel-bench report — 772 graded rows, 190 items attempted by all 4 models (2026-09-07T20:38:12.524Z)
+
+suite                     deepseek-v4-pro-0813           glm-5.3           kimi-k3    fusion-max@v47
+----------------------------------------------------------------------------------------------------
+apex-shortlist                     83% 20/24         94% 15/16        100% 17/17         83% 20/24
+bbeh                               74% 34/46         76% 34/45         80% 37/46         80% 37/46
+finqa                              90% 36/40         88% 35/40         93% 37/40         90% 36/40
+legalbench-sara_numeric            83% 33/40         78% 31/40         83% 33/40         83% 33/40
+legalbench-scalr                   90% 36/40         83% 33/40         85% 33/39         93% 37/40
+
+domain                    deepseek-v4-pro-0813           glm-5.3           kimi-k3    fusion-max@v47
+----------------------------------------------------------------------------------------------------
+finance                            90% 36/40         88% 35/40         93% 37/40         90% 36/40
+legal                              86% 69/80         80% 64/80         84% 66/79         88% 70/80
+math                               83% 20/24         94% 15/16        100% 17/17         83% 20/24
+reasoning                          74% 34/46         76% 34/45         80% 37/46         80% 37/46
+ALL                              84% 159/190       82% 148/181       86% 157/182       86% 163/190
+
+strict (fail = wrong)     deepseek-v4-pro-0813           glm-5.3           kimi-k3    fusion-max@v47
+----------------------------------------------------------------------------------------------------
+finance                            90% 36/40         88% 35/40         93% 37/40         90% 36/40
+legal                              86% 69/80         80% 64/80         83% 66/80         88% 70/80
+math                               83% 20/24         63% 15/24         71% 17/24         83% 20/24
+reasoning                          74% 34/46         74% 34/46         80% 37/46         80% 37/46
+ALL                              84% 159/190       78% 148/190       83% 157/190       86% 163/190
+
+latency p50 / p90 (s)               89 / 337          30 / 565          26 / 691         134 / 929
+failed calls                               0                 9                 8                 0
+
+fusion vs best single base model (same items):
+  finance      fusion  90%  best base kimi-k3                 93%  Δ   -3 pts
+  legal        fusion  88%  best base deepseek-v4-pro-0813    86%  Δ    1 pts
+  math         fusion  83%  best base kimi-k3                100%  Δ  -17 pts
+  reasoning    fusion  80%  best base kimi-k3                 80%  Δ    0 pts
+  ALL          fusion  86%  best base kimi-k3                 86%  Δ   -0 pts
+
+fusion misses (27):
+  bbeh:hyperbaton-154                pred=EJ                   exp=E                    deepseek=✗ glm=✗ kimi=✗  agr=0.55
+  bbeh:hyperbaton-90                 pred=CDHIJ                exp=J                    deepseek=✓ glm=! kimi=✗  agr=0.675
+  bbeh:linguini-34                   pred=I hugged you_{pl}    exp=I hugged you         deepseek=✗ glm=✗ kimi=✗  agr=0.8
+  bbeh:movie_recommendation-92       pred=(C)                  exp=(G)                  deepseek=✗ glm=✗ kimi=✓  agr=0.81
+  bbeh:nycc-53                       pred=(F)                  exp=(J)                  deepseek=✗ glm=✓ kimi=✓  agr=0.511
+  bbeh:nycc-12                       pred=(B)                  exp=(E)                  deepseek=✗ glm=✗ kimi=✗  agr=0.566
+  bbeh:sportqa-25                    pred=BD, ACD, ABC         exp=ABCD, AC, ABC        deepseek=✗ glm=✗ kimi=✗  agr=0.629
+  bbeh:word_sorting-145              pred=14                   exp=5                    deepseek=✗ glm=✗ kimi=✗  agr=0.8
+  bbeh:word_sorting-126              pred=15                   exp=5                    deepseek=✗ glm=✗ kimi=✗  agr=0.66
+  legalbench-scalr:47                pred=C                    exp=E                    deepseek=✗ glm=✗ kimi=✗  agr=0.8
+  legalbench-scalr:13                pred=B                    exp=E                    deepseek=✗ glm=✗ kimi=✗  agr=0.813
+  legalbench-scalr:84                pred=E                    exp=B                    deepseek=✗ glm=✗ kimi=✗  agr=0.8
+  finqa:HWM_2015_page_173.pdf-2      pred=21.43                exp=0.07879              deepseek=✗ glm=✗ kimi=✗  agr=0.503
+  finqa:UNP_2011_page_33.pdf-1       pred=65.1                 exp=0.761                deepseek=✗ glm=✗ kimi=✗  agr=0.78
+  finqa:AWK_2012_page_117.pdf-2      pred=22415                exp=0.52977              deepseek=✗ glm=✗ kimi=✗  agr=0.824
+  finqa:HUM_2017_page_118.pdf-3      pred=72                   exp=0.26341              deepseek=✓ glm=✓ kimi=✓  agr=0.636
+  legalbench-sara_numeric:46         pred=4931                 exp=4331                 deepseek=✗ glm=✗ kimi=✗  agr=0.702
+  legalbench-sara_numeric:29         pred=46036                exp=45946                deepseek=✗ glm=✗ kimi=✗  agr=0.679
+  legalbench-sara_numeric:40         pred=40889                exp=40741                deepseek=✗ glm=✗ kimi=✗  agr=0.8
+  legalbench-sara_numeric:79         pred=4373                 exp=4073                 deepseek=✗ glm=✗ kimi=✓  agr=0.671
+  legalbench-sara_numeric:78         pred=11587                exp=14470                deepseek=✗ glm=✗ kimi=✗  agr=0.8
+  legalbench-sara_numeric:70         pred=78488                exp=81487                deepseek=✗ glm=✗ kimi=✗  agr=0.888
+  legalbench-sara_numeric:12         pred=196074               exp=196056               deepseek=✗ glm=✗ kimi=✗  agr=0.829
+  apex-shortlist:37                  pred=$\dfrac{\binom{2024} exp=\frac{1}{46}\binom{2 deepseek=✗ glm=✗ kimi=!  agr=0.433
+  apex-shortlist:8                   pred=\max(2,n-2)          exp=n-1                  deepseek=✗ glm=! kimi=!  agr=0.318
+  apex-shortlist:31                  pred=5                    exp=625                  deepseek=✓ glm=! kimi=✓  agr=0.236
+  apex-shortlist:26                  pred=539                  exp=735                  deepseek=✓ glm=✓ kimi=✓  agr=0.146

@@ -100,3 +100,20 @@ describe("readBodyWithDeadline", () => {
     expect(error).toBeInstanceOf(ProviderTimeoutError);
   });
 });
+
+describe("error classification of runtime timeouts", () => {
+  it("treats Bun's fetch idle timeout (TimeoutError / 'The operation timed out.') as fallback without cooldown", async () => {
+    const { isAbortLikeError, resolveErrorAction } = await import("../src/routing/error-classification.ts");
+    const bunTimeout = new DOMException("The operation timed out.", "TimeoutError");
+    expect(isAbortLikeError(bunTimeout)).toBe(true);
+    expect(resolveErrorAction("techlitnow", bunTimeout).action).toBe("fallback_no_cooldown");
+    const plain = new Error("The operation timed out.");
+    expect(resolveErrorAction("techlitnow", plain).action).toBe("fallback_no_cooldown");
+  });
+  it("upstreamFetch disables Bun's default idle timeout on every request", async () => {
+    const { upstreamFetch } = await import("../src/providers/upstream-fetch.ts");
+    let seen: Record<string, unknown> | undefined;
+    await upstreamFetch("http://example.invalid/x", { method: "POST", fetcher: (async (_u: unknown, init?: RequestInit) => { seen = init as Record<string, unknown>; return new Response("ok"); }) as unknown as typeof fetch });
+    expect(seen?.["timeout"]).toBe(false);
+  });
+});

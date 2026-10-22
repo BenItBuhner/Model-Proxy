@@ -1,0 +1,2007 @@
+import { rmWithRetry } from "./support.ts";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { setPrimaryConfigDirForTests } from "../src/config/paths.ts";
+import type { FusionRequestContext } from "../src/routing/fusion/types.ts";
+import type { FusionConfig } from "@model-proxy/contracts/schemas/fusion.ts";
+import { resetKeyState } from "../src/providers/api-key-manager.ts";
+import { closeOperationalDbForTests, getOperationalDb } from "../src/storage/operational-db.ts";
+import { setStorageRootForTests } from "../src/storage/storage-paths.ts";
+import * as fs from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+
+const tmpRoot = path.join(tmpdir(), `mp-fusion-kernel-${process.pid}-${Date.now()}`);
+const cacheRoot = path.join(tmpRoot, "xdg");
+const originalFetch = globalThis.fetch;
+const originalXdgDataHome = process.env.XDG_DATA_HOME;
+const originalHome = process.env.HOME;
+
+process.env.XDG_DATA_HOME = cacheRoot;
+process.env.HOME = cacheRoot;
+
+const { FusionRouter } = await import("../src/routing/fusion/fusion-router.ts");
+
+const UPSTREAMS: Record<string, string> = {
+  "glm-5.3": "up-glm",
+  "glm-5.3-alt": "up-glm-alt",
+  "kimi-k3": "up-kimi",
+  "deepseek-v4-pro-0813": "up-deepseek",
+  "glm-5.3-flash": "up-flash",
+  "mimo-v2.5-pro": "up-mimo",
+  turbo: "up-turbo",
+};
+
+const kernelConfig: FusionConfig = {
+  enabled: true,
+  engine: "kernel",
+  context_window: 10_000_000,
+  complexity_scoring: { effort_1_threshold: 0.15, effort_2_threshold: 0.45 },
+  task_divider: { model_routing: "glm-5.3", timeout_seconds: 30, max_subtasks: 4 },
+  effort_levels: {
+    1: { model_routing: "glm-5.3-flash" },
+    2: { subagent_count: { min: 2, max: 3 }, model_routings: ["glm-5.3"], tools: [] },
+    3: { subagent_count: { min: 2, max: 4 }, model_routings: ["glm-5.3"], tools: [] },
+  },
+  fusion: { model_routing: "glm-5.3", strategy: "sequential_append", wire_protocol: "openai" },
+  cache: { enabled: true, scope: "permanent" },
+  summarizer: { enabled: false, model_routing: "turbo", segment_chars: 300, max_summary_tokens: 128 },
+  scheduler: { allow_nested_fusion: false, max_depth: 0, max_leaf_calls: 64, max_wall_ms: 120_000 },
+  kernel: {
+    families: [
+      { name: "glm", routing: "glm-5.3", alt_routings: ["glm-5.3-alt"], weight: 1, propose: true, verify: true },
+      { name: "kimi", routing: "kimi-k3", alt_routings: [], weight: 1, propose: true, verify: true },
+      { name: "deepseek", routing: "deepseek-v4-pro-0813", alt_routings: [], weight: 1, propose: true, verify: true },
+    ],
+    synthesis_routing: "glm-5.3",
+    fast_routing: "glm-5.3-flash",
+    capsule_tokens: 8_000,
+    worker_max_tokens: 2_000,
+    verifier_max_tokens: 1_500,
+    pipeline_verification: true,
+    adaptive_verification: false,
+    control_proposer: false,
+    effort_by_domain: { math: "F3", science: "F3" },
+    execution_verification: false,
+    execution_timeout_seconds: 10,
+    execution_repair_rounds: 2,
+    execution_verified_weight: 3,
+    execution_settle_grace_seconds: 1,
+    compute_scratchpad: false,
+    compute_scratchpad_domains: ["math", "science"],
+    compute_scratchpad_bands: ["max"],
+    executor_routing_by_domain: {},
+    executor_rotation_by_domain: {},
+    compute_timeout_seconds: 30,
+    compute_rounds: 2,
+    agentic_search_deadline_seconds: 240,
+    agentic_band: "F2",
+    contested_extension_seconds: 0,
+    max_band_extension_seconds: 0,
+    examples_in_place_extension: false,
+    early_settle_min_families_by_domain: {},
+    synthesis_timeout_seconds: 600,
+    worker_reasoning_effort: { verifier: "low" },
+    worker_timeout_seconds: 30,
+    worker_idle_timeout_seconds: 20,
+    worker_first_token_timeout_seconds: 0,
+    worker_max_tokens_by_routing: {},
+    client_heartbeat_seconds: 0,
+    worker_max_concurrency_by_routing: {},
+    dispatch_stagger_ms: 0,
+    examples_program_effort: "mixed",
+    reasoning_effort_cap_by_routing: {},
+    reasoning_effort_by_routing: {},
+    reasoning_effort_substitutions_by_routing: {},
+    worker_fast_failure_retries: 0,
+    worker_fast_failure_backoff_seconds: 1,
+    proposal_width: { F2: 3, F3: 3, max: 6 },
+    verifiers_per_candidate: { F2: 1, F3: 1, max: 2 },
+    max_waves: { F2: 2, F3: 2, max: 3 },
+    agreement_threshold: 0.6,
+    max_concurrency: 8,
+    wave_quorum: 1,
+    straggler_grace_seconds: 5,
+    search_deadline_seconds: { F2: 60, F3: 60, max: 60 },
+    intent_extraction: true,
+    continuation: { enabled: true, max_steps_before_replan: 3, repair_on_error: true, max_repairs_per_signature: 1, repair_after_sightings: 1, executor_reasoning_effort: "medium", steer_max_chars: 400 },
+    policy_version: 1,
+  },
+};
+
+const tools = [
+  { type: "function", function: { name: "read_file", description: "Read a file", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
+  { type: "function", function: { name: "edit_file", description: "Edit a file", parameters: { type: "object", properties: { path: { type: "string" }, patch: { type: "string" } }, required: ["path", "patch"] } } },
+  { type: "function", function: { name: "bash", description: "Run a shell command", parameters: { type: "object", properties: { cmd: { type: "string" } }, required: ["cmd"] } } },
+];
+
+const SYSTEM = { role: "system", content: "You are OpenCode, an agentic coding assistant. Use the tools to complete the task." };
+const GOAL = "Refactor the auth middleware in src/auth.ts to support API keys with expiry, add tests, and make sure bun test passes across the repo.";
+
+interface Captured {
+  intent: Array<Record<string, unknown>>;
+  proposer: Array<Record<string, unknown>>;
+  verifier: Array<Record<string, unknown>>;
+  repair: Array<Record<string, unknown>>;
+  checkpoint: Array<Record<string, unknown>>;
+  synthesis: Array<Record<string, unknown>>;
+  summarizer: Array<Record<string, unknown>>;
+  control: Array<Record<string, unknown>>;
+  models: string[];
+}
+
+function emptyCaptured(): Captured {
+  return { intent: [], proposer: [], verifier: [], repair: [], checkpoint: [], synthesis: [], summarizer: [], control: [], models: [] };
+}
+
+function chatResponse(message: Record<string, unknown>, model: unknown, finishReason = "stop"): Response {
+  return new Response(JSON.stringify({
+    id: `chatcmpl-${Math.random().toString(16).slice(2)}`,
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: model ?? "fake",
+    choices: [{ index: 0, message, finish_reason: finishReason }],
+    usage: { prompt_tokens: 120, completion_tokens: 40, total_tokens: 160 },
+  }), { status: 200, headers: { "content-type": "application/json" } });
+}
+
+function streamResponse(model: unknown, parts: string[], toolCall?: { name: string; arguments: string }): Response {
+  const chunks = parts.map((part) => `data: ${JSON.stringify({ id: "chatcmpl-s", object: "chat.completion.chunk", created: 1, model, choices: [{ index: 0, delta: { content: part }, finish_reason: null }] })}\n\n`);
+  if (toolCall !== undefined) {
+    chunks.push(`data: ${JSON.stringify({ id: "chatcmpl-s", object: "chat.completion.chunk", created: 1, model, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_s1", type: "function", function: toolCall }] }, finish_reason: null }] })}\n\n`);
+  }
+  chunks.push(`data: ${JSON.stringify({ id: "chatcmpl-s", object: "chat.completion.chunk", created: 1, model, choices: [{ index: 0, delta: {}, finish_reason: toolCall !== undefined ? "tool_calls" : "stop" }] })}\n\n`);
+  return new Response(`${chunks.join("")}data: [DONE]\n\n`, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+function systemText(messages: unknown[]): string {
+  const system = messages.find((m) => (m as Record<string, unknown>)["role"] === "system") as Record<string, unknown> | undefined;
+  return typeof system?.["content"] === "string" ? (system["content"] as string) : "";
+}
+
+function allText(messages: unknown[]): string {
+  return messages.map((m) => JSON.stringify(m)).join("\n");
+}
+
+function familyOf(model: string): string {
+  if (model.includes("glm")) return "glm";
+  if (model.includes("kimi")) return "kimi";
+  return "deepseek";
+}
+
+function proposalText(family: string, wave: number, finalAnswer?: string): string {
+  const shared = "The middleware must validate API key expiry before authorizing the request";
+  const specific: Record<string, string> = {
+    glm: "Use a constant-time comparison for API keys",
+    kimi: "Add tests covering expired and revoked keys",
+    deepseek: "Store key hashes, never raw keys",
+  };
+  return [
+    `Proposal from ${family} (wave ${wave}): implement API key auth with expiry checks.`,
+    "```json",
+    JSON.stringify({ answer_summary: `${family} plan`, ...(finalAnswer !== undefined ? { final_answer: finalAnswer } : {}), key_claims: [shared, specific[family] ?? "x", "Answer: 42"], assumptions: [], risks: [], confidence: 0.8 }),
+    "```",
+  ].join("\n");
+}
+
+function installFetch(captured: Captured, options: { synthesisToolCall?: boolean; finalAnswers?: Record<string, string>; controlAnswer?: string } = {}): void {
+  globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    const model = String(body["model"] ?? "");
+    const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+    const system = systemText(messages);
+    captured.models.push(model);
+    const family = familyOf(model);
+
+    if (system.includes("extract structured task intent")) {
+      captured.intent.push(body);
+      return streamResponse(model, ["```json\n", JSON.stringify({ goal: "Ship API-key auth with expiry + tests", constraints: ["bun test must pass"], deliverables: ["refactored middleware", "tests"], acceptance: ["bun test passes"], ambiguities: [], domains: ["swe"] }), "\n```"]);
+    }
+    if (system.includes("independent expert reasoners")) {
+      captured.proposer.push(body);
+      const wave = /wave (\d+)/.exec(allText(messages))?.[1] ?? "1";
+      return streamResponse(model, [proposalText(family, Number(wave), options.finalAnswers?.[family])]);
+    }
+    if (system.includes("adversarial verifier")) {
+      captured.verifier.push(body);
+      return streamResponse(model, ["Checked the candidate; claims hold.\n```json\n", JSON.stringify({ verdict: "accept", issues: [], counterexample: null, correct_claims: ["The middleware must validate API key expiry before authorizing the request"], confidence: 0.85 }), "\n```"]);
+    }
+    if (system.includes("diagnostic reasoner")) {
+      captured.repair.push(body);
+      return streamResponse(model, ["Root cause: the test imports a stale path.\n```json\n", JSON.stringify({ answer_summary: "fix the import path", key_claims: ["The test imports src/auth-old.ts which no longer exists", "Update the import to src/auth.ts and rerun bun test"], assumptions: [], risks: [], confidence: 0.8 }), "\n```"]);
+    }
+    if (system.includes("planning reviewer")) {
+      captured.checkpoint.push(body);
+      return streamResponse(model, ["Progress review.\n```json\n", JSON.stringify({ answer_summary: "remaining: run tests", key_claims: ["Run the full test suite and fix failures", "Verify expiry handling end to end"], assumptions: [], risks: [], confidence: 0.7 }), "\n```"]);
+    }
+    if (system.includes("live reasoning summarizer")) {
+      captured.summarizer.push(body);
+      return streamResponse(model, ["Examining the middleware and planning the expiry check."]);
+    }
+
+    // Control proposer: a worker call (tool_choice none) with no kernel contract.
+    if (body["tool_choice"] === "none" && !system.includes("fusion kernel") && !system.includes("summarizer")) {
+      captured.control.push(body);
+      const answer = options.controlAnswer ?? "750";
+      return streamResponse(model, [`Plain answer from the base model.\n\nFINAL: ${answer}`]);
+    }
+
+    // Synthesis / executor.
+    captured.synthesis.push(body);
+    const wantsTool = options.synthesisToolCall === true && Array.isArray(body["tools"]);
+    if (body["stream"] === true) {
+      return wantsTool
+        ? streamResponse(model, [], { name: "read_file", arguments: JSON.stringify({ path: "src/auth.ts" }) })
+        : streamResponse(model, ["Final synthesized answer: ", "implement API key expiry checks with tests."]);
+    }
+    if (wantsTool) {
+      return chatResponse({ role: "assistant", content: null, tool_calls: [{ id: "call_1", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "src/auth.ts" }) } }] }, model, "tool_calls");
+    }
+    return chatResponse({ role: "assistant", content: `Final synthesized answer (${captured.synthesis.length}): implement API key expiry checks with tests.` }, model);
+  }) as unknown as typeof fetch;
+}
+
+function makeCtx(messages: unknown[], conversationId: string, extra: Record<string, unknown> = {}): FusionRequestContext {
+  return {
+    logicalModel: "fusion-max",
+    fusionConfig: kernelConfig,
+    requestData: { model: "fusion-max", messages, tools, tool_choice: "auto", reasoning_effort: "high", ...extra },
+    clientProtocol: "openai",
+    messages,
+    conversationId,
+    requestId: `req-${Math.random().toString(16).slice(2)}`,
+  };
+}
+
+async function collectStream(gen: AsyncGenerator<string, void, unknown>): Promise<string> {
+  let out = "";
+  for await (const chunk of gen) out += chunk;
+  return out;
+}
+
+describe("Fusion kernel engine", () => {
+  let router: InstanceType<typeof FusionRouter>;
+
+  beforeAll(() => {
+    fs.mkdirSync(path.join(tmpRoot, "models"), { recursive: true });
+    fs.mkdirSync(path.join(tmpRoot, "providers"), { recursive: true });
+    for (const [logical, upstream] of Object.entries(UPSTREAMS)) {
+      fs.writeFileSync(
+        path.join(tmpRoot, "models", `${logical}.json`),
+        JSON.stringify({
+          logical_name: logical,
+          timeout_seconds: 5,
+          default_cooldown_seconds: 0,
+          model_routings: [{ provider: "openai", model: upstream, api_key_env: ["FAKE_KERNEL_API_KEY"], context_window: 128_000 }],
+          fallback_model_routings: [],
+        }),
+      );
+    }
+    fs.writeFileSync(
+      path.join(tmpRoot, "providers", "openai.json"),
+      JSON.stringify({
+        name: "openai",
+        enabled: true,
+        api_keys: { env_var_patterns: ["FAKE_KERNEL_API_KEY"] },
+        endpoints: { base_url: "https://fake-kernel.local", completions: "/v1/chat/completions", compatible_format: "openai" },
+        authentication: { type: "bearer", header_name: "Authorization", header_format: "Bearer {api_key}" },
+        request_config: { timeout_seconds: 5, max_retries: 0, retry_on_status: [] },
+      }),
+    );
+  });
+
+  afterAll(() => {
+    globalThis.fetch = originalFetch;
+    closeOperationalDbForTests();
+    rmWithRetry(tmpRoot, { recursive: true, force: true });
+    delete process.env.FAKE_KERNEL_API_KEY;
+    if (originalXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = originalXdgDataHome;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+  });
+
+  beforeEach(() => {
+    // Fresh storage root per test: the work cache is content-addressed
+    // globally (identical work in any conversation is reused), so tests that
+    // share prompts must not share a database.
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-${Date.now()}-${Math.random().toString(16).slice(2)}`));
+    router = new FusionRouter();
+    process.env.FAKE_KERNEL_API_KEY = "fake-key";
+    resetKeyState("openai");
+    setPrimaryConfigDirForTests(tmpRoot);
+  });
+
+  afterEach(() => {
+    setPrimaryConfigDirForTests(undefined);
+    closeOperationalDbForTests();
+    setStorageRootForTests(undefined);
+    globalThis.fetch = originalFetch;
+  });
+
+  it("runs cross-family proposal + verification waves for a fresh task, then continues tool turns with a single executor call", async () => {
+    const conversationId = `conv-kernel-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured, { synthesisToolCall: true });
+
+    // Turn 1: fresh task (F3 via reasoning_effort=high).
+    const turn1 = [SYSTEM, { role: "user", content: GOAL }];
+    const first = await router.route(makeCtx(turn1, conversationId));
+
+    expect(captured.intent).toHaveLength(1);
+    expect(captured.proposer).toHaveLength(3);
+    expect(new Set(captured.proposer.map((b) => familyOf(String(b["model"])))).size).toBe(3);
+    // Agentic first turn (tools present): ONE bounded planning wave — the
+    // proposers write an investigation plan, no verification wave, then the
+    // synthesizer emits the first tool calls.
+    expect(captured.verifier).toHaveLength(0);
+    for (const p of captured.proposer) expect(allText(p["messages"] as unknown[])).toContain("INVESTIGATION AND FIX PLAN");
+    expect(captured.synthesis).toHaveLength(1);
+    expect(captured.repair).toHaveLength(0);
+    // Workers are sealed: streaming, no tools, tool_choice none, bounded output.
+    for (const w of [...captured.proposer, ...captured.verifier]) {
+      expect(w["tools"]).toBeUndefined();
+      expect(w["tool_choice"]).toBe("none");
+      expect(w["stream"]).toBe(true);
+      expect(w["max_tokens"]).toBeLessThanOrEqual(2_000);
+    }
+    // Per-role reasoning effort: verifiers run low; this request asked for `high`
+    // (band F3), so proposers inherit high effort like a base model would.
+    for (const v of captured.verifier) expect(v["reasoning_effort"]).toBe("low");
+    // The agentic planning wave runs at the F2 band (agentic_band): model-default effort, quick plans.
+    for (const p of captured.proposer) expect(p["reasoning_effort"]).toBeUndefined();
+    // Synthesis received consensus notes and the kernel brief.
+    const synthText = allText(captured.synthesis[0]!["messages"] as unknown[]);
+    expect(synthText).toContain("KERNEL SYNTHESIS BRIEF");
+    expect(synthText).toContain("VERIFIED CONSENSUS");
+    expect(synthText).toContain("validate API key expiry");
+    expect(first.toolCalls).toHaveLength(1);
+    expect(first.cacheHit).toBe(false);
+    const trace = first.fusionTrace!;
+    expect(trace.kernel?.["mode"]).toBe("search");
+    expect(trace.kernel?.["turn"]).toBe("fresh_task");
+    expect(trace.kernel?.["waves"]).toBe(1);
+    expect(trace.kernel?.["agreement"] as number).toBeGreaterThanOrEqual(0.6);
+    expect(trace.kernel?.["workItems"]).toBe(4); // intent + 3 planning proposers; no verification on the agentic first turn
+    expect(trace.kernel?.["cachedWorkItems"]).toBe(0);
+    expect(trace.steps.map((s) => s.type)).toEqual(expect.arrayContaining(["turn_classification", "intent", "proposal", "escalation", "synthesis"]));
+
+    const db = getOperationalDb();
+    const session = db.query("SELECT ledger_json FROM fusion_kernel_sessions WHERE conversation_id = ?").get(conversationId) as { ledger_json: string } | undefined;
+    expect(session).toBeDefined();
+    const ledger = JSON.parse(session!.ledger_json) as Record<string, unknown>;
+    expect((ledger["findings"] as unknown[]).length).toBeGreaterThan(0);
+    expect((ledger["intent"] as Record<string, unknown>)["extractedBy"]).toBe("model");
+    const workRows = db.query("SELECT COUNT(*) AS count FROM fusion_kernel_work").get() as { count: number };
+    expect(workRows.count).toBe(4);
+
+    // Turn 2: the agent executed the tool call; a tool result arrives. Must NOT re-plan.
+    const turn2 = [
+      ...turn1,
+      { role: "assistant", content: null, tool_calls: first.toolCalls },
+      { role: "tool", tool_call_id: "call_1", content: "export function authenticate(req) {\n  const key = req.headers['x-api-key'];\n  return key !== undefined;\n}\n" },
+    ];
+    const before = { proposer: captured.proposer.length, verifier: captured.verifier.length, synthesis: captured.synthesis.length, intent: captured.intent.length };
+    const second = await router.route(makeCtx(turn2, conversationId));
+    expect(captured.proposer.length).toBe(before.proposer);
+    expect(captured.verifier.length).toBe(before.verifier);
+    expect(captured.intent.length).toBe(before.intent);
+    expect(captured.synthesis.length).toBe(before.synthesis + 1);
+    expect(second.fusionTrace?.kernel?.["mode"]).toBe("continue");
+    expect(second.fusionTrace?.kernel?.["turn"]).toBe("tool_continuation");
+    expect(second.fusionTrace?.kernel?.["totalContinuationSteps"]).toBe(1);
+    const contText = allText(captured.synthesis[1]!["messages"] as unknown[]);
+    expect(contText).toContain("KERNEL CONTINUATION BRIEF");
+    expect(contText).toContain("do NOT restart planning");
+    expect(contText).toContain("validate API key expiry");
+    // The executor still sees the real tool result.
+    expect(contText).toContain("x-api-key");
+
+    // Turn 3: exact replay of turn 1 → every work item is served from the cache, synthesis re-runs.
+    const before3 = { proposer: captured.proposer.length, verifier: captured.verifier.length, synthesis: captured.synthesis.length };
+    const third = await router.route(makeCtx(turn1, conversationId));
+    expect(captured.proposer.length).toBe(before3.proposer);
+    expect(captured.verifier.length).toBe(before3.verifier);
+    expect(captured.synthesis.length).toBe(before3.synthesis + 1);
+    expect(third.fusionTrace?.kernel?.["turn"]).toBe("replay");
+    expect(third.fusionTrace?.kernel?.["mode"]).toBe("search");
+    expect(third.fusionTrace?.kernel?.["cachedWorkItems"]).toBe(third.fusionTrace?.kernel?.["workItems"]);
+    expect(third.cacheHit).toBe(true);
+  });
+
+  it("runs a bounded cross-family repair wave on a failed tool step and refuses to repeat it for the same failure", async () => {
+    const conversationId = `conv-repair-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured, { synthesisToolCall: true });
+    const turn1 = [SYSTEM, { role: "user", content: GOAL }];
+    const first = await router.route(makeCtx(turn1, conversationId));
+    expect(captured.proposer).toHaveLength(3);
+
+    const failing = [
+      ...turn1,
+      { role: "assistant", content: null, tool_calls: first.toolCalls },
+      { role: "tool", tool_call_id: "call_1", content: "error: Cannot find module './auth-old' imported from tests/auth.test.ts\nexit code 1" },
+    ];
+    const before = { proposer: captured.proposer.length, synthesis: captured.synthesis.length };
+    const repaired = await router.route(makeCtx(failing, conversationId));
+    expect(captured.repair).toHaveLength(3);
+    expect(captured.proposer.length).toBe(before.proposer);
+    expect(captured.synthesis.length).toBe(before.synthesis + 1);
+    expect(repaired.fusionTrace?.kernel?.["mode"]).toBe("continue");
+    const repair = repaired.fusionTrace?.kernel?.["repair"] as Record<string, unknown>;
+    expect(repair["attempts"]).toBe(1);
+    expect(repair["exhausted"]).toBe(false);
+    const execText = allText(captured.synthesis[captured.synthesis.length - 1]!["messages"] as unknown[]);
+    expect(execText).toContain("REPAIR");
+    expect(execText).toContain("auth-old");
+    expect(repaired.fusionTrace?.steps.some((s) => s.type === "repair")).toBe(true);
+
+    // Same failure signature again → no second repair wave; brief forces a strategy change.
+    const failingAgain = [
+      ...failing,
+      { role: "assistant", content: null, tool_calls: [{ id: "call_2", type: "function", function: { name: "bash", arguments: "{\"cmd\":\"bun test\"}" } }] },
+      { role: "tool", tool_call_id: "call_2", content: "error: Cannot find module './auth-old' imported from tests/auth2.test.ts\nexit code 1" },
+    ];
+    const beforeRepairs = captured.repair.length;
+    const exhausted = await router.route(makeCtx(failingAgain, conversationId));
+    expect(captured.repair.length).toBe(beforeRepairs);
+    const repair2 = exhausted.fusionTrace?.kernel?.["repair"] as Record<string, unknown>;
+    expect(repair2["exhausted"]).toBe(true);
+    const execText2 = allText(captured.synthesis[captured.synthesis.length - 1]!["messages"] as unknown[]);
+    expect(execText2).toContain("Do not retry the same action");
+    // One row per failure signature: two different test files with the same
+    // missing-module error collapse to a single signature that escalated from
+    // tool_error (1 repair) to repair_exhausted (2nd occurrence).
+    const negatives = getOperationalDb().query("SELECT kind, attempts FROM fusion_kernel_negatives WHERE conversation_id = ? ORDER BY kind").all(conversationId) as Array<{ kind: string; attempts: number }>;
+    expect(negatives).toHaveLength(1);
+    expect(negatives[0]).toEqual({ kind: "repair_exhausted", attempts: 2 });
+  });
+
+  it("routes the agentic executor by task domain when executor_routing_by_domain is set", async () => {
+    const conversationId = `conv-domain-exec-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured, { synthesisToolCall: true });
+    const cfg = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, executor_routing_by_domain: { swe: "deepseek-v4-pro-0813" } } };
+    const turn1 = [SYSTEM, { role: "user", content: GOAL }]; // GOAL mentions tests/API: domain swe
+    const ctx1 = makeCtx(turn1, conversationId);
+    ctx1.fusionConfig = cfg;
+    const first = await router.route(ctx1);
+    expect(captured.synthesis.length).toBeGreaterThan(0);
+    expect(String(captured.synthesis[captured.synthesis.length - 1]!["model"])).toBe("up-deepseek");
+    const turn2 = [...turn1, { role: "assistant", content: null, tool_calls: first.toolCalls }, { role: "tool", tool_call_id: "call_1", content: "ok\n[exit 0]" }];
+    const ctx2 = makeCtx(turn2, conversationId);
+    ctx2.fusionConfig = cfg;
+    await router.route(ctx2);
+    expect(String(captured.synthesis[captured.synthesis.length - 1]!["model"])).toBe("up-deepseek");
+  });
+
+  it("treats a short user message inside an active tool loop as a steer for the executor, not a new search", async () => {
+    const conversationId = `conv-steer-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured, { synthesisToolCall: true });
+    const turn1 = [SYSTEM, { role: "user", content: GOAL }];
+    const first = await router.route(makeCtx(turn1, conversationId));
+    const turn2 = [...turn1, { role: "assistant", content: null, tool_calls: first.toolCalls }, { role: "tool", tool_call_id: "call_1", content: "ok\n[exit 0]" }];
+    const second = await router.route(makeCtx(turn2, conversationId));
+    expect(second.fusionTrace?.kernel?.["mode"]).toBe("continue");
+    const before = { proposer: captured.proposer.length, synthesis: captured.synthesis.length };
+    // The client (or user) nudges mid-task: this must not restart planning.
+    const turn3 = [...turn2, { role: "assistant", content: null, tool_calls: second.toolCalls }, { role: "tool", tool_call_id: "call_1", content: "ok\n[exit 0]" }, { role: "user", content: "Continue using the tools. When the fix is complete and verified, call submit." }];
+    const third = await router.route(makeCtx(turn3, conversationId));
+    expect(third.fusionTrace?.kernel?.["mode"]).toBe("continue");
+    expect(captured.proposer.length).toBe(before.proposer);
+    expect(captured.synthesis.length).toBe(before.synthesis + 1);
+    // The steer is folded into the executor's goal.
+    const execText = allText(captured.synthesis[captured.synthesis.length - 1]!["messages"] as unknown[]);
+    expect(execText).toContain("Steer: Continue using the tools");
+  });
+
+  it("rotates the tool-loop executor to the next family in the domain chain once a repair signature is exhausted", async () => {
+    const conversationId = `conv-rotate-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured, { synthesisToolCall: true });
+    const cfg = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, executor_routing_by_domain: { swe: "deepseek-v4-pro-0813" }, executor_rotation_by_domain: { swe: ["deepseek-v4-pro-0813", "glm-5.3"] } } };
+    const route = async (messages: unknown[]) => { const ctx = makeCtx(messages, conversationId); ctx.fusionConfig = cfg; return router.route(ctx); };
+    const turn1 = [SYSTEM, { role: "user", content: GOAL }];
+    const first = await route(turn1);
+    expect(String(captured.synthesis[captured.synthesis.length - 1]!["model"])).toBe("up-deepseek");
+    const fail = (id: string) => ({ role: "tool", tool_call_id: id, content: "error: Cannot find module './auth-old' imported from tests/auth.test.ts\nexit code 1" });
+    const turn2 = [...turn1, { role: "assistant", content: null, tool_calls: first.toolCalls }, fail("call_1")];
+    const second = await route(turn2); // first sighting → repair wave, executor still deepseek
+    expect(String(captured.synthesis[captured.synthesis.length - 1]!["model"])).toBe("up-deepseek");
+    const turn3 = [...turn2, { role: "assistant", content: null, tool_calls: second.toolCalls }, fail("call_2")];
+    const third = await route(turn3); // repeated → repair exhausted → rotation recorded
+    expect((third.fusionTrace?.kernel?.["repair"] as Record<string, unknown>)["exhausted"]).toBe(true);
+    const turn4 = [...turn3, { role: "assistant", content: null, tool_calls: third.toolCalls }, { role: "tool", tool_call_id: "call_3", content: "ok\n[exit 0]" }];
+    await route(turn4);
+    expect(String(captured.synthesis[captured.synthesis.length - 1]!["model"])).toBe("up-glm");
+  });
+
+  it("scopes a family with only_for to matching task kinds (joins example-grounded tasks, stays out of plain questions)", async () => {
+    const families = [...kernelConfig.kernel!.families, { name: "mimo", routing: "mimo-v2.5-pro", alt_routings: [], weight: 1, propose: true, verify: true, only_for: ["examples"] }];
+    const cfg = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, families, control_proposer: false, proposal_width: { F2: 4, F3: 4, max: 6 } } };
+    // Plain question: mimo must not be sampled.
+    const plain = emptyCaptured();
+    installFetch(plain, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const ctx1 = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-scope-plain-${Date.now()}`);
+    ctx1.fusionConfig = cfg;
+    delete (ctx1.requestData as Record<string, unknown>)["tools"];
+    await router.route(ctx1);
+    expect(plain.proposer.some((b) => String(b["model"]) === "up-mimo")).toBe(false);
+    // Example-grounded task: mimo joins the pool.
+    const grid = emptyCaptured();
+    installFetch(grid, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[4,3],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,6],[7,8]]\nOutput (2x2):\n[[8,7],[6,5]]\n\nTest input (2x2):\n[[2,3],[4,5]]";
+    const ctx2 = makeCtx([{ role: "user", content: task }], `conv-scope-grid-${Date.now()}`);
+    ctx2.fusionConfig = { ...cfg, kernel: { ...cfg.kernel!, execution_verification: true, execution_repair_rounds: 0 } };
+    delete (ctx2.requestData as Record<string, unknown>)["tools"];
+    await router.route(ctx2);
+    expect(grid.proposer.some((b) => String(b["model"]) === "up-mimo")).toBe(true);
+  });
+
+  it("keeps a family with not_for out of the listed task kinds and runs every program slot at medium under examples_program_effort=medium", async () => {
+    const families = kernelConfig.kernel!.families.map((f) => (f.name === "glm" ? { ...f, not_for: ["examples"] } : f));
+    const grid = emptyCaptured();
+    installFetch(grid, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[4,3],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,6],[7,8]]\nOutput (2x2):\n[[8,7],[6,5]]\n\nTest input (2x2):\n[[2,3],[4,5]]";
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-notfor-grid-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, families, control_proposer: false, execution_verification: true, execution_repair_rounds: 0, examples_program_effort: "medium", proposal_width: { F2: 4, F3: 4, max: 6 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "max" };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    await router.route(ctx);
+    expect(grid.proposer.some((b) => String(b["model"]) === "up-glm")).toBe(false);
+    expect(grid.proposer.length).toBeGreaterThan(0);
+    for (const b of grid.proposer) expect(b["reasoning_effort"]).toBe("medium");
+    // The same family still joins a plain question.
+    const plain = emptyCaptured();
+    installFetch(plain, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const ctx2 = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-notfor-plain-${Date.now()}`);
+    ctx2.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, families, control_proposer: false } };
+    delete (ctx2.requestData as Record<string, unknown>)["tools"];
+    await router.route(ctx2);
+    expect(plain.proposer.some((b) => String(b["model"]) === "up-glm")).toBe(true);
+  });
+
+  it("with repair_after_sightings=2 the first failure is left to the executor and the repeat triggers the repair wave", async () => {
+    const conversationId = `conv-sightings-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured, { synthesisToolCall: true });
+    const turn1 = [SYSTEM, { role: "user", content: GOAL }];
+    const cfg = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, continuation: { ...kernelConfig.kernel!.continuation, repair_after_sightings: 2 } } };
+    const ctx1 = makeCtx(turn1, conversationId);
+    ctx1.fusionConfig = cfg;
+    const first = await router.route(ctx1);
+
+    // First sighting: the agent reproduced a failure — a normal executor step, no repair wave.
+    const failing = [
+      ...turn1,
+      { role: "assistant", content: null, tool_calls: first.toolCalls },
+      { role: "tool", tool_call_id: "call_1", content: "FAILED tests/auth.test.ts::test_expiry - AssertionError\n========== 1 failed, 4 passed in 0.3s ==========\n[exit 1]" },
+    ];
+    const ctx2 = makeCtx(failing, conversationId);
+    ctx2.fusionConfig = cfg;
+    const before = captured.repair.length;
+    const second = await router.route(ctx2);
+    expect(captured.repair.length).toBe(before);
+    expect(second.fusionTrace?.steps.some((s) => s.type === "repair")).toBe(false);
+
+    // Same failure again: the agent is stuck → bounded cross-family repair.
+    const failingAgain = [
+      ...failing,
+      { role: "assistant", content: null, tool_calls: [{ id: "call_2", type: "function", function: { name: "bash", arguments: "{\"cmd\":\"bun test\"}" } }] },
+      { role: "tool", tool_call_id: "call_2", content: "FAILED tests/auth.test.ts::test_expiry - AssertionError\n========== 1 failed, 4 passed in 0.3s ==========\n[exit 1]" },
+    ];
+    const ctx3 = makeCtx(failingAgain, conversationId);
+    ctx3.fusionConfig = cfg;
+    const third = await router.route(ctx3);
+    expect(captured.repair.length).toBe(before + 3);
+    expect(third.fusionTrace?.steps.some((s) => s.type === "repair")).toBe(true);
+  });
+
+  it("runs a checkpoint wave once the continuation step budget is exhausted", async () => {
+    const conversationId = `conv-ckpt-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured, { synthesisToolCall: true });
+    let messages: unknown[] = [SYSTEM, { role: "user", content: GOAL }];
+    const first = await router.route(makeCtx(messages, conversationId));
+    for (let step = 1; step <= 4; step++) {
+      messages = [
+        ...messages,
+        { role: "assistant", content: null, tool_calls: step === 1 ? first.toolCalls : [{ id: `call_${step}`, type: "function", function: { name: "read_file", arguments: `{"path":"src/file${step}.ts"}` } }] },
+        { role: "tool", tool_call_id: step === 1 ? "call_1" : `call_${step}`, content: `export const value${step} = ${step};` },
+      ];
+      const result = await router.route(makeCtx(messages, conversationId));
+      expect(result.fusionTrace?.kernel?.["mode"]).toBe("continue");
+      if (step < 4) expect(result.fusionTrace?.kernel?.["checkpoint"]).toBe(false);
+      else expect(result.fusionTrace?.kernel?.["checkpoint"]).toBe(true);
+    }
+    expect(captured.checkpoint).toHaveLength(3);
+    expect(captured.proposer).toHaveLength(3);
+    const session = getOperationalDb().query("SELECT ledger_json FROM fusion_kernel_sessions WHERE conversation_id = ?").get(conversationId) as { ledger_json: string };
+    const ledger = JSON.parse(session.ledger_json) as { continuationSteps: number; plan: unknown[] };
+    expect(ledger.continuationSteps).toBe(1);
+    expect(ledger.plan.length).toBeGreaterThan(0);
+  });
+
+  it("streams kernel narration, worker summaries, and the synthesized answer", async () => {
+    const conversationId = `conv-stream-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const ctx = makeCtx([SYSTEM, { role: "user", content: GOAL }], conversationId, { stream: true });
+    // Full search (verification included): disable the agentic planning shortcut for this tool-bearing request.
+    ctx.fusionConfig = { ...kernelConfig, summarizer: { ...kernelConfig.summarizer, enabled: true }, kernel: { ...kernelConfig.kernel!, agentic_search_deadline_seconds: 0 } };
+    const out = await collectStream(router.stream(ctx));
+    expect(out).toContain("reasoning_content");
+    expect(out).toContain("Kernel: new task");
+    expect(out).toContain("cross-family");
+    expect(out).toContain("Final synthesized answer");
+    expect(captured.proposer).toHaveLength(3);
+    expect(captured.verifier).toHaveLength(3);
+    expect(captured.synthesis).toHaveLength(1);
+    expect(captured.summarizer.length).toBeGreaterThan(0);
+    // Trailing SSE comment carries the kernel summary for harnesses/observability.
+    const traceComment = out.split("\n").find((line) => line.startsWith(": fusion-kernel "));
+    expect(traceComment).toBeDefined();
+    const traceJson = JSON.parse(traceComment!.slice(": fusion-kernel ".length)) as Record<string, unknown>;
+    expect(traceJson["mode"]).toBe("search");
+    expect(traceJson["engine"]).toBe("kernel");
+    expect(ctx.streamFusionTrace?.["kernel"]).toBeDefined();
+    expect((ctx.streamFusionTrace?.["kernel"] as Record<string, unknown>)["mode"]).toBe("search");
+    const session = getOperationalDb().query("SELECT ledger_json FROM fusion_kernel_sessions WHERE conversation_id = ?").get(conversationId) as { ledger_json: string };
+    const ledger = JSON.parse(session.ledger_json) as { lastAnswerSummary?: string };
+    expect(ledger.lastAnswerSummary).toContain("Final synthesized answer");
+  });
+
+  it("emits a client-visible progress line on the reasoning channel while a long wave streams", async () => {
+    const conversationId = `conv-beat-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const baseFetch = globalThis.fetch;
+    // Every proposer holds its stream open for 2.5 s before answering.
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      const res = await baseFetch(input as string, init);
+      if (!system.includes("independent expert reasoners")) return res;
+      const text = await res.text();
+      const stream = new ReadableStream<Uint8Array>({ start(controller) { setTimeout(() => { controller.enqueue(new TextEncoder().encode(text)); controller.close(); }, 2_500); } });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as unknown as typeof fetch;
+    const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], conversationId, { stream: true });
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, control_proposer: false, adaptive_verification: true, client_heartbeat_seconds: 1, search_deadline_seconds: { F2: 120, F3: 120, max: 120 } } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const out = await collectStream(router.stream(ctx));
+    expect(out).toContain("Kernel: still working");
+    const reasoning = [...out.matchAll(/"reasoning_content":"((?:[^"\\]|\\.)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`)).join("");
+    expect(reasoning).toContain("reasoner(s) streaming");
+  }, 30_000);
+
+  it("settles on a verified program after the grace window even while another family's slots have produced nothing", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-verified-gate-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[2,1],[4,3]]\n\nTraining pair 2\nInput (2x2):\n[[5,0],[0,5]]\nOutput (2x2):\n[[0,5],[5,0]]\n\nTest input (2x3):\n[[1,2,3],[4,5,6]]";
+    const withProgram = (family: string, program: string) =>
+      [`Rule: each row is reversed`, "```python", program, "```", "```json", JSON.stringify({ answer_summary: `${family}: reverse rows`, final_answer: null, key_claims: ["Grid rule", "Applies to test", "Consistent"], assumptions: [], risks: [], confidence: 0.6 }), "```"].join("\n");
+    const program = "def solve(grid):\n    return [list(reversed(r)) for r in grid]";
+    let hung = 0;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        // Every kimi and glm slot hangs (an upstream that queues forever); only deepseek answers.
+        if (model !== "up-deepseek") {
+          hung += 1;
+          const stream = new ReadableStream<Uint8Array>({ start() { /* never emits */ } });
+          return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+        }
+        return streamResponse(model, [withProgram(model, program)]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-verified-gate-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: false, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, worker_timeout_seconds: 60, worker_idle_timeout_seconds: 60, worker_first_token_timeout_seconds: 60, search_deadline_seconds: { F2: 120, F3: 120, max: 120 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "F3" };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const started = performance.now();
+    const result = await router.route(ctx);
+    const elapsed = performance.now() - started;
+    expect(hung).toBeGreaterThan(0);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    expect((trace["execution"] as Record<string, unknown>)["verified"] as number).toBeGreaterThan(0);
+    expect(result.content ?? "").toContain("[[3,2,1],[6,5,4]]");
+    // Settled on the verified program after the 1 s grace, not after the hung slots' 60 s timeout.
+    expect(elapsed).toBeLessThan(30_000);
+  }, 90_000);
+
+  it("settles a wave on quorum, cancels the straggler after grace, and keeps its partial output as truncated evidence", async () => {
+    const conversationId = `conv-quorum-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    let hangingAborted = false;
+    // The deepseek proposer streams a substantial partial proposal, then hangs until aborted.
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      if (String(body["model"]) === "up-deepseek" && system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        const partial = `Deepseek partial proposal: ${"the middleware must validate API key expiry before authorizing the request. ".repeat(14)}`;
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ id: "s", object: "chat.completion.chunk", created: 1, model: body["model"], choices: [{ index: 0, delta: { content: partial }, finish_reason: null }] })}\n\n`));
+            init?.signal?.addEventListener("abort", () => {
+              hangingAborted = true;
+              controller.error(new DOMException("Aborted", "AbortError"));
+            }, { once: true });
+          },
+        });
+        return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([SYSTEM, { role: "user", content: GOAL }], conversationId);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, wave_quorum: 0.67, straggler_grace_seconds: 1 } };
+    const started = performance.now();
+    const result = await router.route(ctx);
+    const elapsed = performance.now() - started;
+
+    expect(hangingAborted).toBe(true);
+    expect(elapsed).toBeLessThan(15_000);
+    // The hanging proposer is cancelled (early settle: glm + kimi already agree);
+    // the pipelined verifier for its truncated candidate may be cancelled too
+    // once the first two verdicts accept.
+    expect(result.fusionTrace?.kernel?.["cancelledWorkers"] as number).toBeGreaterThanOrEqual(1);
+    expect(result.fusionTrace?.kernel?.["earlySettles"] as number).toBeGreaterThanOrEqual(1);
+    expect(result.fusionTrace?.kernel?.["truncatedWorkers"]).toBe(1);
+    // The truncated deepseek proposal still reached synthesis as a candidate note.
+    expect(result.subagentResults.some((n) => n.subTask.focus_area.includes("deepseek"))).toBe(true);
+    // Truncated work is not cached: only glm + kimi proposals (+ intent + verifiers) were stored.
+    const cachedProposals = getOperationalDb().query("SELECT model_routing FROM fusion_kernel_work WHERE kind = 'proposer'").all() as Array<{ model_routing: string }>;
+    expect(cachedProposals.map((r) => r.model_routing).sort()).toEqual(["glm-5.3", "kimi-k3"]);
+  });
+
+  it("executes candidate programs against task examples: a verified program overrides its author's wrong declaration and leads the answer", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-exec-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the transformation and apply it to the test input. End with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],\n [3,4]]\nOutput (2x2):\n[[1,3],\n [2,4]]\n\nTraining pair 2\nInput (1x3):\n[[5,6,7]]\nOutput (3x1):\n[[5],[6],[7]]\n\nTest input (2x3):\n[[1,2,3],[4,5,6]]";
+    const proposalWithProgram = (family: string, program: string, declared: string) =>
+      [
+        `Proposal from ${family}: the rule transposes the grid.`,
+        "```python",
+        program,
+        "```",
+        "```json",
+        JSON.stringify({ answer_summary: `${family} says transpose`, final_answer: declared, key_claims: ["The rule is a transpose", "Rows become columns", "Answer follows"], assumptions: [], risks: [], confidence: 0.7 }),
+        "```",
+      ].join("\n");
+    let slowAborted = false;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        const model = String(body["model"]);
+        // glm: correct program, WRONG declared answer (typo while copying); kimi: wrong program;
+        // deepseek: a slow thinker that only emits keep-alives until aborted.
+        if (model === "up-glm") return streamResponse(model, [proposalWithProgram("glm", "def solve(grid):\n    return [list(r) for r in zip(*grid)]", "[[1,4],[2,5],[3,7]]")]);
+        if (model === "up-kimi") return streamResponse(model, [proposalWithProgram("kimi", "def solve(grid):\n    return grid[::-1]", "[[4,5,6],[1,2,3]]")]);
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            const tick = setInterval(() => controller.enqueue(new TextEncoder().encode(": keep-alive\n\n")), 100);
+            init?.signal?.addEventListener("abort", () => { clearInterval(tick); slowAborted = true; controller.error(new DOMException("Aborted", "AbortError")); }, { once: true });
+          },
+        });
+        return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-exec-${Date.now()}`);
+    // Quorum would need all three; grace is long: only the verified program can end the wave quickly.
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: false, adaptive_verification: true, wave_quorum: 1, straggler_grace_seconds: 30, worker_timeout_seconds: 120 } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const started = performance.now();
+    const result = await router.route(ctx);
+    const elapsed = performance.now() - started;
+
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    const execution = trace["execution"] as Record<string, unknown>;
+    expect(execution["examples"]).toBe(2);
+    expect(execution["programs"]).toBe(2);
+    expect(execution["verified"]).toBe(1);
+    expect(execution["artifact"]).toBe(true);
+    // The first verified program settled the wave: the slow thinker was cancelled, no LLM audit ran.
+    expect(slowAborted).toBe(true);
+    expect(elapsed).toBeLessThan(8_000);
+    // At most one pipelined audit may have launched before the verified program landed.
+    expect(captured.verifier.length).toBeLessThanOrEqual(1);
+    expect(trace["earlySettles"] as number).toBeGreaterThanOrEqual(1);
+    // The verified program's test output leads the response and settles the search.
+    const content = result.content ?? "";
+    // Explanation first, verified artifact as the LAST block (clients read the final block as the answer).
+    expect(content.trimEnd().endsWith("```")).toBe(true);
+    expect(content.lastIndexOf("```json\n")).toBeGreaterThan(0);
+    expect(content).toContain("[[1,4],[2,5],[3,6]]");
+    expect(content).not.toContain("[[1,4],[2,5],[3,7]]");
+    expect(trace["settledAnswer"]).toBe("[[1,4],[2,5],[3,6]]");
+    // Proposers were told to ship a solve() program.
+    expect(captured.proposer.some((p) => allText(p["messages"] as unknown[]).includes("EXAMPLE-GROUNDED TASK"))).toBe(true);
+    // No LLM synthesis at all: the verified program's own rule statement is the explanation.
+    expect(captured.synthesis).toHaveLength(0);
+    expect(content).toContain("the rule transposes the grid");
+    expect(content).not.toContain("```python");
+  });
+
+  it("at max effort, an artifact backed by a single family gets an independent second attempt whose verified programs join the majority", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-second-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[2,1]]\nOutput (2x2):\n[[1,2],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,0],[0,5]]\nOutput (2x2):\n[[5,0],[0,5]]\n\nTest input (2x2):\n[[1,2],[3,4]]";
+    const withProgram = (family: string, rule: string, program: string) =>
+      [`Rule: ${rule}`, "```python", program, "```", "```json", JSON.stringify({ answer_summary: `${family}: ${rule}`, final_answer: null, key_claims: ["Grid rule", "Applies to test", "Consistent"], assumptions: [], risks: [], confidence: 0.6 }), "```"].join("\n");
+    const identity = "def solve(grid):\n    return [list(r) for r in grid]";
+    const transpose = "def solve(grid):\n    return [list(r) for r in zip(*grid)]";
+    const broken = "def solve(grid):\n    return [list(reversed(r)) for r in grid]";
+    let secondAttemptPrompts = 0;
+    let identityGiven = false;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      const text = allText(messages);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        if (text.includes("INDEPENDENT SECOND ATTEMPT")) {
+          secondAttemptPrompts += 1;
+          return streamResponse(model, [withProgram(model, "the grid is transposed", transpose)]);
+        }
+        if (text.includes("EXECUTION FEEDBACK (discrimination)")) return streamResponse(model, [withProgram(model, "the grid is transposed", transpose)]);
+        if (!identityGiven) { identityGiven = true; return streamResponse(model, [withProgram(model, "the grid is unchanged", identity)]); }
+        return streamResponse(model, [withProgram(model, "mirror left-right", broken)]);
+      }
+      if (!system.includes("final model of a multi-model fusion kernel") && !system.includes("adversarial") && text.includes("Test input")) {
+        // Direct readers produce three different grids: no agreement, no backing for the lone program.
+        const grids = ["[[9,9],[9,9]]", "[[0,0],[0,0]]", "[[7,7],[1,1]]"];
+        return streamResponse(model, [`Unsure.\n\`\`\`json\n${grids[captured.proposer.length % 3]}\n\`\`\``]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-second-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, search_deadline_seconds: { F2: 1200, F3: 1200, max: 1200 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "max" };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(secondAttemptPrompts).toBeGreaterThan(0);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    expect(trace["waves"] as number).toBeGreaterThanOrEqual(2);
+    expect((trace["execution"] as Record<string, unknown>)["artifact"]).toBe(true);
+    expect(result.content ?? "").toContain("[[1,3],[2,4]]");
+    expect(result.content ?? "").not.toContain("[[1,2],[3,4]]");
+    // Example-grounded max waves mix effort across program slots: execution
+    // verifies the result, so quick medium attempts ride alongside high ones.
+    const programSlotEfforts = new Set(captured.proposer.map((p) => p["reasoning_effort"]));
+    expect(programSlotEfforts.has("high")).toBe(true);
+    expect(programSlotEfforts.has("medium")).toBe(true);
+  });
+
+  it("never settles on a verified program whose test grid breaks the training pairs' regularities: the consistency gate forces the second attempt and a consistent rule outranks it", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-gate-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    // Every training output keeps its input's dimensions; the test input is 3x3.
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[2,1]]\nOutput (2x2):\n[[1,2],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,0],[0,5]]\nOutput (2x2):\n[[5,0],[0,5]]\n\nTest input (3x3):\n[[1,2,3],[4,5,6],[7,8,9]]";
+    const withProgram = (family: string, rule: string, program: string) =>
+      [`Rule: ${rule}`, "```python", program, "```", "```json", JSON.stringify({ answer_summary: `${family}: ${rule}`, final_answer: null, key_claims: ["Grid rule", "Applies to test", "Consistent"], assumptions: [], risks: [], confidence: 0.6 }), "```"].join("\n");
+    // Reproduces both 2x2 pairs, collapses anything else to a 1x1 grid: fits the examples for the wrong reason.
+    const collapsing = "def solve(grid):\n    return [list(r) for r in grid] if len(grid) == 2 else [[1]]";
+    const identity = "def solve(grid):\n    return [list(r) for r in grid]";
+    let gatePrompts = 0;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      const text = allText(messages);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        if (text.includes("breaks a regularity every training pair shares")) {
+          gatePrompts += 1;
+          return streamResponse(model, [withProgram(model, "the grid is unchanged", identity)]);
+        }
+        if (text.includes("EXECUTION FEEDBACK (discrimination)")) return streamResponse(model, [withProgram(model, "the grid is unchanged", identity)]);
+        return streamResponse(model, [withProgram(model, "collapse to the top-left colour unless 2x2", collapsing)]);
+      }
+      if (!system.includes("final model of a multi-model fusion kernel") && !system.includes("adversarial") && text.includes("Test input")) {
+        // Every direct reader agrees with the collapsing program: a three-family
+        // agreement on a suspect grid must not count as backing.
+        return streamResponse(model, ["Collapsed.\n```json\n[[1]]\n```"]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-gate-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, search_deadline_seconds: { F2: 1200, F3: 1200, max: 1200 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "max" };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(gatePrompts).toBeGreaterThan(0);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    expect(trace["waves"] as number).toBeGreaterThanOrEqual(2);
+    expect((trace["execution"] as Record<string, unknown>)["artifact"]).toBe(true);
+    expect(result.content ?? "").toContain("[[1,2,3],[4,5,6],[7,8,9]]");
+    expect(result.content ?? "").not.toContain("[[1]]");
+  });
+
+  it("salvages a solve() drafted in a cut-off reasoning trace and lets execution verify it", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-salvage-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[2,1],[4,3]]\n\nTraining pair 2\nInput (2x2):\n[[5,0],[0,5]]\nOutput (2x2):\n[[0,5],[5,0]]\n\nTest input (2x3):\n[[1,2,3],[4,5,6]]";
+    // A thinking model drafts the program unfenced inside its trace, then keeps thinking until the worker timeout cuts it.
+    const stalledThinking = (model: string) => {
+      const chunk = (delta: Record<string, unknown>) => `data: ${JSON.stringify({ id: "chatcmpl-r", object: "chat.completion.chunk", created: 1, model, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`;
+      const trace = ["Each row is reversed. Draft:\n", "def solve(grid):\n", "    return [list(reversed(r)) for r in grid]\n", "\nLet me double-check pair 2 carefully... "];
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const enc = new TextEncoder();
+          for (const t of trace) controller.enqueue(enc.encode(chunk({ reasoning_content: t })));
+          // Keep the stream alive (no idle timeout) without ever finishing.
+          const tick = setInterval(() => { try { controller.enqueue(enc.encode(chunk({ reasoning_content: "hmm " }))); } catch { clearInterval(tick); } }, 500);
+          setTimeout(() => clearInterval(tick), 60_000);
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      const text = allText(messages);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        return stalledThinking(model);
+      }
+      if (!system.includes("final model of a multi-model fusion kernel") && !system.includes("adversarial") && text.includes("Test input")) {
+        return streamResponse(model, ["Not sure.\n```json\n[[0,0,0],[0,0,0]]\n```"]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-salvage-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, worker_timeout_seconds: 4, worker_idle_timeout_seconds: 20, search_deadline_seconds: { F2: 60, F3: 60, max: 60 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "F3" };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    const execution = trace["execution"] as Record<string, unknown>;
+    expect(execution["programs"] as number).toBeGreaterThan(0);
+    expect(execution["verified"] as number).toBeGreaterThan(0);
+    expect(execution["artifact"]).toBe(true);
+    expect(result.content ?? "").toContain("[[3,2,1],[6,5,4]]");
+  }, 90_000);
+
+  it("salvages a solve() drafted in the trace when a thinking model exhausts its output budget (finish_reason length, no content)", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-length-salvage-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[2,1],[4,3]]\n\nTraining pair 2\nInput (2x2):\n[[5,0],[0,5]]\nOutput (2x2):\n[[0,5],[5,0]]\n\nTest input (2x3):\n[[1,2,3],[4,5,6]]";
+    const lengthEnded = (model: string) => {
+      const chunk = (delta: Record<string, unknown>, finish: string | null = null) => `data: ${JSON.stringify({ id: "chatcmpl-l", object: "chat.completion.chunk", created: 1, model, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+      const body = chunk({ reasoning_content: "Rows look reversed. Draft:\n" }) + chunk({ reasoning_content: "def solve(grid):\n    return [list(reversed(r)) for r in grid]\n\nLet me verify pair two before writing the answer... " }) + chunk({}, "length") + "data: [DONE]\n\n";
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      const text = allText(messages);
+      if (system.includes("independent expert reasoners")) { captured.proposer.push(body); return lengthEnded(model); }
+      if (!system.includes("final model of a multi-model fusion kernel") && !system.includes("adversarial") && text.includes("Test input")) return streamResponse(model, ["Not sure.\n```json\n[[0,0,0],[0,0,0]]\n```"]);
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-length-salvage-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, search_deadline_seconds: { F2: 60, F3: 60, max: 60 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "F3" };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+    const execution = (result.fusionTrace?.kernel as Record<string, unknown>)["execution"] as Record<string, unknown>;
+    expect(execution["verified"] as number).toBeGreaterThan(0);
+    expect(result.content ?? "").toContain("[[3,2,1],[6,5,4]]");
+  }, 60_000);
+
+  it("repairs from the best failing PROGRAM even when an unverified leave-one-out direct answer scored higher", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-repair-loo-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[4,3],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,6],[7,8]]\nOutput (2x2):\n[[8,7],[6,5]]\n\nTraining pair 3\nInput (2x2):\n[[0,1],[1,0]]\nOutput (2x2):\n[[0,1],[1,0]]\n\nTest input (2x2):\n[[2,3],[4,5]]";
+    const badProgram = (family: string) => ["Rule: transpose.", "```python", "def solve(grid):\n    return [list(r) for r in zip(*grid)]", "```", "```json", JSON.stringify({ answer_summary: family, final_answer: null, key_claims: ["Transpose", "Rows to columns", "Applies"], assumptions: [], risks: [], confidence: 0.5 }), "```"].join("\n");
+    let repairPrompts = 0;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        if (allText(messages).includes("EXECUTION FEEDBACK (repair round")) repairPrompts += 1;
+        return streamResponse(model, [badProgram(model)]); // programs keep failing
+      }
+      if (allText(messages).includes("Test input 2:")) {
+        // Direct reader answers both test inputs wrongly (0/1 on the withheld pair — but it "scored" via execution).
+        return streamResponse(model, ["Guess.\nTest output 1:\n```json\n[[9,9],[9,9]]\n```\nTest output 2:\n```json\n[[9,9],[9,9]]\n```"]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-repair-loo-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 1, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(repairPrompts).toBeGreaterThan(0);
+    expect(result.content ?? "").not.toHaveLength(0);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    expect((trace["execution"] as Record<string, unknown>)["repairRounds"] as number).toBeGreaterThanOrEqual(1);
+  });
+
+  it("treats a lone verified program that two families' direct reads contradict as a conflict and lets the discrimination wave decide", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-lone-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    // Two symmetric training grids: identity fits them, but the intended rule is transpose.
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[2,1]]\nOutput (2x2):\n[[1,2],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,0],[0,5]]\nOutput (2x2):\n[[5,0],[0,5]]\n\nTest input (2x2):\n[[1,2],[3,4]]";
+    const withProgram = (family: string, rule: string, program: string) =>
+      [`Rule: ${rule}`, "```python", program, "```", "```json", JSON.stringify({ answer_summary: `${family}: ${rule}`, final_answer: null, key_claims: ["Grid rule", "Applies to test", "Consistent"], assumptions: [], risks: [], confidence: 0.6 }), "```"].join("\n");
+    const identity = "def solve(grid):\n    return [list(r) for r in grid]";
+    const transpose = "def solve(grid):\n    return [list(r) for r in zip(*grid)]";
+    let discriminationPrompts = 0;
+    let identityGiven = false;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        if (allText(messages).includes("EXECUTION FEEDBACK (discrimination)")) {
+          discriminationPrompts += 1;
+          return streamResponse(model, [withProgram(model, "the grid is transposed", transpose)]);
+        }
+        // Exactly one synthesizer fits the examples (identity); the others fail the examples.
+        if (!identityGiven) { identityGiven = true; return streamResponse(model, [withProgram(model, "the grid is unchanged", identity)]); }
+        return streamResponse(model, [withProgram(model, "mirror left-right", "def solve(grid):\n    return [list(reversed(r)) for r in grid]")]);
+      }
+      if (!system.includes("final model of a multi-model fusion kernel") && !system.includes("adversarial") && allText(messages).includes("Test input")) {
+        // Direct readers (verbatim task; only 2 pairs so no leave-one-out) see the transpose.
+        return streamResponse(model, ["The grid is transposed.\n```json\n[[1,3],[2,4]]\n```"]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-lone-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "max" }; // three direct slots
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(discriminationPrompts).toBeGreaterThan(0);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    expect((trace["execution"] as Record<string, unknown>)["artifact"]).toBe(true);
+    expect(result.content ?? "").toContain("[[1,3],[2,4]]");
+    expect(result.content ?? "").not.toContain("[[1,2],[3,4]]");
+  });
+
+  it("challenges TWO agreeing verified programs (two families) with two families' direct reads on a 2-pair task", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-twoprog-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[2,1]]\nOutput (2x2):\n[[1,2],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,0],[0,5]]\nOutput (2x2):\n[[5,0],[0,5]]\n\nTest input (2x2):\n[[1,2],[3,4]]";
+    const withProgram = (family: string, rule: string, program: string) =>
+      [`Rule: ${rule}`, "```python", program, "```", "```json", JSON.stringify({ answer_summary: `${family}: ${rule}`, final_answer: null, key_claims: ["Grid rule", "Applies to test", "Consistent"], assumptions: [], risks: [], confidence: 0.6 }), "```"].join("\n");
+    const identity = "def solve(grid):\n    return [list(r) for r in grid]";
+    const transpose = "def solve(grid):\n    return [list(r) for r in zip(*grid)]";
+    let discriminationPrompts = 0;
+    let identityGiven = 0;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        if (allText(messages).includes("EXECUTION FEEDBACK (discrimination)")) {
+          discriminationPrompts += 1;
+          return streamResponse(model, [withProgram(model, "the grid is transposed", transpose)]);
+        }
+        // Two synthesizers (whichever families land first) both fit the examples with identity; the rest fail.
+        if (identityGiven < 2) { identityGiven += 1; return streamResponse(model, [withProgram(model, "the grid is unchanged", identity)]); }
+        return streamResponse(model, [withProgram(model, "mirror left-right", "def solve(grid):\n    return [list(reversed(r)) for r in grid]")]);
+      }
+      if (!system.includes("final model of a multi-model fusion kernel") && !system.includes("adversarial") && allText(messages).includes("Test input")) {
+        return streamResponse(model, ["The grid is transposed.\n```json\n[[1,3],[2,4]]\n```"]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-twoprog-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "max" };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(discriminationPrompts).toBeGreaterThan(0);
+    expect(result.content ?? "").toContain("[[1,3],[2,4]]");
+    expect(result.content ?? "").not.toContain("[[1,2],[3,4]]");
+  });
+
+  it("certifies a direct answer by leave-one-out: a reasoner that reproduces the withheld training pair is trusted like a verified program", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-loo-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const rot = (g: number[][]) => g.map((r) => [...r].reverse()).reverse();
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[4,3],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,6],[7,8]]\nOutput (2x2):\n[[8,7],[6,5]]\n\nTraining pair 3\nInput (2x2):\n[[0,1],[1,0]]\nOutput (2x2):\n[[0,1],[1,0]]\n\nTest input (2x2):\n[[2,3],[4,5]]";
+    const badProgram = (family: string) => ["Rule: transpose.", "```python", "def solve(grid):\n    return [list(r) for r in zip(*grid)]", "```", "```json", JSON.stringify({ answer_summary: family, final_answer: null, key_claims: ["Transpose", "Rows to columns", "Applies"], assumptions: [], risks: [], confidence: 0.5 }), "```"].join("\n");
+    let looPrompts = 0;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        return streamResponse(model, [badProgram(model)]);
+      }
+      const text = allText(messages);
+      if (text.includes("Test input 2:")) {
+        looPrompts += 1;
+        // A competent direct solver: rotate every test input by 180°.
+        const userText = messages.map((m) => String((m as Record<string, unknown>)["content"] ?? "")).join("\n"); // allText() JSON-escapes newlines
+        const inputs = [...userText.matchAll(/Test input \d+:\s*(\[\[[^\]]*\](?:,\[[^\]]*\])*\])/g)].map((m) => JSON.parse(m[1]!) as number[][]);
+        const answer = inputs.map((g, i) => `Test output ${i + 1}:\n\`\`\`json\n${JSON.stringify(rot(g))}\n\`\`\``).join("\n");
+        return streamResponse(model, [`The grid is rotated 180 degrees.\n${answer}`]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-loo-${Date.now()}`);
+    // One repair round: the best-so-far candidate must be a program, never the direct answer (which also carries execution results).
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 1, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(looPrompts).toBeGreaterThan(0);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    const execution = trace["execution"] as Record<string, unknown>;
+    expect(execution["verified"] as number).toBeGreaterThanOrEqual(1);
+    expect(execution["artifact"]).toBe(true);
+    expect(result.content ?? "").toContain("[[5,4],[3,2]]");
+    expect(captured.synthesis).toHaveLength(0);
+  });
+
+  it("falls back to two families' identical direct grid when no program reproduces the examples", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-direct-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[4,3],[2,1]]\n\nTest input (2x2):\n[[5,6],[7,8]]";
+    const badProgram = (family: string) => ["Rule: transpose.", "```python", "def solve(grid):\n    return [list(r) for r in zip(*grid)]", "```", "```json", JSON.stringify({ answer_summary: `${family}`, final_answer: null, key_claims: ["Transpose", "Rows to columns", "Applies"], assumptions: [], risks: [], confidence: 0.5 }), "```"].join("\n");
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        return streamResponse(model, [badProgram(model)]); // wrong program from every synthesizer
+      }
+      if (!system.includes("final model of a multi-model fusion kernel") && !system.includes("adversarial") && allText(messages).includes("Test input")) {
+        // Direct (verbatim) proposers: both read the rule as 180° rotation.
+        return streamResponse(model, ["The rule rotates the grid by 180 degrees.\n```json\n[[8,7],[6,5]]\n```"]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-direct-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: true, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "max" }; // two direct slots at max
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    const execution = trace["execution"] as Record<string, unknown>;
+    expect(execution["verified"]).toBe(0);
+    expect(execution["artifact"]).toBe(true);
+    expect(result.content ?? "").toContain("[[8,7],[6,5]]");
+    expect(captured.synthesis).toHaveLength(0);
+  });
+
+  it("executes a math proposer's # kernel-compute block and lets it finalize with the real output", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-compute-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const baseFetch = globalThis.fetch;
+    let computeOutputSeen: string | undefined;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      if (system.includes("independent expert reasoners") && String(body["model"]) === "up-kimi") {
+        captured.proposer.push(body);
+        const text = allText(messages);
+        if (text.includes("COMPUTE OUTPUT")) {
+          computeOutputSeen = text.slice(text.indexOf("COMPUTE OUTPUT"), text.indexOf("COMPUTE OUTPUT") + 200);
+          return streamResponse("up-kimi", [proposalText("kimi", 1, "750")]);
+        }
+        // First round: ask the kernel to count for it.
+        return streamResponse("up-kimi", ["Let me count them.\n```python\n# kernel-compute\nprint(sum(1 for n in range(1, 1001) if (n**5 - n) % 60 == 0))\n```\n"]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-compute-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, control_proposer: false, compute_scratchpad: true, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "max" }; // scratchpad is a max-band capability
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(computeOutputSeen).toBeDefined();
+    expect(computeOutputSeen).toContain("750");
+    expect((result.fusionTrace?.kernel as Record<string, unknown>)["computeRuns"]).toBe(1);
+    // The scratchpad contract reached the proposer.
+    expect(captured.proposer.some((p) => allText(p["messages"] as unknown[]).includes("COMPUTATIONAL SCRATCHPAD"))).toBe(true);
+    // The finalized proposal (not the pre-compute draft) fed the vote.
+    const vote = (result.fusionTrace?.kernel as Record<string, unknown>)["vote"] as { leader?: string } | undefined;
+    expect(vote?.leader).toBe("750");
+  });
+
+  it("runs a discrimination wave when verified programs disagree on the test output and settles on the majority rule", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-discrim-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    // Symmetric training grids: identity and transpose both reproduce them; they differ on the test grid.
+    const task = "Infer the rule; end with the output grid as JSON.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[2,1]]\nOutput (2x2):\n[[1,2],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,0],[0,5]]\nOutput (2x2):\n[[5,0],[0,5]]\n\nTest input (2x2):\n[[1,2],[3,4]]";
+    const withProgram = (family: string, rule: string, program: string) =>
+      [`Rule: ${rule}`, "```python", program, "```", "```json", JSON.stringify({ answer_summary: `${family}: ${rule}`, final_answer: null, key_claims: ["Grid rule", "Applies to test", "Consistent"], assumptions: [], risks: [], confidence: 0.6 }), "```"].join("\n");
+    const identity = "def solve(grid):\n    return [list(r) for r in grid]";
+    const transpose = "def solve(grid):\n    return [list(r) for r in zip(*grid)]";
+    let discriminationPrompts = 0;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        const model = String(body["model"]);
+        if (allText(messages).includes("EXECUTION FEEDBACK (discrimination)")) {
+          discriminationPrompts += 1;
+          // Judges side with the transpose reading.
+          return streamResponse(model, [withProgram(model, "the grid is transposed", transpose)]);
+        }
+        if (model === "up-glm") return streamResponse(model, [withProgram("glm", "the grid is unchanged", identity)]);
+        if (model === "up-kimi") return streamResponse(model, [withProgram("kimi", "the grid is transposed", transpose)]);
+        return streamResponse(model, [proposalText("deepseek", 1, "[[1,2],[3,4]]")]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-discrim-${Date.now()}`);
+    // The discrimination wave needs budget left after the proposal wave (the test config's 60 s deadline is too tight).
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: false, adaptive_verification: true, execution_settle_grace_seconds: 1, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(discriminationPrompts).toBeGreaterThan(0);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    expect((trace["execution"] as Record<string, unknown>)["artifact"]).toBe(true);
+    const content = result.content ?? "";
+    expect(content).toContain("[[1,3],[2,4]]");
+    expect(content).not.toContain("[[1,2],[3,4]]");
+    expect(captured.synthesis).toHaveLength(0);
+  });
+
+  it("cross-executes code solutions against every reasoner's tests and emits the best solution as the artifact", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-code-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Solve the following programming task. Return the complete solution as ONE ```python block.\n\nReturn the mean of a list of numbers; return 0.0 for an empty list.\nYou should write self-contained code starting with:\n```\ndef task_func(xs):\n```";
+    const proposalWithCode = (family: string, solution: string, tests: string) =>
+      [
+        `Approach (${family}): sum divided by length.`,
+        "```python",
+        solution,
+        "```",
+        "```python",
+        "# kernel-tests",
+        tests,
+        "```",
+        "```json",
+        JSON.stringify({ answer_summary: `${family} solution`, final_answer: null, key_claims: ["Mean is sum over count", "Empty list yields 0.0", "Works for ints"], assumptions: [], risks: [], confidence: 0.7 }),
+        "```",
+      ].join("\n");
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        const model = String(body["model"]);
+        // glm: correct; kimi: crashes on the empty list; deepseek: correct but its own test expects the wrong value (dropped as unusable).
+        if (model === "up-glm") return streamResponse(model, [proposalWithCode("glm", "def task_func(xs):\n    return sum(xs) / len(xs) if xs else 0.0", "def test_mean():\n    assert task_func([1, 2, 3]) == 2\ndef test_empty():\n    assert task_func([]) == 0.0")]);
+        if (model === "up-kimi") return streamResponse(model, [proposalWithCode("kimi", "def task_func(xs):\n    return sum(xs) / len(xs)", "def test_single():\n    assert task_func([5]) == 5")]);
+        return streamResponse(model, [proposalWithCode("deepseek", "def task_func(xs):\n    if not xs:\n        return 0.0\n    return sum(xs) / len(xs)", "def test_two():\n    assert task_func([1, 1]) == 1\ndef test_bogus():\n    assert task_func([1, 3]) == 3")]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-code-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: false, adaptive_verification: true } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    const execution = trace["execution"] as Record<string, unknown>;
+    expect(execution["codeTask"]).toBe(true);
+    expect(execution["programs"]).toBe(3);
+    expect(execution["artifact"]).toBe(true);
+    const content = result.content ?? "";
+    // The crashing solution lost; a correct solution is emitted as a python block, no LLM synthesis.
+    expect(content).toContain("```python");
+    expect(content).toMatch(/if xs else 0\.0|if not xs:/);
+    expect(content).not.toContain("# kernel-tests");
+    expect(captured.synthesis).toHaveLength(0);
+    expect(captured.proposer.some((p) => allText(p["messages"] as unknown[]).includes("# kernel-tests"))).toBe(true);
+  });
+
+  it("bounds a synthesizer that streams reasoning forever: the synthesis timeout aborts it and the chain moves on", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-synth-timeout-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "500", deepseek: "750" } });
+    const baseFetch = globalThis.fetch;
+    const synthesisModels: string[] = [];
+    let slowAborted = false;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      if (system.includes("final model of a multi-model fusion kernel")) {
+        synthesisModels.push(String(body["model"]));
+        if (String(body["model"]) === "up-glm") {
+          // Streams a reasoning delta every 100 ms forever; ends only when aborted (like a real fetch).
+          const stream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              const enc = new TextEncoder();
+              const tick = setInterval(() => controller.enqueue(enc.encode(`data: ${JSON.stringify({ id: "s", object: "chat.completion.chunk", created: 1, model: "up-glm", choices: [{ index: 0, delta: { reasoning_content: "thinking... " }, finish_reason: null }] })}\n\n`)), 100);
+              init?.signal?.addEventListener("abort", () => { clearInterval(tick); slowAborted = true; controller.error(new DOMException("Aborted", "AbortError")); }, { once: true });
+            },
+          });
+          return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+        }
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-synth-timeout-${Date.now()}`);
+    // Split vote → deep synthesis path; 45 s is the schema minimum, so shrink it through the config directly.
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, control_proposer: false, synthesis_timeout_seconds: 120 } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const started = performance.now();
+    const result = await router.route(ctx);
+    const elapsed = performance.now() - started;
+
+    expect(slowAborted).toBe(true);
+    expect(synthesisModels[0]).toBe("up-glm");
+    expect(synthesisModels.length).toBeGreaterThanOrEqual(2);
+    expect(result.content).toContain("Final synthesized answer");
+    // Primary gets 60% of the 120 s budget (72 s), then the fallback answers instantly.
+    expect(elapsed).toBeGreaterThan(60_000);
+    expect(elapsed).toBeLessThan(100_000);
+  }, 150_000);
+
+  it("extends a contested search past the band deadline once instead of settling on a split vote", async () => {
+    const run = async (extension: number) => {
+      const captured = emptyCaptured();
+      installFetch(captured, { finalAnswers: { glm: "750", kimi: "500", deepseek: "600" } }); // three-way split: contested
+      const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-extend-${extension}-${Date.now()}`);
+      // A 10 s F3 deadline cannot fit another wave (~15 s needed), so the split vote would settle after wave 1.
+      ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, control_proposer: false, search_deadline_seconds: { F2: 10, F3: 10, max: 10 }, contested_extension_seconds: extension } };
+      delete (ctx.requestData as Record<string, unknown>)["tools"];
+      const result = await router.route(ctx);
+      const reasons = result.fusionTrace!.steps.filter((s) => s.type === "escalation").map((s) => String((s.details as Record<string, unknown>)["reason"]));
+      return { waves: result.fusionTrace!.kernel!["waves"] as number, reasons, proposers: captured.proposer.length };
+    };
+    const settled = await run(0);
+    expect(settled.waves).toBe(1);
+    expect(settled.reasons[0]).toContain("cannot fit another wave");
+    const extended = await run(60);
+    expect(extended.waves).toBe(2);
+    expect(extended.reasons[0]).toContain("extending the search");
+    expect(extended.proposers).toBeGreaterThan(settled.proposers);
+  });
+
+  it("extends a wave in place when the band deadline arrives with fewer than two finished proposals and workers still streaming", async () => {
+    const run = async (extension: number, domains?: string[]) => {
+      const captured = emptyCaptured();
+      installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+      const baseFetch = globalThis.fetch;
+      globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+        if (!system.includes("independent expert reasoners")) return baseFetch(input as string, init);
+        // Slow proposer: streams a keep-alive delta every 500 ms and delivers the whole proposal after 13 s (past the 10 s deadline).
+        const full = await (await baseFetch(input as string, init)).text();
+        const enc = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            let ticks = 0;
+            const tick = setInterval(() => {
+              ticks += 1;
+              if (init?.signal?.aborted) { clearInterval(tick); controller.error(new DOMException("Aborted", "AbortError")); return; }
+              if (ticks < 26) controller.enqueue(enc.encode(`data: ${JSON.stringify({ id: "s", object: "chat.completion.chunk", created: 1, model: body["model"], choices: [{ index: 0, delta: { reasoning_content: "…" }, finish_reason: null }] })}\n\n`));
+              else { clearInterval(tick); controller.enqueue(enc.encode(full)); controller.close(); }
+            }, 500);
+            init?.signal?.addEventListener("abort", () => { clearInterval(tick); try { controller.error(new DOMException("Aborted", "AbortError")); } catch { /* closed */ } }, { once: true });
+          },
+        });
+        return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }) as unknown as typeof fetch;
+      const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-inplace-${extension}-${Date.now()}`);
+      ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, control_proposer: false, search_deadline_seconds: { F2: 10, F3: 10, max: 10 }, worker_timeout_seconds_by_band: { F2: 10, F3: 10, max: 10 }, contested_extension_seconds: extension, ...(domains !== undefined ? { in_place_extension_domains: domains } : {}) } };
+      delete (ctx.requestData as Record<string, unknown>)["tools"];
+      const result = await router.route(ctx);
+      const k = result.fusionTrace!.kernel as Record<string, unknown>;
+      return { truncated: k["truncatedWorkers"] as number, leader: (k["vote"] as Record<string, unknown> | undefined)?.["leader"] };
+    };
+    const cut = await run(0);
+    expect(cut.leader === undefined || !String(cut.leader).includes("750")).toBe(true); // every proposer was killed at the 10 s deadline: no vote
+    const kept = await run(60);
+    expect(kept.truncated).toBe(0); // the deadline moved; the streaming proposers finished
+    expect(String(kept.leader)).toContain("750");
+    // Scoped to other domains, this math task's streams are not kept alive in place.
+    const scoped = await run(60, ["legal"]);
+    expect(scoped.leader === undefined || !String(scoped.leader).includes("750")).toBe(true);
+  }, 180_000);
+
+  it("with examples_in_place_extension, keeps example-grounded max waves alive past the band cap while nothing is verified, whatever the domain scoping", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-inplace-examples-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[1,3],[2,4]]\n\nTraining pair 2\nInput (2x2):\n[[5,6],[7,8]]\nOutput (2x2):\n[[5,7],[6,8]]\n\nTest input (2x2):\n[[1,0],[0,1]]";
+    const transpose = "def solve(grid):\n    return [list(r) for r in zip(*grid)]";
+    const proposal = ["Rule: transpose", "```python", transpose, "```", "```json", JSON.stringify({ answer_summary: "transpose", final_answer: null, key_claims: ["transpose"], assumptions: [], risks: [], confidence: 0.7 }), "```"].join("\n");
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      if (!system.includes("independent expert reasoners")) return baseFetch(input as string, init);
+      // Every proposer is slow: keep-alive deltas, then the correct program after 13 s (past the 10 s cap).
+      const enc = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          let ticks = 0;
+          const tick = setInterval(() => {
+            ticks += 1;
+            if (init?.signal?.aborted) { clearInterval(tick); controller.error(new DOMException("Aborted", "AbortError")); return; }
+            if (ticks < 26) controller.enqueue(enc.encode(`data: ${JSON.stringify({ id: "s", object: "chat.completion.chunk", created: 1, model: body["model"], choices: [{ index: 0, delta: { reasoning_content: "…" }, finish_reason: null }] })}\n\n`));
+            else { clearInterval(tick); controller.enqueue(enc.encode(`data: ${JSON.stringify({ id: "s", object: "chat.completion.chunk", created: 1, model: body["model"], choices: [{ index: 0, delta: { content: proposal }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`)); controller.close(); }
+          }, 500);
+          init?.signal?.addEventListener("abort", () => { clearInterval(tick); try { controller.error(new DOMException("Aborted", "AbortError")); } catch { /* closed */ } }, { once: true });
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as unknown as typeof fetch;
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-inplace-examples-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: false, execution_repair_rounds: 0, search_deadline_seconds: { F2: 10, F3: 10, max: 10 }, worker_timeout_seconds_by_band: { F2: 10, F3: 10, max: 10 }, max_band_extension_seconds: 60, in_place_extension_domains: ["math"], examples_in_place_extension: true } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "max" };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    expect((trace["execution"] as Record<string, unknown>)["artifact"]).toBe(true);
+    expect(result.content ?? "").toContain("[[1,0],[0,1]]");
+  }, 120_000);
+
+  it("falls back to another family's synthesizer when the primary fails, and never leaks advisory notes", async () => {
+    const captured = emptyCaptured();
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const baseFetch = globalThis.fetch;
+    const synthesisModels: string[] = [];
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      if (system.includes("final model of a multi-model fusion kernel")) {
+        synthesisModels.push(String(body["model"]));
+        // The primary synthesizer (glm) is down; the alternate must take over.
+        if (String(body["model"]) === "up-glm") {
+          return new Response(JSON.stringify({ error: { message: "synthesizer unavailable" } }), { status: 503, headers: { "content-type": "application/json" } });
+        }
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-synth-fallback-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, control_proposer: false } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(synthesisModels.length).toBeGreaterThanOrEqual(2);
+    expect(synthesisModels[0]).toBe("up-glm");
+    expect(new Set(synthesisModels).size).toBeGreaterThanOrEqual(2);
+    expect(result.content).toContain("Final synthesized answer");
+    expect(result.content).not.toContain("Advisory note");
+    expect(result.fusedByModelRouting).not.toBe("glm-5.3");
+  });
+
+  it("retries a failed audit with another family instead of settling a two-family answer on an upstream error", async () => {
+    // Fresh storage: identical candidates from earlier tests would otherwise serve the audit from the work cache.
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-audit-retry-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const baseFetch = globalThis.fetch;
+    let verifierCalls = 0;
+    const verifierModels: string[] = [];
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      // Only glm + kimi propose (deepseek is down); the FIRST audit call fails upstream.
+      if (String(body["model"]) === "up-deepseek" && system.includes("independent expert reasoners")) {
+        return new Response(JSON.stringify({ error: { message: "upstream unavailable" } }), { status: 503, headers: { "content-type": "application/json" } });
+      }
+      if (system.includes("adversarial verifier")) {
+        verifierCalls += 1;
+        verifierModels.push(String(body["model"]));
+        if (verifierCalls === 1) return new Response(JSON.stringify({ error: { message: "upstream unavailable" } }), { status: 503, headers: { "content-type": "application/json" } });
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-audit-retry-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true, control_proposer: false, search_deadline_seconds: { F2: 120, F3: 120, max: 120 } } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(verifierCalls).toBe(2);
+    expect(new Set(verifierModels).size).toBe(2);
+    expect(result.fusionTrace?.kernel?.["settledAnswer"]).toBe("750");
+    expect(result.fusionTrace?.kernel?.["waves"]).toBe(1);
+  });
+
+  it("re-dispatches a proposer whose upstream call fails instantly (router cooldown answer) instead of losing that family for the wave", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-fast-fail-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const baseFetch = globalThis.fetch;
+    let deepseekProposerCalls = 0;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      if (String(body["model"]) === "up-deepseek" && system.includes("independent expert reasoners")) {
+        deepseekProposerCalls += 1;
+        // First attempt: the upstream router's instant "all routes failed"; second attempt succeeds.
+        if (deepseekProposerCalls === 1) return new Response(JSON.stringify({ error: { message: "All routes failed for model 'deepseek-v4-flash': All 0 routes failed" } }), { status: 503, headers: { "content-type": "application/json" } });
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-fast-fail-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true, control_proposer: false, worker_fast_failure_retries: 1, worker_fast_failure_backoff_seconds: 1, early_settle_min_families_by_domain: { math: 3 }, search_deadline_seconds: { F2: 600, F3: 600, max: 600 } } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect(deepseekProposerCalls).toBe(2);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    expect(trace["settledAnswer"]).toBe("750");
+    // The retried call reached the (mocked) upstream and its proposal landed: three families in the wave.
+    expect(captured.proposer.filter((p) => String(p["model"]) === "up-deepseek").length).toBe(1);
+    expect(new Set(captured.proposer.map((p) => String(p["model"]))).size).toBe(3);
+  });
+
+  it("waits the first-token budget for a queued upstream but keeps the short idle timeout once data flows", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-first-token-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const baseFetch = globalThis.fetch;
+    // Every proposer stream sits silent for 3 s (upstream queue) before its first byte.
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      const res = await baseFetch(input as string, init);
+      if (!system.includes("independent expert reasoners")) return res;
+      const text = await res.text();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          setTimeout(() => { controller.enqueue(new TextEncoder().encode(text)); controller.close(); }, 3_000);
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as unknown as typeof fetch;
+
+    const prompt = [{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }];
+    // Idle timeout 1 s alone kills every proposer during the queue wait...
+    const ctxA = makeCtx(prompt, `conv-first-token-a-${Date.now()}`);
+    ctxA.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true, control_proposer: false, worker_idle_timeout_seconds: 1, worker_first_token_timeout_seconds: 0, search_deadline_seconds: { F2: 120, F3: 120, max: 120 } } };
+    delete (ctxA.requestData as Record<string, unknown>)["tools"];
+    const a = await router.route(ctxA);
+    expect(a.fusionTrace?.kernel?.["settledAnswer"]).toBeUndefined();
+    // ...while a 10 s first-token budget rides out the queue and the wave settles.
+    const ctxB = makeCtx(prompt, `conv-first-token-b-${Date.now()}`);
+    ctxB.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true, control_proposer: false, worker_idle_timeout_seconds: 1, worker_first_token_timeout_seconds: 10, search_deadline_seconds: { F2: 120, F3: 120, max: 120 } } };
+    delete (ctxB.requestData as Record<string, unknown>)["tools"];
+    const b = await router.route(ctxB);
+    expect(b.fusionTrace?.kernel?.["settledAnswer"]).toBe("750");
+  }, 60_000);
+
+  it("caps one routing's output budget and reasoning effort without touching the other families", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-caps-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-caps-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true, control_proposer: false, worker_max_tokens: 30000, worker_max_tokens_by_band: { F2: 8000, F3: 30000, max: 30000 }, worker_max_tokens_by_routing: { "glm-5.3": 9000 }, reasoning_effort_cap_by_routing: { "glm-5.3": "medium" } } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    await router.route(ctx);
+    const glm = captured.proposer.filter((p) => String(p["model"]) === "up-glm");
+    const others = captured.proposer.filter((p) => String(p["model"]) !== "up-glm");
+    expect(glm.length).toBeGreaterThan(0);
+    for (const p of glm) { expect(p["max_tokens"]).toBe(9000); expect(p["reasoning_effort"]).toBe("medium"); }
+    for (const p of others) { expect(p["max_tokens"]).toBe(30000); expect(p["reasoning_effort"]).toBe("high"); }
+    // An explicit per-routing effort wins over the slot policy and the cap.
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-caps2-${Date.now()}`));
+    router = new FusionRouter();
+    const captured2 = emptyCaptured();
+    installFetch(captured2, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const ctx2 = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-caps2-${Date.now()}`);
+    ctx2.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true, control_proposer: false, reasoning_effort_cap_by_routing: { "kimi-k3": "low" }, reasoning_effort_by_routing: { "kimi-k3": "high", "glm-5.3": "low" } } };
+    delete (ctx2.requestData as Record<string, unknown>)["tools"];
+    await router.route(ctx2);
+    for (const p of captured2.proposer.filter((p) => String(p["model"]) === "up-kimi")) expect(p["reasoning_effort"]).toBe("high");
+    for (const p of captured2.proposer.filter((p) => String(p["model"]) === "up-glm")) expect(p["reasoning_effort"]).toBe("low");
+    // Substitutions rewrite one level for one routing (mixed example-grounded max slots: kimi's medium becomes low, deepseek's stays medium).
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-caps3-${Date.now()}`));
+    router = new FusionRouter();
+    const captured3 = emptyCaptured();
+    installFetch(captured3, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[4,3],[2,1]]\n\nTraining pair 2\nInput (2x2):\n[[5,6],[7,8]]\nOutput (2x2):\n[[8,7],[6,5]]\n\nTest input (2x2):\n[[2,3],[4,5]]";
+    const families = kernelConfig.kernel!.families.map((f) => ({ ...f, weight: f.name === "kimi" ? 4 : f.name === "deepseek" ? 4 : 1, alt_routings: [] }));
+    const ctx3 = makeCtx([{ role: "user", content: task }], `conv-caps3-${Date.now()}`);
+    ctx3.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, families, control_proposer: false, execution_verification: true, execution_repair_rounds: 0, examples_program_effort: "mixed", proposal_width: { F2: 6, F3: 6, max: 6 }, reasoning_effort_substitutions_by_routing: { "kimi-k3": { medium: "low" } } } };
+    (ctx3.requestData as Record<string, unknown>)["fusion"] = { effort: "max" };
+    delete (ctx3.requestData as Record<string, unknown>)["tools"];
+    await router.route(ctx3);
+    const kimiEfforts = new Set(captured3.proposer.filter((p) => String(p["model"]) === "up-kimi").map((p) => p["reasoning_effort"]));
+    expect(kimiEfforts.has("medium")).toBe(false);
+    expect(kimiEfforts.has("low") || kimiEfforts.has("high")).toBe(true);
+  });
+
+  it("re-dispatches a proposer whose upstream stream dies mid-generation and verifies the fresh attempt's program", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-midstream-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const baseFetch = globalThis.fetch;
+    const task = "Infer the rule; end with the output grid as JSON in a ```json block.\n\nTraining pair 1\nInput (2x2):\n[[1,2],[3,4]]\nOutput (2x2):\n[[2,1],[4,3]]\n\nTraining pair 2\nInput (2x2):\n[[5,0],[0,5]]\nOutput (2x2):\n[[0,5],[5,0]]\n\nTest input (2x3):\n[[1,2,3],[4,5,6]]";
+    const withProgram = (family: string, program: string) =>
+      [`Rule: each row is reversed`, "```python", program, "```", "```json", JSON.stringify({ answer_summary: `${family}: reverse rows`, final_answer: null, key_claims: ["Grid rule", "Applies to test", "Consistent"], assumptions: [], risks: [], confidence: 0.6 }), "```"].join("\n");
+    const program = "def solve(grid):\n    return [list(reversed(r)) for r in grid]";
+    const attempts = new Map<string, number>();
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const messages = Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : [];
+      const system = systemText(messages);
+      const model = String(body["model"]);
+      const text = allText(messages);
+      if (system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        const n = (attempts.get(model) ?? 0) + 1; attempts.set(model, n);
+        if (n === 1) {
+          // First attempt: some reasoning arrives, then the upstream drops the socket.
+          const chunk = (delta: Record<string, unknown>) => `data: ${JSON.stringify({ id: "chatcmpl-d", object: "chat.completion.chunk", created: 1, model, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`;
+          const stream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(chunk({ reasoning_content: "Let me look at the pairs carefully. Row reversal seems plausible but let me verify with pair two before I commit to anything at all here. " })));
+              setTimeout(() => controller.error(new Error("The socket connection was closed unexpectedly.")), 300);
+            },
+          });
+          return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+        }
+        return streamResponse(model, [withProgram(model, program)]);
+      }
+      if (!system.includes("final model of a multi-model fusion kernel") && !system.includes("adversarial") && text.includes("Test input")) {
+        return streamResponse(model, ["Not sure.\n```json\n[[0,0,0],[0,0,0]]\n```"]);
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: task }], `conv-midstream-${Date.now()}`);
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, execution_verification: true, control_proposer: false, adaptive_verification: true, execution_settle_grace_seconds: 1, execution_repair_rounds: 0, worker_fast_failure_retries: 1, worker_fast_failure_backoff_seconds: 1, search_deadline_seconds: { F2: 1200, F3: 1200, max: 1200 } } };
+    (ctx.requestData as Record<string, unknown>)["fusion"] = { effort: "F3" };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+
+    expect([...attempts.values()].some((n) => n >= 2)).toBe(true);
+    const trace = result.fusionTrace?.kernel as Record<string, unknown>;
+    const execution = trace["execution"] as Record<string, unknown>;
+    expect(execution["verified"] as number).toBeGreaterThan(0);
+    expect(result.content ?? "").toContain("[[3,2,1],[6,5,4]]");
+  }, 60_000);
+
+  it("caps concurrent streams per routing process-wide and staggers a wave's launches", async () => {
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-routing-cap-${Date.now()}`));
+    router = new FusionRouter();
+    const captured = emptyCaptured();
+    // Disagreeing answers: no early settle, so every slot runs to completion.
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "500", deepseek: "600" } });
+    const baseFetch = globalThis.fetch;
+    let inFlightKimi = 0, peakKimi = 0; const launchTimes: number[] = [];
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      if (system.includes("independent expert reasoners")) launchTimes.push(performance.now());
+      if (String(body["model"]) === "up-kimi" && system.includes("independent expert reasoners")) {
+        inFlightKimi += 1; peakKimi = Math.max(peakKimi, inFlightKimi);
+        const res = await baseFetch(input as string, init);
+        const text = await res.text();
+        // Hold the stream open for 400 ms so concurrency is observable.
+        const stream = new ReadableStream<Uint8Array>({ start(controller) { setTimeout(() => { controller.enqueue(new TextEncoder().encode(text)); controller.close(); inFlightKimi -= 1; }, 400); } });
+        return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+    const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], `conv-routing-cap-${Date.now()}`);
+    // Four kimi slots (weight-heavy pool), cap 1 per routing, 50 ms stagger.
+    const families = kernelConfig.kernel!.families.map((f) => (f.name === "kimi" ? { ...f, weight: 10, alt_routings: [] } : f));
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, families, control_proposer: false, adaptive_verification: false, proposal_width: { F2: 6, F3: 6, max: 6 }, worker_max_concurrency_by_routing: { "kimi-k3": 1 }, dispatch_stagger_ms: 50, search_deadline_seconds: { F2: 120, F3: 120, max: 120 } } };
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    await router.route(ctx);
+    const kimiCalls = captured.proposer.filter((p) => String(p["model"]) === "up-kimi").length;
+    expect(kimiCalls).toBeGreaterThanOrEqual(2);
+    expect(peakKimi).toBe(1);
+    launchTimes.sort((a, b) => a - b);
+    expect(launchTimes[launchTimes.length - 1]! - launchTimes[0]!).toBeGreaterThanOrEqual(50);
+  }, 30_000);
+
+  it("runs one control proposer on the verbatim task and lets its dissent block a decisive vote", async () => {
+    const mathPrompt = [{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }];
+    const controlCfg: FusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true, control_proposer: true } };
+
+    // Framed reasoners agree with the plain base-model answer → decisive, control included in the vote.
+    const agree = emptyCaptured();
+    installFetch(agree, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" }, controlAnswer: "750" });
+    const ctxA = makeCtx(mathPrompt, `conv-control-agree-${Date.now()}`);
+    ctxA.fusionConfig = controlCfg;
+    delete (ctxA.requestData as Record<string, unknown>)["tools"];
+    const a = await router.route(ctxA);
+    expect(agree.control).toHaveLength(1);
+    const controlMessages = agree.control[0]!["messages"] as Array<Record<string, unknown>>;
+    expect(controlMessages.some((m) => m["role"] === "system")).toBe(false);
+    expect(String(controlMessages[0]!["content"])).toBe(mathPrompt[0]!.content);
+    expect(agree.proposer).toHaveLength(2);
+    expect(a.fusionTrace?.kernel?.["settledAnswer"]).toBe("750");
+
+    // Framed reasoners drift to 500 while the plain base model says 750 → NOT decisive: full verification, deep synthesis.
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-control-${Date.now()}`));
+    router = new FusionRouter();
+    const drift = emptyCaptured();
+    installFetch(drift, { finalAnswers: { glm: "500", kimi: "500", deepseek: "500" }, controlAnswer: "750" });
+    const ctxB = makeCtx(mathPrompt, `conv-control-drift-${Date.now()}`);
+    ctxB.fusionConfig = controlCfg;
+    delete (ctxB.requestData as Record<string, unknown>)["tools"];
+    const b = await router.route(ctxB);
+    expect(drift.control).toHaveLength(1);
+    expect(b.fusionTrace?.kernel?.["settledAnswer"]).toBeUndefined();
+    const synth = allText(drift.synthesis[0]!["messages"] as unknown[]);
+    expect(synth).toContain("SPLIT");
+    expect(synth).toContain("750");
+  });
+
+  it("settles a proposal wave before numeric quorum when two families agree on the final answer and an audit confirmed it", async () => {
+    const conversationId = `conv-evidence-settle-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured, { finalAnswers: { glm: "750", kimi: "750", deepseek: "750" } });
+    const baseFetch = globalThis.fetch;
+    let glmAborted = false;
+    // The glm proposer only emits keep-alive comments (a silently thinking model) until aborted.
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const system = systemText(Array.isArray(body["messages"]) ? (body["messages"] as unknown[]) : []);
+      if (String(body["model"]) === "up-glm" && system.includes("independent expert reasoners")) {
+        captured.proposer.push(body);
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            const tick = setInterval(() => controller.enqueue(new TextEncoder().encode(": keep-alive\n\n")), 100);
+            init?.signal?.addEventListener("abort", () => {
+              clearInterval(tick);
+              glmAborted = true;
+              controller.error(new DOMException("Aborted", "AbortError"));
+            }, { once: true });
+          },
+        });
+        return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return baseFetch(input as string, init);
+    }) as unknown as typeof fetch;
+
+    const ctx = makeCtx([{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }], conversationId);
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    // Quorum needs all three; grace is long: only the evidence-based settle can end the wave quickly.
+    ctx.fusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true, wave_quorum: 1, straggler_grace_seconds: 30, worker_timeout_seconds: 120 } };
+    const started = performance.now();
+    const result = await router.route(ctx);
+    const elapsed = performance.now() - started;
+
+    expect(glmAborted).toBe(true);
+    expect(elapsed).toBeLessThan(8_000);
+    expect(result.fusionTrace?.kernel?.["earlySettles"] as number).toBeGreaterThanOrEqual(1);
+    expect(result.fusionTrace?.kernel?.["cancelledWorkers"] as number).toBeGreaterThanOrEqual(1);
+    expect(result.fusionTrace?.kernel?.["settledAnswer"]).toBe("750");
+    // Exactly one pipelined audit ran; kimi + deepseek agreement plus that audit settled the wave.
+    expect(captured.verifier).toHaveLength(1);
+  });
+
+  it("serves Anthropic-protocol clients: fast path converts the request and emits Anthropic events; search synthesizes through the fuser", async () => {
+    const conversationId = `conv-anthropic-${Date.now()}`;
+    const captured = emptyCaptured();
+    installFetch(captured);
+    const anthropicCfg: FusionConfig = { ...kernelConfig, fusion: { ...kernelConfig.fusion, wire_protocol: "anthropic" } };
+    const makeAnthropicCtx = (messages: unknown[], extra: Record<string, unknown> = {}): FusionRequestContext => ({
+      logicalModel: "fusion-max",
+      fusionConfig: anthropicCfg,
+      requestData: { model: "fusion-max", max_tokens: 200, system: SYSTEM.content, messages, ...extra },
+      clientProtocol: "anthropic",
+      messages,
+      conversationId,
+      requestId: `req-${Math.random().toString(16).slice(2)}`,
+    });
+
+    // Fast path, non-streaming: request converted to OpenAI shape upstream, assembled back.
+    const trivial = [{ role: "user", content: "What is 2+2?" }];
+    const fast = await router.route(makeAnthropicCtx(trivial, { reasoning_effort: "low" }));
+    expect(fast.content).toContain("Final synthesized answer");
+    expect(fast.wireProtocol).toBe("anthropic");
+    const fastBody = captured.synthesis[0]!;
+    expect(fastBody["stream"]).toBe(true);
+    expect(fastBody["model"]).toBe("up-flash");
+    const upstreamRoles = (fastBody["messages"] as Array<Record<string, unknown>>).map((m) => m["role"]);
+    expect(upstreamRoles[0]).toBe("system");
+
+    // Fast path, streaming: events are Anthropic SSE.
+    const streamed = await collectStream(router.stream(makeAnthropicCtx(trivial, { reasoning_effort: "low", stream: true })));
+    expect(streamed).toContain("event: message_start");
+    expect(streamed).toContain("text_delta");
+    expect(streamed).toContain("event: message_stop");
+    expect(streamed).not.toContain("chat.completion.chunk");
+
+    // Search turn (F2) streams Anthropic thinking narration + synthesized text.
+    const goal = [{ role: "user", content: GOAL }];
+    const search = await collectStream(router.stream(makeAnthropicCtx(goal, { reasoning_effort: "high", stream: true })));
+    expect(search).toContain("thinking_delta");
+    expect(search).toContain("Kernel: new task");
+    expect(search).toContain("Final synthesized answer");
+    expect(captured.proposer.length).toBe(3);
+  });
+
+  it("adapts verification to the final-answer vote: unanimous → one audit, split → every candidate audited", async () => {
+    const adaptiveCfg: FusionConfig = { ...kernelConfig, kernel: { ...kernelConfig.kernel!, adaptive_verification: true } };
+    const mathPrompt = [{ role: "user", content: "How many positive integers n <= 1000 make n^5 - n divisible by 60? End with FINAL: <answer>." }];
+
+    const unanimous = emptyCaptured();
+    installFetch(unanimous, { finalAnswers: { glm: "750", kimi: "750", deepseek: "$750$" } });
+    const ctxA = makeCtx(mathPrompt, `conv-vote-unanimous-${Date.now()}`);
+    ctxA.fusionConfig = adaptiveCfg;
+    delete (ctxA.requestData as Record<string, unknown>)["tools"];
+    const a = await router.route(ctxA);
+    expect(unanimous.proposer).toHaveLength(3);
+    expect(unanimous.verifier).toHaveLength(1);
+    const synthA = allText(unanimous.synthesis[0]!["messages"] as unknown[]);
+    expect(synthA).toContain("FINAL ANSWER VOTE");
+    expect(synthA).toContain("UNANIMOUS");
+    expect(a.fusionTrace?.kernel?.["agreement"] as number).toBeGreaterThanOrEqual(0.7);
+    // Settled answer → presentation-mode synthesis at low reasoning effort.
+    expect(a.fusionTrace?.kernel?.["settledAnswer"]).toBe("750");
+    expect(unanimous.synthesis[0]!["reasoning_effort"]).toBe("low");
+
+    // Fresh storage + router: the work cache is content-addressed, so identical
+    // glm/deepseek proposals from the unanimous run would otherwise be reused.
+    closeOperationalDbForTests();
+    setStorageRootForTests(path.join(tmpRoot, `storage-split-${Date.now()}`));
+    router = new FusionRouter();
+    const split = emptyCaptured();
+    installFetch(split, { finalAnswers: { glm: "750", kimi: "500", deepseek: "750" } });
+    const ctxB = makeCtx(mathPrompt, `conv-vote-split-${Date.now()}`);
+    ctxB.fusionConfig = adaptiveCfg;
+    delete (ctxB.requestData as Record<string, unknown>)["tools"];
+    await router.route(ctxB);
+    expect(split.proposer).toHaveLength(3);
+    expect(split.verifier).toHaveLength(3);
+    const synthB = allText(split.synthesis[0]!["messages"] as unknown[]);
+    expect(synthB).toContain("SPLIT");
+    expect(synthB).toContain("500");
+    expect(synthB).toContain("asserted by kimi");
+    // Split vote → bounded deep synthesis (medium), never open-ended default thinking.
+    expect(split.synthesis[0]!["reasoning_effort"]).toBe("medium");
+  });
+
+  it("uses the fast path for trivial fresh requests and still records the ledger for later continuation", async () => {
+    const conversationId = `conv-fast-${Date.now()}`;
+    const captured = emptyCaptured();
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      captured.models.push(String(body["model"]));
+      return chatResponse({ role: "assistant", content: "4" }, body["model"]);
+    }) as unknown as typeof fetch;
+    const ctx = makeCtx([{ role: "user", content: "What is 2+2?" }], conversationId, { reasoning_effort: "low" });
+    delete (ctx.requestData as Record<string, unknown>)["tools"];
+    const result = await router.route(ctx);
+    expect(result.content).toBe("4");
+    expect(captured.models).toEqual(["up-flash"]);
+    expect(result.fusionTrace?.kernel?.["mode"]).toBe("fast");
+    const session = getOperationalDb().query("SELECT ledger_json FROM fusion_kernel_sessions WHERE conversation_id = ?").get(conversationId) as { ledger_json: string };
+    expect(JSON.parse(session.ledger_json)["intent"]["goal"]).toBe("What is 2+2?");
+  });
+});

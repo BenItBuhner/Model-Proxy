@@ -354,7 +354,13 @@ export interface SummarySegment {
 }
 
 /** Hard wall-clock budget for a single summary segment (stream included). */
-const SUMMARIZE_DEADLINE_MS = 30_000;
+const SUMMARIZE_DEADLINE_MS = 15_000;
+
+/** Consecutive summarizer failures before the breaker opens (local fallback only). */
+const SUMMARIZER_BREAKER_FAILURES = 2;
+
+/** How long the breaker stays open before the summarizer model is retried. */
+const SUMMARIZER_BREAKER_OPEN_MS = 120_000;
 
 const SUMMARIZER_SYSTEM_PROMPT = `You are a live reasoning summarizer embedded in a multi-model pipeline. You receive a raw segment of another model's working notes (chain-of-thought, analysis-in-progress, or draft output) and produce a clean, terse narration of what is being done and found.
 
@@ -377,9 +383,38 @@ Hard rules:
  */
 export class ReasoningSummarizer {
   private readonly fallbackRouter: FallbackRouter;
+  private consecutiveFailures = 0;
+  private breakerOpenUntil = 0;
 
   constructor(fallbackRouter?: FallbackRouter) {
     this.fallbackRouter = fallbackRouter ?? new FallbackRouter();
+  }
+
+  /**
+   * Circuit breaker: when the summarizer routing keeps timing out, every
+   * segment would otherwise cost a full deadline before falling back. After
+   * SUMMARIZER_BREAKER_FAILURES consecutive failures the model is skipped and
+   * segments use the local compact summary until the breaker half-opens.
+   */
+  breakerOpen(): boolean {
+    return Date.now() < this.breakerOpenUntil;
+  }
+
+  private recordFailure(label: string): void {
+    this.consecutiveFailures += 1;
+    if (this.consecutiveFailures >= SUMMARIZER_BREAKER_FAILURES && !this.breakerOpen()) {
+      this.breakerOpenUntil = Date.now() + SUMMARIZER_BREAKER_OPEN_MS;
+      log.warn("summarizer breaker opened; using local compact summaries", {
+        label,
+        failures: this.consecutiveFailures,
+        reopenInMs: SUMMARIZER_BREAKER_OPEN_MS,
+      });
+    }
+  }
+
+  private recordSuccess(): void {
+    this.consecutiveFailures = 0;
+    this.breakerOpenUntil = 0;
   }
 
   configFor(ctx: FusionRequestContext): FusionSummarizerConfig {
@@ -412,6 +447,12 @@ export class ReasoningSummarizer {
     const cfg = this.configFor(ctx);
     const trimmed = stripToolCallArtifacts(segment.text).trim();
     if (trimmed.length === 0) return;
+
+    if (this.breakerOpen()) {
+      const fallback = compactFallbackSummary(trimmed);
+      if (fallback.length > 0) yield fallback;
+      return;
+    }
 
     const userParts: string[] = [];
     if (previousSummary !== undefined && previousSummary.trim().length > 0) {
@@ -494,6 +535,8 @@ export class ReasoningSummarizer {
       }
       if (!emitted) {
         yield compactFallbackSummary(trimmed);
+      } else {
+        this.recordSuccess();
       }
     } catch (err) {
       log.warn("summarizer call failed; using compact fallback", {
@@ -501,6 +544,7 @@ export class ReasoningSummarizer {
         model: cfg.model_routing,
         error: String(err),
       });
+      this.recordFailure(segment.label);
       // Only fall back if nothing streamed yet — never append a raw excerpt
       // after a partial model summary.
       if (!emitted) {
@@ -661,9 +705,17 @@ export class SummaryPump {
   /**
    * Close the output stream once all queued segments finish.
    * Safe to call while the consumer is still iterating chunks().
+   *
+   * `discardQueued` drops segments that have not started summarizing yet, so a
+   * slow summarizer backlog never delays the answer that follows; the segment
+   * currently in flight still completes.
    */
-  finish(): void {
+  finish(options: { discardQueued?: boolean } = {}): void {
     this.closing = true;
+    if (options.discardQueued === true && this.waiting.length > 0) {
+      log.debug("summary pump discarding queued segments", { discarded: this.waiting.length });
+      this.waiting.length = 0;
+    }
     this.notify?.();
     // Close the queue even if the worker died — otherwise chunks() consumers
     // (and thus the whole client stream) would hang forever.

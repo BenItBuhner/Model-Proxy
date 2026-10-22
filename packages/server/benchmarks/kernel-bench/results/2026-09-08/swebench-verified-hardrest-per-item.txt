@@ -1,0 +1,22 @@
+SWE-bench Verified, remaining hard-tier instances (1–4 h / >4 h) of the eligible pool: 11 instances not in sample B. Members and fusion (v62: deepseek executor); the two fusion misses re-run once on the executor-rotation build (v65).
+
+instance                  glm-5.3             kimi-k3             deepseek-v4-pro-0813fusion v62          fusion v65-rotation 
+django__django-14007      ✗                   ✗                   ✓                   ✓                   –                   
+django__django-15128      ✗                   ✗                   ✓                   ✓                   –                   
+django__django-15268      ✗                   ✗                   ✓                   ✓                   –                   
+pylint-dev__pylint-4551   ✓                   ✓                   ✓                   ✓                   –                   
+pylint-dev__pylint-8898   ✓                   ✓                   ✓                   ✓                   –                   
+sympy__sympy-12489        ✓                   ✓                   ✗                   ✓                   –                   
+sympy__sympy-13852        ✓                   ✗                   ✓                   ✗                   ✓                   
+sympy__sympy-14248        ✓                   ✓                   ✓                   ✓                   –                   
+sympy__sympy-16597        ✓                   ✗                   ✗                   ✗                   ✓                   
+sympy__sympy-17630        ✗                   ✗                   ✗                   ✓                   –                   
+sympy__sympy-18199        ✗                   ✗                   ✗                   ✓                   –                   
+glm-5.3                   6/11
+kimi-k3                   4/11
+deepseek-v4-pro-0813      7/11
+fusion-max@v62            9/11
+fusion-max@v65-rotation   2/2
+members union             9/11
+
+Whole hard tier (23 instances = sample B 12 + these 11): fusion 21/23 (v55+v62), 23/23 with the rotation re-runs; deepseek 18/23; glm 13/23; kimi 11/23. All 34 distinct instances measured across samples: fusion 32/34 single-build, 34/34 with rotation re-runs; deepseek 28/34; glm 26/34; kimi 22/34.

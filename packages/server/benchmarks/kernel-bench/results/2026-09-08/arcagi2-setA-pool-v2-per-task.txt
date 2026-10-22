@@ -1,0 +1,29 @@
+ARC-AGI-2 set A (20 tasks), max effort, single run per configuration. v47 = trio pool 2026-09-06 (healthy upstream); pool v2 runs 2026-09-08 (upstream ~1.6x more worker timeouts per task): width10 partial, width7 partial, lean (width 6, 5 scoped families) complete.
+
+task       v47max | v2 w10 | v2 w7 | v2 lean | lean s  | timeouts lean
+7ed72f31   ✓      | ✓      | ✓     | ✓       |    211s | 2
+53fb4810   ✓      | ✓      | ✗     | ✓       |    394s | 2
+20270e3b   ✓      | ✓      | ✓     | ✓       |    664s | 8
+28a6681f   ✓      | ✗      | ✗     | ✗       |   2367s | 5
+898e7135   ✓      | ✗      | ✗     | ✗       |   2384s | 8
+409aa875   ✓      | –      | ✓     | ✓       |    856s | 3
+4c416de3   ✗      | –      | ✗     | ✗       |   3214s | 12
+b10624e5   ✓      | –      | ✓     | ✓       |   1410s | 5
+7b5033c1   ✗      | –      | –     | ✗       |    101s | 1
+eee78d87   ✓      | –      | –     | ✓       |    477s | 2
+d8e07eb2   ✓      | –      | –     | ✓       |    393s | 7
+7b3084d4   ✗      | –      | –     | ✗       |   2370s | 9
+64efde09   ✗      | –      | –     | ✓       |   3487s | 12
+65b59efc   ✓      | –      | –     | ✓       |    246s | 2
+36a08778   ✓      | –      | –     | ✓       |    189s | 3
+271d71e2   ✓      | –      | –     | ✓       |   2297s | 4
+db0c5428   ✓      | –      | –     | ✓       |   1107s | 6
+20a9e565   ✗      | –      | –     | ✗       |   2532s | 6
+db695cfb   ✓      | –      | –     | ✓       |    147s | 3
+80a900e0   ✓      | –      | –     | ✗       |   3000s | 15
+
+fusion v47 max (9/06)       15/20
+pool v2 lean max (9/08)     13/20   p50 1107s   timeouts/task 5.8
+v47 same items timeouts/task 6.6
+lean solves v47 misses: 64efde09; v47 solves lean misses: 28a6681f,898e7135,80a900e0
+v47 ∪ lean: 16/20

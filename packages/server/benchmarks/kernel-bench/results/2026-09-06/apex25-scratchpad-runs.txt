@@ -1,0 +1,14 @@
+Apex 2025 scratchpad runs (regraded):
+apex25:2   fusion-max@v34-scratchpad-max  ✗ \frac{3}{4}
+apex25:2   fusion-max@v36-scratchpad-max  ✗ \frac{3}{4}
+apex25:9   fusion-max@v36-scratchpad-max  ✓ $\frac{8\pi}{3}+2\sqrt{3
+apex25:12  fusion-max@v36-scratchpad-max  ✗ 4048
+apex25:10  fusion-max@v36-scratchpad-max  ✓ 213
+apex25:5   fusion-max@v36-scratchpad      ✓ 6
+apex25:4   fusion-max@v36-scratchpad      ✗ -1
+apex25:1   fusion-max@v40-scratchpad      ✗ 15
+apex25:5   fusion-max@v40-scratchpad      ✗ 21
+apex25:1   fusion-max@v41-max             ✗ 2025
+apex25:5   fusion-max@v41-max             ✓ 6
+apex25:4   fusion-max@v41-max             ✗ 200
+apex25:1   fusion-max@v42-max             ✗ 15

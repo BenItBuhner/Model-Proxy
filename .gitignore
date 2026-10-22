@@ -67,3 +67,4 @@ deploy/bluegreen-state.env
 # Keep these tracked (negations):
 !config/providers/.gitkeep
 !config/models/.gitkeep
+.kb/

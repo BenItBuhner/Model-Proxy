@@ -7,7 +7,16 @@ export type PhaseKey =
   | "task_division"
   | "subagent_execution"
   | "synthesis"
-  | "fast_path";
+  | "fast_path"
+  // Kernel engine phases
+  | "turn_classification"
+  | "intent"
+  | "proposal"
+  | "verification"
+  | "escalation"
+  | "continuation"
+  | "repair"
+  | "checkpoint";
 
 export const PHASE_LABEL: Record<PhaseKey, string> = {
   image_preprocessing: "images",
@@ -17,7 +26,27 @@ export const PHASE_LABEL: Record<PhaseKey, string> = {
   subagent_execution: "subagents",
   synthesis: "synthesis",
   fast_path: "fast path",
+  turn_classification: "turn",
+  intent: "intent",
+  proposal: "proposals",
+  verification: "verification",
+  escalation: "consensus",
+  continuation: "continuation",
+  repair: "repair",
+  checkpoint: "checkpoint",
 };
+
+/** Phases produced only by the kernel engine (used to tag the pipeline as kernel-driven). */
+export const KERNEL_PHASES: ReadonlySet<PhaseKey> = new Set<PhaseKey>([
+  "turn_classification",
+  "intent",
+  "proposal",
+  "verification",
+  "escalation",
+  "continuation",
+  "repair",
+  "checkpoint",
+]);
 
 export interface PhaseState {
   key: PhaseKey;
@@ -37,14 +66,40 @@ export interface SubagentState {
   chars?: number;
   durationMs?: number;
   error?: string;
+  /** Kernel worker role (proposer / verifier / repair / checkpoint). */
+  role?: string;
   detail?: Record<string, unknown>;
   startedAtMs?: number;
 }
 
+export type CacheKind = "request" | "conversation" | "subtask" | "work" | "ledger";
+
 export interface CacheState {
-  kind: "request" | "conversation" | "subtask";
+  kind: CacheKind;
   hit: boolean;
   detail?: string;
+}
+
+/** Compact kernel summary attached to kernel-engine traces. */
+export interface KernelTraceLike {
+  engine?: string;
+  turn?: string;
+  turnReason?: string;
+  mode?: string;
+  band?: string;
+  requestedEffort?: string;
+  waves?: number;
+  agreement?: number;
+  workItems?: number;
+  cachedWorkItems?: number;
+  continuationSteps?: number;
+  totalContinuationSteps?: number;
+  findings?: number;
+  negatives?: number;
+  executorRouting?: string;
+  checkpoint?: boolean;
+  repair?: { signature: string; attempts: number; exhausted: boolean };
+  totalMs?: number;
 }
 
 export interface SummaryEntry {
@@ -98,6 +153,7 @@ export interface FusionTraceLike {
     userCostUsd: number;
     typicalCostUsd: number;
   }>;
+  kernel?: KernelTraceLike;
 }
 
 export interface PipelineState {
@@ -204,6 +260,7 @@ export function derivePipelineState(events: RequestEvent[]): PipelineState {
             chars: event.chars,
             durationMs: event.durationMs,
             error: event.error,
+            role: event.role,
             detail: event.detail,
             startedAtMs: Date.parse(event.at),
           });
@@ -286,12 +343,26 @@ export function normalizeStepType(type: string): PhaseKey {
     case "task_division":
     case "subagent_execution":
     case "synthesis":
+    case "turn_classification":
+    case "intent":
+    case "proposal":
+    case "verification":
+    case "escalation":
+    case "continuation":
+    case "repair":
+    case "checkpoint":
       return type;
     case "effort_1_fast_path":
       return "fast_path";
     default:
       return "complexity_scoring";
   }
+}
+
+/** True when the pipeline was driven by the kernel engine. */
+export function isKernelPipeline(state: PipelineState): boolean {
+  if (state.completed?.trace?.kernel?.engine === "kernel") return true;
+  return state.phases.some((phase) => KERNEL_PHASES.has(phase.key));
 }
 
 function mergeDetail(

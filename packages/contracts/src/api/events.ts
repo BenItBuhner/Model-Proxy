@@ -186,7 +186,16 @@ export type RequestEvent =
         | "task_division"
         | "subagent_execution"
         | "synthesis"
-        | "fast_path";
+        | "fast_path"
+        // Kernel engine phases
+        | "turn_classification"
+        | "intent"
+        | "proposal"
+        | "verification"
+        | "escalation"
+        | "continuation"
+        | "repair"
+        | "checkpoint";
       status: "started" | "completed" | "failed";
       durationMs?: number;
       modelRouting?: string;
@@ -195,7 +204,7 @@ export type RequestEvent =
   | {
       type: "fusion.cache";
       at: string;
-      kind: "request" | "conversation" | "subtask";
+      kind: "request" | "conversation" | "subtask" | "work" | "ledger";
       hit: boolean;
       detail?: string;
     }
@@ -215,6 +224,8 @@ export type RequestEvent =
       chars?: number;
       durationMs?: number;
       error?: string;
+      /** Kernel worker role (proposer / verifier / intent / repair); absent for legacy subagents. */
+      role?: string;
       /** Extra structured detail (e.g. research tool executions). */
       detail?: Record<string, unknown>;
     }

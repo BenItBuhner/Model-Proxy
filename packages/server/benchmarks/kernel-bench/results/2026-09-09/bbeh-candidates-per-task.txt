@@ -1,0 +1,31 @@
+BBEH, 24 items (the deterministic n=23 one-per-task sample plus one item from the first pass; all are in the 46-item fusion/member set), candidate members vs trio members vs fusion-max F3 (v72). reasoning_effort high, 1800 s cap; ! = failed/timed out (strict: counts as wrong). All cells regraded with the current exact grader. 2026-09-10.
+
+task                       mimo  dsflash glm5.2 | dspro glm53 kimi | fusion
+boardgame_qa-131           ✓     ✓       ✓      | ✓     ✓     ✓    | ✓
+boardgame_qa-149           ✓     ✓       ✓      | ✓     ✓     ✓    | ✓
+boolean_expressions-10     ✓     ✓       ✓      | ✓     ✓     ✓    | ✓
+buggy_tables-114           ✓     ✗       ✓      | ✓     ✓     ✓    | ✓
+causal_understanding-197   ✓     ✓       ✓      | ✓     ✓     ✓    | ✓
+disambiguation_qa-64       ✓     ✓       ✓      | ✓     ✓     ✗    | ✓
+dyck_languages-116         ✓     ✓       ✓      | ✓     ✓     ✓    | ✓
+geometric_shapes-86        ✓     !       ✓      | ✓     ✗     ✓    | ✓
+hyperbaton-154             ✓     ✓       ✗      | ✗     ✗     ✗    | ✓
+linguini-34                ✗     ✗       ✗      | ✗     ✗     ✗    | ✗
+movie_recommendation-92    ✗     ✗       ✗      | ✗     ✗     ✓    | ✓
+multistep_arithmetic-43    ✓     ✓       ✓      | ✓     ✓     ✓    | ✓
+nycc-53                    ✓     ✗       ✗      | ✗     ✓     ✓    | ✓
+object_counting-75         ✓     ✓       ✓      | ✓     ✓     ✓    | ✓
+object_properties-117      !     ✗       ✓      | ✗     ✓     ✓    | ✓
+sarc_triples-11            ✓     ✓       ✓      | ✓     ✓     ✓    | ✓
+shuffled_objects-98        ✓     ✓       ✗      | ✓     ✗     ✓    | ✓
+spatial_reasoning-32       ✓     ✓       ✓      | ✗     ✓     ✓    | ✓
+sportqa-130                ✓     ✓       ✓      | ✓     ✓     ✓    | ✓
+temporal_sequence-47       ✗     ✓       ✓      | ✗     ✓     ✓    | ✓
+time_arithmetic-145        ✓     ✓       ✓      | ✓     ✓     ✓    | ✓
+web_of_lies-149            ✓     ✓       ✓      | ✓     ✓     ✓    | ✓
+word_sorting-145           ✗     ✗       ✗      | ✗     ✗     ✗    | ✗
+zebra_puzzles-6            ✓     ✓       ✓      | ✓     ✓     ✓    | ✓
+
+totals (of 24): mimo-v2.5-pro 19 · deepseek-v4-flash-0731 17 · glm-5.2 18 · deepseek-v4-pro 16 · glm-5.3 18 · kimi-k3 20 · fusion v72 22
+failed/timed-out calls: mimo-v2.5-pro 1, deepseek-v4-flash-0731 1, glm-5.2 0 (kimi-k2.7-code dropped after 2 of its first 3 calls returned upstream 500 after 400–800 s).
+Reading: mimo-v2.5-pro (19) beats two of the three trio members on these items (deepseek-v4-pro 16, glm-5.3 18) and trails only kimi-k3 (20); deepseek-v4-flash (17) and glm-5.2 (18) sit inside the trio's range. Unions: trio 21/24; trio + mimo 22; trio + deepseek-v4-flash 22; trio + glm-5.2 21 — the one item the trio never solves and a candidate does is hyperbaton-154 (mimo and deepseek-v4-flash). Fusion v72 (22/24) already has it: deepseek-v4-flash is a shipped alternate on the deepseek family, which is where today's hyperbaton-154 flip came from. Pool decision: alternates confirmed for reasoning tasks; mimo stays scoped to example-grounded tasks (its BBEH edge over deepseek-v4-pro is 3 items on 24 and it adds nothing beyond the alternate).
