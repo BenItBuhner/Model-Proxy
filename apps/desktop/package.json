@@ -10,8 +10,8 @@
     "typecheck": "echo 'desktop shell is plain JS; nothing to typecheck'"
   },
   "devDependencies": {
-    "electron": "^33.2.0",
-    "electron-builder": "^25.1.8"
+    "electron": "^44.9.3",
+    "electron-builder": "^26.18.0"
   },
   "overrides": {
     "tar": "7.5.22",
