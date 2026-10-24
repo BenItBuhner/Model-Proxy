@@ -17,7 +17,7 @@ OpenAI- and Anthropic-compatible LLM proxy on **Bun** and **TypeScript**. Route 
 
 ## Requirements
 
-- [Bun](https://bun.sh) ≥ 1.1 (runtime and tests)
+- [Bun](https://bun.sh) ≥ 1.4.4 (runtime and tests; 1.4.4 fixes CVE-2026-111497)
 - Docker optional (recommended for production)
 
 ## Quick start (Docker)

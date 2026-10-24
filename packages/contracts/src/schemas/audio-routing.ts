@@ -23,7 +23,7 @@ export const AudioCapabilitiesSchema = z
     url_input: z.boolean().default(false),
   })
   .partial()
-  .default({});
+  .prefault({});
 
 export const AudioRouteConfigSchema = z
   .object({

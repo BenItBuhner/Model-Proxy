@@ -13,8 +13,8 @@ export const TokenPricingSchema = z
 
 export const PricingConfigSchema = z
   .object({
-    user_cost: TokenPricingSchema.default({}),
-    typical_cost: TokenPricingSchema.default({}),
+    user_cost: TokenPricingSchema.prefault({}),
+    typical_cost: TokenPricingSchema.prefault({}),
   })
   .passthrough();
 
