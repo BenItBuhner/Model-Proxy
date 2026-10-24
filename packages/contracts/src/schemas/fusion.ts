@@ -161,10 +161,10 @@ export const FusionConfigSchema = z
     context_window: z.number().int().positive().default(10_000_000),
 
     // Layer 2: Complexity scoring
-    complexity_scoring: ComplexityScoringConfigSchema.default({}),
+    complexity_scoring: ComplexityScoringConfigSchema.prefault({}),
 
     // Layer 3: Task divider
-    task_divider: TaskDividerConfigSchema.default({}),
+    task_divider: TaskDividerConfigSchema.prefault({}),
 
     // Layer 4: Effort-level subagent configurations
     effort_levels: z.object({
@@ -177,13 +177,13 @@ export const FusionConfigSchema = z
     fusion: FusionSynthesisConfigSchema,
 
     // Live reasoning summarizer (streams summaries of subagent + synthesis reasoning)
-    summarizer: FusionSummarizerConfigSchema.default({}),
+    summarizer: FusionSummarizerConfigSchema.prefault({}),
 
     // Layer 1: Cache
-    cache: FusionCacheConfigSchema.default({}),
+    cache: FusionCacheConfigSchema.prefault({}),
 
     // Bounded scheduler controls for optional nested Fusion.
-    scheduler: FusionSchedulerConfigSchema.default({}),
+    scheduler: FusionSchedulerConfigSchema.prefault({}),
   })
   .strict();
 

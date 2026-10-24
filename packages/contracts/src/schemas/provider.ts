@@ -15,7 +15,7 @@ export const ApiKeyPatternSchema = z
     /** Used when no env vars match (e.g. OpenCode Zen free tier uses `"public"`). */
     default_value: z.string().optional(),
     description: z.string().optional(),
-    pricing_by_env_var: z.record(PricingConfigSchema).optional(),
+    pricing_by_env_var: z.record(z.string(), PricingConfigSchema).optional(),
   })
   .passthrough();
 
@@ -61,7 +61,7 @@ export const AuthenticationSchema = z
     type: z.enum(["bearer", "x-api-key", "api-key-header", "none"]),
     header_name: z.string().min(1).optional(),
     header_format: z.string().optional(),
-    additional_headers: z.record(z.string()).optional(),
+    additional_headers: z.record(z.string(), z.string()).optional(),
   })
   .passthrough();
 
@@ -70,7 +70,7 @@ export const RequestConfigSchema = z
     timeout_seconds: z.number().int().positive().default(60),
     max_retries: z.number().int().nonnegative().default(0),
     retry_on_status: z.array(z.number().int()).default([]),
-    default_parameters: z.record(z.unknown()).default({}),
+    default_parameters: z.record(z.string(), z.unknown()).default({}),
     required_parameters: z.array(z.string()).default([]),
   })
   .passthrough();
@@ -126,11 +126,11 @@ export const ProviderConfigSchema = z
     api_keys: ApiKeyPatternSchema,
     endpoints: EndpointsSchema,
     authentication: AuthenticationSchema,
-    request_config: RequestConfigSchema.default({}),
-    rate_limiting: RateLimitingSchema.default({}),
-    models: z.record(z.unknown()).default({}),
+    request_config: RequestConfigSchema.prefault({}),
+    rate_limiting: RateLimitingSchema.prefault({}),
+    models: z.record(z.string(), z.unknown()).default({}),
     default_pricing: PricingConfigSchema.optional(),
-    error_handling: z.record(ErrorActionSchema).default({}),
+    error_handling: z.record(z.string(), ErrorActionSchema).default({}),
     proxy_support: z
       .object({
         enabled: z.boolean().default(false),
@@ -139,7 +139,7 @@ export const ProviderConfigSchema = z
       })
       .passthrough()
       .optional(),
-    model_mapping: z.record(z.string()).default({}),
+    model_mapping: z.record(z.string(), z.string()).default({}),
     egress_proxies: EgressProxiesSchema.optional(),
   })
   .passthrough();

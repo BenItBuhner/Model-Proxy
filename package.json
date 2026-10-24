@@ -21,7 +21,13 @@
     "eval:fusion-scorecard": "bun run --cwd packages/server eval:fusion-scorecard",
     "typecheck": "bun run --cwd packages/contracts typecheck && bun run --cwd packages/server typecheck && bun run --cwd apps/web typecheck"
   },
+  "overrides": {
+    "postcss": "8.5.31",
+    "postcss-selector-parser": "7.1.7",
+    "protobufjs": "7.6.6",
+    "source-map-js": "1.2.2"
+  },
   "engines": {
-    "bun": ">=1.1.0"
+    "bun": ">=1.4.4"
   }
 }

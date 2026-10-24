@@ -37,9 +37,9 @@ export const RouteConfigSchema = z
     /** Auth mode override for providers like OpenCode Zen (`public` = Bearer public). */
     auth_mode: z.enum(["public", "key"]).optional(),
     /** Route-level body fields used only when the request omits that OpenAI field. */
-    openai_body_defaults: z.record(z.unknown()).optional(),
+    openai_body_defaults: z.record(z.string(), z.unknown()).optional(),
     /** Route-level body fields merged into OpenAI-compatible chat requests. */
-    openai_body_extensions: z.record(z.unknown()).optional(),
+    openai_body_extensions: z.record(z.string(), z.unknown()).optional(),
     /** Optional cost assumptions for analytics. */
     pricing: PricingConfigSchema.optional(),
   })

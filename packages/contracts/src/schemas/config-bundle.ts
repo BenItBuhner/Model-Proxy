@@ -18,10 +18,10 @@ export const BundleApiKeyEntrySchema = z
 
 export const BundleSetupSchema = z
   .object({
-    providers: z.array(z.record(z.unknown())).default([]),
-    models: z.array(z.record(z.unknown())).default([]),
-    environment: z.record(z.string()).default({}),
-    api_keys: z.record(z.array(BundleApiKeyEntrySchema)).default({}),
+    providers: z.array(z.record(z.string(), z.unknown())).default([]),
+    models: z.array(z.record(z.string(), z.unknown())).default([]),
+    environment: z.record(z.string(), z.string()).default({}),
+    api_keys: z.record(z.string(), z.array(BundleApiKeyEntrySchema)).default({}),
   })
   .passthrough();
 

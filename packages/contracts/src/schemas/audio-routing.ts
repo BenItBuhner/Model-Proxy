@@ -12,18 +12,21 @@ export const AudioProviderFormatSchema = z.enum([
   "nvidia_riva_grpc",
 ]);
 
+// Zod 4 applies defaults inside .partial(), and .prefault({}) parses that
+// empty object first. Either one turns a missing capability into `false`,
+// and requireAudioCapabilities rejects only on `=== false`. Leave unset
+// fields unset so an omitted or empty capabilities object matches Zod 3.
 export const AudioCapabilitiesSchema = z
   .object({
-    streaming: z.boolean().default(false),
-    text: z.boolean().default(true),
-    verbose_json: z.boolean().default(true),
-    srt: z.boolean().default(false),
-    vtt: z.boolean().default(false),
-    timestamps: z.boolean().default(false),
-    url_input: z.boolean().default(false),
+    streaming: z.boolean(),
+    text: z.boolean(),
+    verbose_json: z.boolean(),
+    srt: z.boolean(),
+    vtt: z.boolean(),
+    timestamps: z.boolean(),
+    url_input: z.boolean(),
   })
-  .partial()
-  .default({});
+  .partial();
 
 export const AudioRouteConfigSchema = z
   .object({

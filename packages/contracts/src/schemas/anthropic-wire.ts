@@ -46,7 +46,7 @@ export const AnthropicContentBlock = z.union([
   AnthropicImageBlock,
   AnthropicToolUseBlock,
   AnthropicToolResultBlock,
-  z.record(z.unknown()),
+  z.record(z.string(), z.unknown()),
 ]);
 
 export type AnthropicContentBlock = z.infer<typeof AnthropicContentBlock>;
@@ -64,7 +64,7 @@ export const AnthropicToolDefinition = z
   .object({
     name: z.string(),
     description: z.string().optional(),
-    input_schema: z.record(z.unknown()),
+    input_schema: z.record(z.string(), z.unknown()),
   })
   .passthrough();
 
@@ -79,12 +79,12 @@ export const AnthropicMessagesRequest = z
     temperature: z.number().optional(),
     top_p: z.number().optional(),
     top_k: z.number().int().optional(),
-    thinking: z.record(z.unknown()).optional(),
+    thinking: z.record(z.string(), z.unknown()).optional(),
     stream: z.boolean().optional(),
     stop_sequences: z.array(z.string()).optional(),
     tools: z.array(AnthropicToolDefinition).optional(),
-    tool_choice: z.record(z.unknown()).optional(),
-    metadata: z.record(z.unknown()).optional(),
+    tool_choice: z.record(z.string(), z.unknown()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
   })
   .passthrough();
 
