@@ -16,7 +16,7 @@ export const OpenAIMessageContentPart = z.union([
         .passthrough(),
     })
     .passthrough(),
-  z.record(z.unknown()),
+  z.record(z.string(), z.unknown()),
 ]);
 
 export const OpenAIToolCall = z
@@ -55,7 +55,7 @@ export const OpenAIToolDefinition = z
       .object({
         name: z.string(),
         description: z.string().optional(),
-        parameters: z.record(z.unknown()).optional(),
+        parameters: z.record(z.string(), z.unknown()).optional(),
       })
       .passthrough(),
   })
@@ -73,12 +73,12 @@ export const OpenAIChatCompletionRequest = z
     stop: z.union([z.string(), z.array(z.string())]).optional(),
     presence_penalty: z.number().optional(),
     frequency_penalty: z.number().optional(),
-    logit_bias: z.record(z.number()).optional(),
+    logit_bias: z.record(z.string(), z.number()).optional(),
     user: z.string().optional(),
     seed: z.number().int().optional(),
     tools: z.array(OpenAIToolDefinition).optional(),
     tool_choice: z.unknown().optional(),
-    response_format: z.record(z.unknown()).optional(),
+    response_format: z.record(z.string(), z.unknown()).optional(),
     // Deliberately looser than ReasoningEffortSchema: upstreams accept
     // vocabularies beyond minimal/low/medium/high (e.g. "none", "xhigh"), so
     // the proxy passes unknown values through verbatim. Conversion paths
@@ -147,7 +147,7 @@ export const OpenAIResponsesRequest = z
     tools: z.array(z.unknown()).optional(),
     tool_choice: z.unknown().optional(),
     parallel_tool_calls: z.boolean().optional(),
-    metadata: z.record(z.unknown()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
     store: z.boolean().optional(),
     previous_response_id: z.string().optional(),
     text: z.unknown().optional(),

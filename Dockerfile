@@ -1,5 +1,7 @@
+# Bun 1.4.4 fixes CVE-2026-111497 (Brotli decoder out-of-bounds write).
+# oven/bun:1.4.4-alpine is Alpine 3.24, which is still in support.
 # ---------- Stage 1: build the Next.js admin UI ----------
-FROM oven/bun:1.1.38-alpine AS web-build
+FROM oven/bun:1.4.4-alpine AS web-build
 WORKDIR /app
 COPY package.json bun.lock* ./
 COPY packages/contracts/package.json packages/contracts/package.json
@@ -13,7 +15,7 @@ ENV NODE_ENV=production
 RUN bun run --cwd apps/web build
 
 # ---------- Stage 2: install proxy runtime deps ----------
-FROM oven/bun:1.1.38-alpine AS server-deps
+FROM oven/bun:1.4.4-alpine AS server-deps
 WORKDIR /app
 COPY package.json bun.lock* ./
 COPY packages/contracts/package.json packages/contracts/package.json
@@ -23,7 +25,7 @@ COPY apps/web/package.json apps/web/package.json
 RUN bun install --frozen-lockfile --production
 
 # ---------- Stage 3: final runtime ----------
-FROM oven/bun:1.1.38-alpine
+FROM oven/bun:1.4.4-alpine
 WORKDIR /app
 
 COPY package.json bun.lock* ./
