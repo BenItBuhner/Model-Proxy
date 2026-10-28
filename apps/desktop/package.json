@@ -10,7 +10,7 @@
     "typecheck": "echo 'desktop shell is plain JS; nothing to typecheck'"
   },
   "devDependencies": {
-    "electron": "^33.2.0",
+    "electron": "^44.10.0",
     "electron-builder": "^25.1.8"
   },
   "overrides": {
