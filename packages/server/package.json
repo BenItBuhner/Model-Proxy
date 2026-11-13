@@ -23,7 +23,7 @@
     "@grpc/grpc-js": "^1.14.6",
     "@grpc/proto-loader": "^0.8.0",
     "@model-proxy/contracts": "workspace:*",
-    "hono": "^4.13.13",
+    "hono": "4.13.16",
     "zod": "^4.6.7"
   },
   "devDependencies": {
